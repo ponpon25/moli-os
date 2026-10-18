@@ -1,0 +1,22 @@
+{
+  "data": {
+    "xSInstallations": {
+      "installations": [
+        {
+          "numinst": "1234567",
+          "alias": "Maison",
+          "panel": "SDVFAST",
+          "type": "PLUS",
+          "name": "Prénom",
+          "surname": "Nom",
+          "address": "1 rue Exemple",
+          "city": "Ville",
+          "postcode": "75000",
+          "province": "75",
+          "email": "exemple@example.com",
+          "phone": "0102030405"
+        }
+      ]
+    }
+  }
+}

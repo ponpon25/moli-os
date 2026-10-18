@@ -1474,6 +1474,7 @@ dependencies = [
  "moli-telegram",
  "moli-tuya",
  "moli-unifi",
+ "moli-verisure",
  "moli-weather",
  "moli-z2m",
  "rusqlite",
@@ -1672,6 +1673,23 @@ dependencies = [
 
 [[package]]
 name = "moli-unifi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "http",
+ "http-body-util",
+ "moli-core",
+ "moli-i18n",
+ "moli-net",
+ "moli-runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "moli-verisure"
 version = "0.1.0"
 dependencies = [
  "anyhow",

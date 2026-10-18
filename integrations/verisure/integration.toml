@@ -1,0 +1,29 @@
+[integration]
+id = "verisure"
+name = "Alarme Verisure (API web de l'application)"
+brands = ["Verisure", "Securitas Direct"]
+models = ["Alarme type 3"]
+transport = "https"
+driver = "verisure"
+crate = "moli-verisure"
+
+[discovery]
+# No discovery: the account's installations are read from Verisure.
+mdns = []
+ssdp = []
+ports = [443]
+
+[needs]
+# username, password: typed by a person, stored with `moli-os secrets set`.
+# device_id, refresh_token, otp_hash: written by the driver itself.
+secrets = ["username", "password"]
+vars = []
+options = []
+
+[origin]
+reused = "guerrerotook/securitas-direct-new-api (Apache-2.0) : le protocole, relu et réécrit"
+author = "agent"
+
+# Replayed by the crate's tests (crates/moli-verisure/src/model.rs).
+[[fixture]]
+file = "fixtures/installations.json"

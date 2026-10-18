@@ -187,7 +187,7 @@
       </button>
     {/if}
     {#if room.lights.length}
-      <button class="room-switch" class:on={room.lit} onclick={roomPower} aria-pressed={!!room.lit} title={room.lit ? t('commun.piece.tout_eteindre') : t('commun.piece.tout_allumer')} aria-label={t(room.lit ? 'commun.piece.label_eteindre' : 'commun.piece.label_allumer', { name: room.name })}><i></i></button>
+      <button class="room-switch" class:on={room.lit} onclick={roomPower} aria-pressed={!!room.lit} title={room.lit ? t('commun.piece.tout_eteindre') : t('commun.piece.tout_allumer')} aria-label={t(room.lit ? 'commun.piece.label_eteindre' : 'commun.piece.label_allumer', { name: room.name })}><i></i><em>{room.lit ? t('commun.piece.allumee') : t('commun.piece.eteinte')}</em></button>
     {/if}
   </div>
 
@@ -216,7 +216,7 @@
           {/if}
           {#if more}
             <button class="more" class:open={open === d.id} onclick={() => (open = open === d.id ? null : d.id)} aria-expanded={open === d.id} title={t('commun.piece.regler')} aria-label={t('commun.piece.regler_nom', { name: nameOf(d.id) })}>
-              <Icon name="tune" size={13} />
+              <Icon name="tune" size={16} />
             </button>
           {/if}
         </div>
@@ -384,37 +384,44 @@
     color: var(--warm-ink);
   }
 
-  /* The room's lights, all at once: a small rocker. */
+  /* The room's lights, all at once: a pill that says On / Off. */
   .room-switch {
     flex: none;
-    position: relative;
-    width: 42px;
-    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 12px 0 4px;
     border: none;
     border-radius: 999px;
     background: var(--surface-3);
+    color: var(--ink-2);
+    font: inherit;
     cursor: pointer;
-    transition: background 0.25s var(--ease);
+    transition: background 0.25s var(--ease), color 0.25s var(--ease);
   }
 
   .room-switch i {
-    position: absolute;
-    top: 3px;
-    left: 3px;
-    width: 20px;
-    height: 20px;
+    flex: none;
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
     background: var(--surface);
     box-shadow: 0 1px 3px rgb(0 0 0 / 20%);
-    transition: transform 0.25s var(--ease);
+  }
+
+  .room-switch em {
+    font-style: normal;
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
   }
 
   .room-switch.on {
+    flex-direction: row-reverse;
+    padding: 0 4px 0 12px;
     background: var(--warm);
-  }
-
-  .room-switch.on i {
-    transform: translateX(16px);
+    color: #fff;
   }
 
   /* Pads: small, side by side. */
@@ -519,8 +526,8 @@
     right: 6px;
     display: grid;
     place-items: center;
-    width: 22px;
-    height: 22px;
+    width: 30px;
+    height: 30px;
     border: none;
     border-radius: 50%;
     background: var(--surface);

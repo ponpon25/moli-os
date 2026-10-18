@@ -47,10 +47,10 @@
     { path: 'carte', label: 'commun.nav.carte', icon: 'map' },
     { path: 'cameras', label: 'commun.nav.cameras', icon: 'cctv' },
     { path: 'parler', label: 'commun.nav.parler', icon: 'talk' },
-    { path: 'energie', label: 'commun.nav.energie', icon: 'bolt' },
+    { path: 'energie', label: 'commun.nav.energie', icon: 'bolt', sep: true },
     { path: 'impression', label: 'commun.nav.impression', icon: 'printer3d' },
     { path: 'dehors', label: 'commun.nav.dehors', icon: 'flower-outline' },
-    { path: 'automatismes', label: 'commun.nav.automatismes', icon: 'robot' },
+    { path: 'automatismes', label: 'commun.nav.automatismes', icon: 'robot', sep: true },
     { path: 'infra', label: 'commun.nav.infra', icon: 'server' },
   ];
 
@@ -116,10 +116,11 @@
     </a>
     <ul>
       {#each NAV as item (item.path)}
+        {#if item.sep}<li class="sep" aria-hidden="true"></li>{/if}
         <li>
-          <a href="#/{item.path}" class:active={page === item.path} aria-current={page === item.path ? 'page' : undefined}>
+          <a href="#/{item.path}" class:active={page === item.path} aria-current={page === item.path ? 'page' : undefined} title={item.name ?? t(item.label)}>
             <span class="glyph">
-              {#if item.orb}<Orb size={22} state={moli.busy ? 'thinking' : 'idle'} />{:else}<Icon name={item.icon} size={24} />{/if}
+              {#if item.orb}<Orb size={22} state={moli.busy ? 'thinking' : 'idle'} />{:else}<Icon name={item.icon} size={22} />{/if}
             </span>
             <span class="label">{item.name ?? t(item.label)}</span>
           </a>
@@ -237,85 +238,135 @@
 <style>
   .maison {
     display: grid;
-    grid-template-columns: 104px minmax(0, 1fr);
+    grid-template-columns: 232px minmax(0, 1fr);
   }
 
+  /* One column, as tall as the window: the list scrolls inside it, the foot
+     (system, workshop, theme) never leaves the screen. */
   .rail {
     position: sticky;
     top: 0;
     height: 100dvh;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    padding: 22px 0 18px;
-    gap: 18px;
+    padding: 18px 12px 12px;
+    gap: 10px;
+  }
+
+  .brand {
+    flex: none;
+    padding: 0 10px;
   }
 
   .brand svg {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     display: block;
   }
 
   .rail ul {
     list-style: none;
-    margin: 12px 0 0;
-    padding: 0;
+    margin: 0;
+    padding: 0 2px 0 0;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
     display: grid;
-    gap: 6px;
+    align-content: start;
+    gap: 2px;
+    scrollbar-width: thin;
+  }
+
+  .rail .sep {
+    height: 1px;
+    margin: 6px 10px;
+    background: var(--line);
   }
 
   .rail a,
   .rail button {
-    display: grid;
-    justify-items: center;
-    gap: 4px;
-    width: 80px;
-    padding: 10px 0 8px;
-    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 5px 10px;
+    border-radius: 14px;
     border: 0;
     background: none;
     color: var(--ink-3);
+    font: inherit;
+    text-align: left;
     text-decoration: none;
+    cursor: pointer;
     transition: color 0.2s var(--ease), background 0.2s var(--ease);
   }
 
   .rail .glyph {
-    width: 52px;
-    height: 34px;
-    border-radius: 999px;
+    width: 26px;
+    height: 26px;
+    flex: none;
     display: grid;
     place-items: center;
-    transition: background 0.25s var(--ease);
   }
 
   .rail a.active {
     color: var(--ink);
-  }
-
-  .rail a.active .glyph {
     background: var(--surface);
     box-shadow: var(--shadow);
   }
 
-  .rail a:hover {
+  .rail a:hover,
+  .rail button:hover {
     color: var(--ink-2);
   }
 
   .label {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
+    white-space: nowrap;
   }
 
   .rail-foot {
-    margin-top: auto;
+    flex: none;
     display: grid;
-    gap: 4px;
+    gap: 2px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
   }
 
   .rail-foot a,
   .rail-foot button {
-    padding: 8px 0;
+    padding: 4px 10px;
+  }
+
+  .rail-foot :global(svg) {
+    margin: 0 5px;
+  }
+
+  /* Narrow desktop windows: icons only, the name stays in the tooltip. */
+  @media (min-width: 761px) and (max-width: 1100px) {
+    .maison {
+      grid-template-columns: 72px minmax(0, 1fr);
+    }
+
+    .rail {
+      align-items: center;
+      padding-inline: 8px;
+    }
+
+    .rail a,
+    .rail button {
+      justify-content: center;
+      padding-inline: 0;
+    }
+
+    .rail .label {
+      display: none;
+    }
+
+    .rail-foot :global(svg) {
+      margin: 0;
+    }
   }
 
   .content {
@@ -479,7 +530,8 @@
     }
 
     .rail .brand,
-    .rail-foot {
+    .rail-foot,
+    .rail .sep {
       display: none;
     }
 
@@ -487,19 +539,32 @@
       grid-auto-flow: column;
       grid-auto-columns: 62px;
       width: 100%;
-      margin: 0;
+      flex: none;
+      padding: 0;
       gap: 0;
       overflow-x: auto;
+      overflow-y: hidden;
       scrollbar-width: none;
       justify-content: safe center;
     }
 
     .rail a {
+      display: grid;
+      justify-items: center;
+      gap: 4px;
       width: auto;
       padding: 4px 0;
+      border-radius: 20px;
+      text-align: center;
     }
 
-    .label {
+    .rail a.active {
+      background: none;
+      box-shadow: none;
+    }
+
+    .rail .label {
+      display: block;
       font-size: 10.5px;
       max-width: 60px;
       overflow: hidden;
@@ -510,6 +575,12 @@
     .rail .glyph {
       width: 44px;
       height: 30px;
+      border-radius: 999px;
+    }
+
+    .rail a.active .glyph {
+      background: var(--surface);
+      box-shadow: var(--shadow);
     }
 
     .content {

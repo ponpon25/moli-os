@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { energy } from '../lib/energy-live.svelte.js';
   import { home, hub, value, device, isOn, clock, num, relative, lastSeen, roomList, lampsOf, nameOf, doorOpen, leak, lowBattery, act, pending } from '../lib/home.svelte.js';
   import { isPrinter, phase } from '../lib/printers.js';
   import { t, locale } from '../../lib/i18n.svelte.js';
@@ -15,7 +16,12 @@
   const cfg = $derived(home.config ?? {});
   const out = $derived(cfg.outdoor ?? {});
 
-  const lights = $derived(cfg.favorites?.lights ?? []);
+  // The favourites if the house chose some, else every light of every room.
+  const lights = $derived.by(() => {
+    const fav = cfg.favorites?.lights ?? [];
+    if (fav.length) return fav;
+    return roomList().flatMap((r) => r.lights.map((d) => ({ id: d.id, name: null, icon: 'light', also: [] })));
+  });
   const litCount = $derived(lights.filter((l) => [l.id, ...(l.also ?? [])].some((i) => isOn(i))).length);
 
   // Ambiances, room by room (the last room chosen is remembered here).
@@ -175,14 +181,14 @@
   </section>
 
   <div class="grid">
-    <section class="card lights">
+    <section class="card lights" class:full={energy.missing}>
       <div class="card-head">
         <h2><Icon name="light" size={18} />{t('maison.accueil.lumieres')} <span class="count">{litCount ? t('maison.accueil.allumees', { count: litCount }) : t('maison.accueil.tout_eteint')}</span></h2>
         <a class="more" href="#/pieces" aria-label={t('maison.accueil.toutes_pieces')}><Icon name="arrow-top-right" size={18} /></a>
       </div>
       <div class="tiles">
         {#each lights as l (l.id)}
-          <LightTile id={l.id} name={l.name} icon={l.icon} also={l.also ?? []} />
+          <LightTile id={l.id} name={l.name} icon={l.icon} also={l.also ?? []} dimmer />
         {/each}
       </div>
       {#if mood}
@@ -201,18 +207,20 @@
     </section>
 
     <div class="side">
-      <EnergyCard />
+      {#if !energy.missing}<EnergyCard />{/if}
       <Routines />
     </div>
 
-    <section class="card climate">
-      <div class="card-head"><h2><Icon name="air-conditioner" size={18} />{t('maison.accueil.clim')}</h2></div>
-      <div class="clims">
-        {#each cfg.favorites?.climate ?? [] as c (c.id)}
-          <ClimateCard id={c.id} name={c.name} />
-        {/each}
-      </div>
-    </section>
+    {#if (cfg.favorites?.climate ?? []).length}
+      <section class="card climate">
+        <div class="card-head"><h2><Icon name="air-conditioner" size={18} />{t('maison.accueil.clim')}</h2></div>
+        <div class="clims">
+          {#each cfg.favorites?.climate ?? [] as c (c.id)}
+            <ClimateCard id={c.id} name={c.name} />
+          {/each}
+        </div>
+      </section>
+    {/if}
 
     {#if bell}
       <section class="card doorbell">
@@ -225,6 +233,7 @@
       </section>
     {/if}
 
+    {#if tv}
     <a class="card remote" href="#/salon">
       <span class="tv-object" aria-hidden="true">
         <span class="screen" class:lit={tvOn}></span>
@@ -236,7 +245,9 @@
       </span>
       <span class="go"><Icon name="arrow-top-right" size={20} /></span>
     </a>
+    {/if}
 
+    {#if out.air || out.weather || out.pool}
     <a class="card outside" href="#/dehors">
       <div class="card-head"><h2><Icon name="flower-outline" size={18} />{t('maison.accueil.dehors')}</h2><span class="more" aria-hidden="true"><Icon name="arrow-top-right" size={18} /></span></div>
       <div class="facts">
@@ -246,6 +257,7 @@
         <div><small>{t('maison.accueil.piscine')}</small><b class="num">{value(out.pool, 'temperature') != null ? `${num(value(out.pool, 'temperature'), 1)}°` : '—'}</b></div>
       </div>
     </a>
+    {/if}
   </div>
 </div>
 
@@ -320,6 +332,10 @@
 
   .lights {
     grid-column: span 8;
+  }
+
+  .lights.full {
+    grid-column: span 12;
   }
 
   .side {

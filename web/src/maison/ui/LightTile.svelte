@@ -147,7 +147,7 @@
       <b>{label}</b>
       <small>{state}</small>
     </span>
-    <span class="switch" aria-hidden="true"><i></i></span>
+    <span class="switch" aria-hidden="true"><i></i><em>{on ? t('commun.lampe.allumee') : t('commun.lampe.eteinte')}</em></span>
   </button>
   {#if on && (dimmable || canColor || canWhite)}
     <div class="controls">
@@ -396,16 +396,20 @@
     color: var(--warm-ink);
   }
 
-  /* A small rocker, top right. */
+  /* The switch, top right: a pill that says what it is (On / Off). */
   .switch {
     position: absolute;
-    top: 18px;
-    right: 16px;
-    width: 40px;
-    height: 24px;
+    top: 14px;
+    right: 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 12px 0 4px;
     border-radius: 999px;
     background: var(--surface-3);
-    transition: background 0.3s var(--ease);
+    color: var(--ink-2);
+    transition: background 0.3s var(--ease), color 0.3s var(--ease);
   }
 
   .compact .switch {
@@ -415,23 +419,26 @@
   }
 
   .switch i {
-    position: absolute;
-    top: 3px;
-    left: 3px;
-    width: 18px;
-    height: 18px;
+    flex: none;
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
     background: var(--surface);
     box-shadow: 0 1px 3px rgb(0 0 0 / 20%);
-    transition: transform 0.3s var(--ease);
+  }
+
+  .switch em {
+    font-style: normal;
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
   }
 
   .on .switch {
+    flex-direction: row-reverse;
+    padding: 0 4px 0 12px;
     background: var(--warm);
-  }
-
-  .on .switch i {
-    transform: translateX(16px);
+    color: #fff;
   }
 
   .busy .bulb {

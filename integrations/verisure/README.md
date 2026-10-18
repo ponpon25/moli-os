@@ -10,6 +10,7 @@
   marqué `login_locked` dans le coffre jusqu'à ce qu'un humain le lève), jeton de rafraîchissement
   rangé dès qu'il arrive, requêtes espacées de 2 s, lecture de la centrale toutes les 2 minutes au
   plus vite, attente de 10 minutes après un blocage du pare-feu.
+- Le mode partiel de la centrale s'appelle `partial` dans Moli : le pilote essaie la commande « jour » (`ARMDAY1`) puis « nuit » (`ARMNIGHT1`), selon ce que la centrale accepte (une centrale qui n'a qu'un partiel refuse l'autre). Le tableau de bord l'affiche « Mode Nuit », à la demande du foyer.
 - Armer et désarmer sont des points de sémantique `control` : la garde les retient pour un humain,
   y compris depuis le dashboard du foyer sans code.
 - Reste : jamais testé sur une vraie centrale à la livraison de ce paquet. Pas d'état de chaque

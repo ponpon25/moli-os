@@ -6,10 +6,11 @@ use std::sync::Arc;
 
 use serde_json::Value as Json;
 
-/// The modes a person can choose (the point `mode`). Perimeter and annex
-/// variants are reported by `state` but not offered: asking for one is a
-/// decision for the Verisure app until a real panel shows what it accepts.
-pub const MODES: [&str; 4] = ["disarmed", "partial_day", "partial_night", "total"];
+/// The modes a person can choose (the point `mode`). « partial » is the
+/// panel's partial arming, whatever Verisure calls it (« day » on many,
+/// « night » on others): the driver tries the commands in turn. Perimeter
+/// and annex variants are reported by `state` but not offered.
+pub const MODES: [&str; 3] = ["disarmed", "partial", "total"];
 
 #[must_use]
 pub fn mode_values() -> Vec<Arc<str>> {
@@ -22,8 +23,8 @@ pub fn state_of(code: &str) -> Option<&'static str> {
     Some(match code.trim() {
         "D" => "disarmed",
         "E" => "perimeter",
-        "P" => "partial_day",
-        "Q" => "partial_night",
+        // The panel's partial arming, under its day or its night code.
+        "P" | "Q" => "partial",
         "B" => "partial_day_perimeter",
         "C" => "partial_night_perimeter",
         "T" => "total",
@@ -41,18 +42,27 @@ fn perimeter_armed(code: &str) -> bool {
     matches!(code.trim(), "E" | "B" | "C" | "A")
 }
 
-/// The command to send for a mode, given the panel's current code (a
-/// disarm also lifts the perimeter when it is armed).
+/// The commands to try for a mode, in order, given the panel's current
+/// code (a disarm also lifts the perimeter when it is armed). A panel with
+/// one partial arming rejects the other command as « not valid for Central
+/// Unit »: the next one is tried.
 #[must_use]
-pub fn command_for(mode: &str, current: &str) -> Option<&'static str> {
-    Some(match mode {
-        "disarmed" if perimeter_armed(current) => "DARM1DARMPERI",
-        "disarmed" => "DARM1",
-        "partial_day" => "ARMDAY1",
-        "partial_night" => "ARMNIGHT1",
-        "total" => "ARM1",
-        _ => return None,
-    })
+pub fn commands_for(mode: &str, current: &str) -> Vec<&'static str> {
+    match mode {
+        "disarmed" if perimeter_armed(current) => vec!["DARM1DARMPERI"],
+        "disarmed" => vec!["DARM1"],
+        "partial" => vec!["ARMDAY1", "ARMNIGHT1"],
+        "total" => vec!["ARM1"],
+        _ => Vec::new(),
+    }
+}
+
+/// Whether Verisure said the command does not exist on this panel (and
+/// not, say, that a window is open): then another command may do.
+#[must_use]
+pub fn is_unsupported(refusal: &str) -> bool {
+    let r = refusal.to_ascii_lowercase();
+    r.contains("not valid") || r.contains("unsupported") || r.contains("usm")
 }
 
 #[must_use]
@@ -65,6 +75,31 @@ pub fn is_disarm(command: &str) -> bool {
 #[must_use]
 pub fn mode_of(state: &str) -> Option<&'static str> {
     MODES.iter().copied().find(|m| *m == state)
+}
+
+/// The capabilities a panel announces for one installation, read from the
+/// capabilities token (`installations[].cap`, matched on `ins`).
+#[must_use]
+pub fn capability_list(token: &str, number: &str) -> Vec<String> {
+    let Some(bytes) = token.split('.').nth(1).and_then(base64url) else {
+        return Vec::new();
+    };
+    let Ok(claims) = serde_json::from_slice::<Json>(&bytes) else {
+        return Vec::new();
+    };
+    claims["installations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|i| {
+            i["ins"].as_str().is_some_and(|n| n == number)
+                || i["ins"].as_u64().is_some_and(|n| n.to_string() == number)
+        })
+        .and_then(|i| i["cap"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.as_str().map(str::to_owned))
+        .collect()
 }
 
 /// An installation of the account.
@@ -95,6 +130,18 @@ pub fn installations(data: &Json) -> Vec<Installation> {
             })
         })
         .collect()
+}
+
+/// Whether an answer to a device validation says the second factor was
+/// accepted, with or without tokens: Verisure then trusts this device, and
+/// a normal login gets the tokens.
+#[must_use]
+pub fn mfa_accepted(answer: &Json) -> bool {
+    let data = &answer["data"]["xSValidateDevice"];
+    let says = |text: Option<&str>| text.is_some_and(|t| t.contains("mfa.success"));
+    says(data["msg"].as_str())
+        || says(answer["errors"][0]["message"].as_str())
+        || (data["res"].as_str() == Some("OK") && !data["msg"].as_str().is_some_and(|m| m.contains("error")))
 }
 
 /// The phones a second factor can go to.
@@ -163,8 +210,8 @@ mod tests {
     fn panel_codes_become_states() {
         for (code, state) in [
             ("D", "disarmed"),
-            ("P", "partial_day"),
-            ("Q", "partial_night"),
+            ("P", "partial"),
+            ("Q", "partial"),
             ("T", "total"),
             ("A", "total_perimeter"),
             ("E", "perimeter"),
@@ -177,20 +224,31 @@ mod tests {
 
     #[test]
     fn modes_become_commands() {
-        assert_eq!(command_for("total", "D"), Some("ARM1"));
-        assert_eq!(command_for("partial_day", "D"), Some("ARMDAY1"));
-        assert_eq!(command_for("partial_night", "T"), Some("ARMNIGHT1"));
-        assert_eq!(command_for("disarmed", "T"), Some("DARM1"));
+        assert_eq!(commands_for("total", "D"), vec!["ARM1"]);
+        // One partial arming, under whichever code the panel knows.
+        assert_eq!(commands_for("partial", "D"), vec!["ARMDAY1", "ARMNIGHT1"]);
+        assert_eq!(commands_for("disarmed", "T"), vec!["DARM1"]);
         // A disarm also lifts the perimeter when it is armed.
-        assert_eq!(command_for("disarmed", "A"), Some("DARM1DARMPERI"));
-        assert_eq!(command_for("explode", "D"), None);
+        assert_eq!(commands_for("disarmed", "A"), vec!["DARM1DARMPERI"]);
+        assert!(commands_for("explode", "D").is_empty());
+        assert!(commands_for("partial_night", "D").is_empty());
         assert!(is_disarm("DARM1"));
         assert!(is_disarm("DARM1DARMPERI"));
         assert!(!is_disarm("ARM1"));
     }
 
     #[test]
+    fn a_missing_command_is_told_from_a_real_refusal() {
+        assert!(is_unsupported("Request ARMNIGHT1 is not valid for Central Unit"));
+        assert!(is_unsupported("alarm-manager.usm8"));
+        assert!(!is_unsupported("Open zone (Cuisine)"));
+        assert!(!is_unsupported("No response from panel"));
+    }
+
+    #[test]
     fn only_choosable_states_are_modes() {
+        assert_eq!(mode_of("partial"), Some("partial"));
+        assert_eq!(mode_of("partial_day_perimeter"), None);
         assert_eq!(mode_of("total"), Some("total"));
         assert_eq!(mode_of("perimeter"), None);
         assert_eq!(mode_of("total_perimeter"), None);
@@ -223,6 +281,17 @@ mod tests {
     }
 
     #[test]
+    fn an_accepted_second_factor_is_recognised() {
+        let in_data = json!({"data": {"xSValidateDevice": {"res": "OK", "msg": "auth-api.mfa.success", "hash": null}}});
+        assert!(mfa_accepted(&in_data));
+        let in_errors = json!({"errors": [{"message": "auth-api.mfa.success"}], "data": null});
+        assert!(mfa_accepted(&in_errors));
+        let refused = json!({"data": {"xSValidateDevice": {"res": "ERROR", "msg": "auth-api.mfa.error"}}});
+        assert!(!mfa_accepted(&refused));
+        assert!(!mfa_accepted(&json!({})));
+    }
+
+    #[test]
     fn a_challenge_lists_its_phones() {
         let data = json!({"auth-otp-hash": "h4sh", "auth-phones": [
             {"id": 0, "phone": "XXXXX1234"}, {"id": 1, "phone": "XXXXX9876"}, {"phone": "no id"}
@@ -232,6 +301,18 @@ mod tests {
         assert_eq!(phones.len(), 2);
         assert_eq!(phones[1], Phone { id: 1, number: "XXXXX9876".into() });
         assert!(challenge(&json!({"other": 1})).is_none());
+    }
+
+    #[test]
+    fn the_capabilities_of_an_installation_are_read() {
+        // payload: {"installations":[{"ins":"111","cap":["A"]},{"ins":"222","cap":["ARMDAY","ARMNIGHT"]}]}
+        let payload = "eyJpbnN0YWxsYXRpb25zIjpbeyJpbnMiOiIxMTEiLCJjYXAiOlsiQSJdfSx7Imlucy\
+                       I6IjIyMiIsImNhcCI6WyJBUk1EQVkiLCJBUk1OSUdIVCJdfV19";
+        let token = format!("h.{payload}.s");
+        assert_eq!(capability_list(&token, "222"), vec!["ARMDAY", "ARMNIGHT"]);
+        assert_eq!(capability_list(&token, "111"), vec!["A"]);
+        assert!(capability_list(&token, "333").is_empty());
+        assert!(capability_list("not a token", "222").is_empty());
     }
 
     #[test]

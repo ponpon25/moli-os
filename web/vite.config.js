@@ -15,5 +15,18 @@ export default defineConfig({
   plugins: [svelte()],
   build: { target: 'es2022', cssCodeSplit: false, reportCompressedSize: true },
   // The catalogues (locales/, at the repository's root) are shared with the server.
-  server: { proxy: { '/api': { target, changeOrigin: true }, '/mcp': target }, fs: { allow: ['..'] } },
+  server: {
+    proxy: {
+      // The hub refuses a write whose `Origin` is not its own address (a
+      // cross-site guard): the page is on localhost, so the proxy says the
+      // hub's own origin.
+      '/api': {
+        target,
+        changeOrigin: true,
+        configure: (proxy) => proxy.on('proxyReq', (req) => req.setHeader('origin', new URL(target).origin)),
+      },
+      '/mcp': target,
+    },
+    fs: { allow: ['..'] },
+  },
 });

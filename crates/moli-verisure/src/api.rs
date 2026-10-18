@@ -123,6 +123,9 @@ pub enum LoginOutcome {
 #[derive(Debug)]
 pub enum DeviceStep {
     Tokens(Tokens),
+    /// The code was accepted and the device is trusted, but no tokens came
+    /// with the answer: a normal login gets them.
+    Validated,
     Challenge { hash: String, phones: Vec<Phone> },
 }
 
@@ -155,6 +158,10 @@ pub struct Client {
     expires: u64,
     login_ts: u64,
     capabilities: Option<(String, Instant)>,
+    /// What the panel announces (read from the capabilities token) and how
+    /// its partitions are set: logged once, to see which modes it takes.
+    panel_caps: Vec<String>,
+    panel_partitions: Json,
     otp: Option<(String, String)>,
     last_request: Option<Instant>,
 }
@@ -245,6 +252,8 @@ impl Client {
             expires: 0,
             login_ts: 0,
             capabilities: None,
+            panel_caps: Vec::new(),
+            panel_partitions: Json::Null,
             otp: None,
             last_request: None,
         }
@@ -488,6 +497,7 @@ impl Client {
                 self.adopt(&tokens);
                 Ok(DeviceStep::Tokens(tokens))
             }
+            None if model::mfa_accepted(&answer) => Ok(DeviceStep::Validated),
             None => Err(ApiError::Refused(first_error(&answer))),
         }
     }
@@ -537,10 +547,19 @@ impl Client {
                 Some(installation),
             )
             .await?;
-        if let Some(token) = answer["data"]["xSSrv"]["installation"]["capabilities"].as_str() {
+        let found = &answer["data"]["xSSrv"]["installation"];
+        if let Some(token) = found["capabilities"].as_str() {
+            self.panel_caps = model::capability_list(token, &installation.number);
             self.capabilities = Some((token.to_owned(), Instant::now()));
         }
+        self.panel_partitions = found["configRepoUser"]["alarmPartitions"].clone();
         Ok(())
+    }
+
+    /// The panel's announced capabilities and partitions (for the log).
+    #[must_use]
+    pub fn panel_facts(&self) -> (&[String], &Json) {
+        (&self.panel_caps, &self.panel_partitions)
     }
 
     // ── the alarm ───────────────────────────────────────────────────────

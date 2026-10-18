@@ -8,6 +8,7 @@
   import LightTile from '../ui/LightTile.svelte';
   import ClimateCard from '../ui/ClimateCard.svelte';
   import EnergyCard from '../ui/EnergyCard.svelte';
+  import AlarmCard from '../ui/AlarmCard.svelte';
   import CameraTile from '../ui/CameraTile.svelte';
   import AmbiancePicker from '../ui/AmbiancePicker.svelte';
   import Routines from '../ui/Routines.svelte';
@@ -17,6 +18,11 @@
   const out = $derived(cfg.outdoor ?? {});
 
   // The favourites if the house chose some, else every light of every room.
+  // An alarm: a device that takes a `mode` among which « disarmed ».
+  const alarm = $derived(
+    Object.values(hub.devices).find((d) => d.points.some((p) => p.key === 'mode' && p.kind?.values?.includes('disarmed'))),
+  );
+
   const lights = $derived.by(() => {
     const fav = cfg.favorites?.lights ?? [];
     if (fav.length) return fav;
@@ -181,6 +187,7 @@
   </section>
 
   <div class="grid">
+    {#if alarm}<AlarmCard id={alarm.id} />{/if}
     <section class="card lights" class:full={energy.missing}>
       <div class="card-head">
         <h2><Icon name="light" size={18} />{t('maison.accueil.lumieres')} <span class="count">{litCount ? t('maison.accueil.allumees', { count: litCount }) : t('maison.accueil.tout_eteint')}</span></h2>
@@ -328,6 +335,10 @@
     grid-template-columns: repeat(12, minmax(0, 1fr));
     gap: 20px;
     align-items: start;
+  }
+
+  .grid > :global(.alarm) {
+    grid-column: span 12;
   }
 
   .lights {

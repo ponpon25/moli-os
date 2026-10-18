@@ -156,20 +156,25 @@ async fn authenticate(client: &mut Client, ctx: &DriverCtx) -> Result<(), Stop> 
                 instance = ctx.instance()
             )));
         };
-        // Spent whatever happens: a code is good for one try.
+        // Spent whatever happens, before the call: a code is good for one
+        // try, and a hash with no code would wait for an SMS nobody sent.
         ctx.forget_secret(OTP_CODE).await?;
-        let step = client
+        ctx.forget_secret(OTP_HASH).await?;
+        match client
             .validate_device(Some((&hash, &code)))
             .await
-            .map_err(passing)?;
-        ctx.forget_secret(OTP_HASH).await?;
-        return match step {
-            DeviceStep::Tokens(tokens) => keep(ctx, &tokens).await,
-            DeviceStep::Challenge { .. } => Err(Stop::Park(moli_i18n::tr!(
-                "pilotes.verisure.code_refuse",
-                instance = ctx.instance()
-            ))),
-        };
+            .map_err(passing)?
+        {
+            DeviceStep::Tokens(tokens) => return keep(ctx, &tokens).await,
+            // The device is trusted: the login below gets the tokens.
+            DeviceStep::Validated => {}
+            DeviceStep::Challenge { .. } => {
+                return Err(Stop::Park(moli_i18n::tr!(
+                    "pilotes.verisure.code_refuse",
+                    instance = ctx.instance()
+                )));
+            }
+        }
     }
 
     if ctx.secret(LOCKED).is_some() {
@@ -217,6 +222,10 @@ fn missing(ctx: &DriverCtx) -> String {
 async fn second_factor(client: &mut Client, ctx: &DriverCtx) -> Result<(), Stop> {
     match client.validate_device(None).await.map_err(passing)? {
         DeviceStep::Tokens(tokens) => keep(ctx, &tokens).await,
+        // Already trusted: the next start logs in again, now without a code.
+        DeviceStep::Validated => Err(Stop::Fail(anyhow::anyhow!(
+            "verisure device already trusted, logging in again"
+        ))),
         DeviceStep::Challenge { hash, phones } => {
             let chosen = ctx
                 .secret(OTP_PHONE)
@@ -257,11 +266,9 @@ fn spec(key: &str, label: String, kind: Kind, write: bool, semantic: Semantic) -
 }
 
 fn alarm_device(ctx: &DriverCtx, installation: &Installation) -> Device {
-    let name = if installation.alias.is_empty() {
-        moli_i18n::tr!("pilotes.verisure.alarme")
-    } else {
-        installation.alias.clone()
-    };
+    // Never the installation's alias: Verisure fills it with the postal
+    // address. A person renames the device in Moli if they want to.
+    let name = moli_i18n::tr!("pilotes.verisure.alarme");
     Device {
         id: ctx.device_id(&installation.number),
         instance: ctx.instance().clone(),
@@ -381,6 +388,11 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
             }
         }
     };
+    // What this panel says it can do: the modes it really takes.
+    if client.ensure_capabilities(&installation).await.is_ok() {
+        let (caps, partitions) = client.panel_facts();
+        tracing::info!(instance = %ctx.instance(), capabilities = ?caps, partitions = %partitions, "verisure panel");
+    }
     let id = ctx.device_id(&installation.number);
     ctx.upsert_device(alarm_device(ctx, &installation));
     tracing::info!(instance = %ctx.instance(), "verisure installation found");
@@ -464,10 +476,11 @@ async fn order(
         command.reply(Err(moli_i18n::tr!("pilotes.verisure.point_non_ecrivable")));
         return Ok(());
     }
-    let Some(verb) = model::command_for(&mode, current) else {
+    let verbs = model::commands_for(&mode, current);
+    if verbs.is_empty() {
         command.reply(Err(moli_i18n::tr!("pilotes.verisure.mode_inconnu", mode = mode)));
         return Ok(());
-    };
+    }
     // A warm session: the hub's answer cannot wait for a login.
     if let Err(stop) = session(client, ctx).await {
         return match stop {
@@ -481,12 +494,32 @@ async fn order(
             }
         };
     }
-    let reference = match client.begin_command(installation, verb, current).await {
-        Ok(reference) => reference,
-        Err(e) => {
-            command.reply(Err(moli_i18n::tr!("pilotes.verisure.ordre_refuse", why = e.to_string())));
-            return Ok(());
+    // The commands in turn: only « this command does not exist on this
+    // panel » moves on to the next one, never a real refusal or an error.
+    let mut taken = None;
+    let mut failure = String::new();
+    for candidate in verbs {
+        match client.begin_command(installation, candidate, current).await {
+            Ok(reference) => {
+                taken = Some((candidate, reference));
+                break;
+            }
+            Err(ApiError::Refused(why)) if model::is_unsupported(&why) => {
+                tracing::info!(instance = %ctx.instance(), order = candidate, "verisure: this panel does not take that command");
+                failure = why;
+            }
+            Err(e) => {
+                failure = e.to_string();
+                break;
+            }
         }
+    }
+    let Some((verb, reference)) = taken else {
+        // Said where a person looks (the card), not only to the caller.
+        let said = moli_i18n::tr!("pilotes.verisure.ordre_refuse", why = failure);
+        ctx.set_state(id, "last_order", Value::Text(said.clone().into()));
+        command.reply(Err(said));
+        return Ok(());
     };
     tracing::info!(instance = %ctx.instance(), order = verb, "verisure order taken");
     ctx.set_state(id, "last_order", Value::Text(moli_i18n::tr!("pilotes.verisure.ordre_envoye").into()));

@@ -1,0 +1,741 @@
+//! The bridge against a controller of our own making: a fake house (a lamp,
+//! a thermometer, an alarm panel), a real listener on a free port, and a
+//! HomeKit controller written here (SRP client, Ed25519, X25519, the
+//! encrypted channel). Pairing with the right and the wrong code, reading
+//! the database, an order that goes through, an order the guard holds,
+//! choosing devices.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use moli_core::{
+    Access, Device, DeviceId, InstanceId, Kind, Origin, PointId, PointSpec, Semantic, Value,
+};
+use moli_runtime::{BoxFuture, Driver, DriverCtx, Hub, HubOptions, MasterKey, spawn_driver};
+use ring::agreement::{self, EphemeralPrivateKey, UnparsedPublicKey, X25519};
+use ring::digest::{self, SHA512};
+use ring::rand::{SecureRandom, SystemRandom};
+use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey as SignatureKey};
+use serde_json::{Value as Json, json};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::TcpStream;
+use tokio_util::sync::CancellationToken;
+
+use crate::bigint::Uint;
+use crate::crypto::{self, Channel, hkdf32, message_tag};
+use crate::srp;
+use crate::tlv::{self, Tlv};
+use crate::{Config, HomeKit, Policy};
+
+// ---- the house -----------------------------------------------------------
+
+fn spec(key: &str, kind: Kind, write: bool, semantic: Semantic) -> PointSpec {
+    PointSpec {
+        key: key.into(),
+        label: key.into(),
+        kind,
+        access: Access { read: true, write },
+        unit: None,
+        semantic,
+    }
+}
+
+fn device(ctx: &DriverCtx, native: &str, points: Vec<PointSpec>) -> Device {
+    Device {
+        id: ctx.device_id(native),
+        instance: ctx.instance().clone(),
+        native_name: native.into(),
+        manufacturer: None,
+        model: None,
+        description: None,
+        native_room: None,
+        members: Vec::new(),
+        points,
+    }
+}
+
+struct FakeHouse;
+
+impl Driver for FakeHouse {
+    fn kind(&self) -> &'static str {
+        "fake"
+    }
+
+    fn run<'a>(&'a self, ctx: &'a mut DriverCtx) -> BoxFuture<'a, anyhow::Result<()>> {
+        Box::pin(async move {
+            let percent = Kind::Numeric {
+                min: Some(0.0),
+                max: Some(100.0),
+                step: None,
+            };
+            ctx.upsert_device(device(
+                ctx,
+                "lamp",
+                vec![
+                    spec("on", Kind::Binary, true, Semantic::OnOff),
+                    spec("brightness", percent, true, Semantic::Brightness),
+                ],
+            ));
+            ctx.upsert_device(device(
+                ctx,
+                "thermo",
+                vec![spec(
+                    "temperature",
+                    Kind::Numeric {
+                        min: None,
+                        max: None,
+                        step: None,
+                    },
+                    false,
+                    Semantic::Temperature,
+                )],
+            ));
+            ctx.upsert_device(device(
+                ctx,
+                "alarm",
+                vec![
+                    spec("state", Kind::Text, false, Semantic::Other),
+                    spec(
+                        "mode",
+                        Kind::Enum {
+                            values: vec!["disarmed".into(), "partial".into(), "total".into()],
+                        },
+                        true,
+                        Semantic::Control,
+                    ),
+                ],
+            ));
+            let (lamp, thermo, alarm) = (
+                ctx.device_id("lamp"),
+                ctx.device_id("thermo"),
+                ctx.device_id("alarm"),
+            );
+            ctx.set_state(&lamp, "on", Value::Bool(false));
+            ctx.set_state(&lamp, "brightness", Value::Float(30.0));
+            ctx.set_state(&thermo, "temperature", Value::Float(21.5));
+            ctx.set_state(&alarm, "state", Value::from("disarmed"));
+            ctx.set_state(&alarm, "mode", Value::from("disarmed"));
+            ctx.ready();
+            while let Some(cmd) = ctx.next_command().await {
+                ctx.set_state(&cmd.device.id, &cmd.key, cmd.value.clone());
+                cmd.reply(Ok(()));
+            }
+            Ok(())
+        })
+    }
+}
+
+struct Bridge {
+    hub: Hub,
+    homekit: HomeKit,
+    cancel: CancellationToken,
+    dir: std::path::PathBuf,
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+async fn bridge(name: &str) -> Bridge {
+    let dir = std::env::temp_dir().join(format!("moli-homekit-it-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let hub = Hub::new(HubOptions {
+        secrets: Some((dir.join("secrets.enc"), MasterKey::generate().unwrap())),
+        ..HubOptions::default()
+    })
+    .unwrap();
+    let cancel = CancellationToken::new();
+    spawn_driver(
+        &hub,
+        InstanceId::from("fake"),
+        Arc::new(FakeHouse),
+        cancel.clone(),
+    );
+    for _ in 0..200 {
+        if hub.stats().drivers_running == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (homekit, _task) = crate::start(
+        hub.clone(),
+        &dir,
+        Config {
+            port: 0,
+            announce: false,
+            ..Config::default()
+        },
+        cancel.clone(),
+    )
+    .await
+    .expect("the bridge starts");
+    Bridge {
+        hub,
+        homekit,
+        cancel,
+        dir,
+    }
+}
+
+// ---- a controller ----------------------------------------------------------
+
+struct Client {
+    stream: TcpStream,
+    channel: Option<Channel>,
+    raw: Vec<u8>,
+    plain: Vec<u8>,
+}
+
+impl Client {
+    async fn connect(port: u16) -> Self {
+        Self {
+            stream: TcpStream::connect(("127.0.0.1", port)).await.unwrap(),
+            channel: None,
+            raw: Vec::new(),
+            plain: Vec::new(),
+        }
+    }
+
+    /// One request, one response (events are not subscribed in these tests).
+    async fn call(
+        &mut self,
+        method: &str,
+        path: &str,
+        content_type: &str,
+        body: &[u8],
+    ) -> (u16, Vec<u8>) {
+        let mut request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: test\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        request.extend_from_slice(body);
+        if let Some(channel) = self.channel.as_mut() {
+            request = channel.encrypt(&request);
+        }
+        self.stream.write_all(&request).await.unwrap();
+        loop {
+            if let Some(end) = self.plain.windows(4).position(|w| w == b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&self.plain[..end]).into_owned();
+                let length: usize = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("Content-Length: "))
+                    .map_or(0, |n| n.trim().parse().unwrap());
+                if self.plain.len() >= end + 4 + length {
+                    let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+                    let body = self.plain[end + 4..end + 4 + length].to_vec();
+                    self.plain.drain(..end + 4 + length);
+                    return (status, body);
+                }
+            }
+            let mut chunk = [0u8; 4096];
+            let n = tokio::time::timeout(Duration::from_secs(5), self.stream.read(&mut chunk))
+                .await
+                .expect("the bridge answers")
+                .unwrap();
+            assert!(n > 0, "the bridge closed the connection");
+            self.raw.extend_from_slice(&chunk[..n]);
+            match self.channel.as_mut() {
+                Some(channel) => {
+                    let opened = channel.decrypt(&mut self.raw).expect("frames authenticate");
+                    self.plain.extend(opened);
+                }
+                None => self.plain.append(&mut self.raw),
+            }
+        }
+    }
+
+    async fn tlv(&mut self, path: &str, request: &Tlv) -> Tlv {
+        let (status, body) = self
+            .call("POST", path, "application/pairing+tlv8", &request.encode())
+            .await;
+        assert_eq!(status, 200);
+        Tlv::parse(&body).unwrap()
+    }
+
+    async fn json(&mut self, method: &str, path: &str, body: &Json) -> (u16, Json) {
+        let bytes = if body.is_null() {
+            Vec::new()
+        } else {
+            serde_json::to_vec(body).unwrap()
+        };
+        let (status, body) = self
+            .call(method, path, "application/hap+json", &bytes)
+            .await;
+        (status, serde_json::from_slice(&body).unwrap_or(Json::Null))
+    }
+}
+
+fn sha(parts: &[&[u8]]) -> [u8; 64] {
+    let mut ctx = digest::Context::new(&SHA512);
+    for part in parts {
+        ctx.update(part);
+    }
+    ctx.finish().as_ref().try_into().unwrap()
+}
+
+fn random<const N: usize>() -> [u8; N] {
+    let mut out = [0u8; N];
+    SystemRandom::new().fill(&mut out).unwrap();
+    out
+}
+
+/// A controller that knows its pairing identifier and its signing key.
+struct Controller {
+    id: String,
+    key: Ed25519KeyPair,
+}
+
+impl Controller {
+    fn new(id: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            key: Ed25519KeyPair::from_seed_unchecked(&random::<32>()).unwrap(),
+        }
+    }
+
+    /// The whole of pair-setup; `Err(error code)` where the bridge refused.
+    #[allow(clippy::too_many_lines)] // the whole exchange, as the spec lists it
+    async fn pair(&self, client: &mut Client, code: &str) -> Result<(), u8> {
+        let m2 = client
+            .tlv(
+                "/pair-setup",
+                &Tlv::new().with(tlv::STATE, [1]).with(tlv::METHOD, [0]),
+            )
+            .await;
+        if let Some(e) = m2.byte(tlv::ERROR) {
+            return Err(e);
+        }
+        let (salt, big_b) = (
+            m2.get(tlv::SALT).unwrap().to_vec(),
+            m2.get(tlv::PUBLIC_KEY).unwrap().to_vec(),
+        );
+        // SRP, client side.
+        let n = srp::modulus();
+        let g = Uint::from_u64(5);
+        let pad = |u: &Uint| u.to_be_bytes_padded(srp::KEY_LEN);
+        let a = Uint::from_be_bytes(&random::<32>());
+        let big_a = pad(&g.pow_mod(&a, &n));
+        let x = Uint::from_be_bytes(&sha(&[
+            &salt,
+            &sha(&[format!("Pair-Setup:{code}").as_bytes()]),
+        ]));
+        let v = g.pow_mod(&x, &n);
+        let k = Uint::from_be_bytes(&sha(&[&pad(&n), &pad(&g)]));
+        let u = Uint::from_be_bytes(&sha(&[&big_a, &big_b]));
+        let base = Uint::from_be_bytes(&big_b)
+            .add(&n)
+            .sub(&k.mul_mod(&v, &n))
+            .rem(&n);
+        let secret = base.pow_mod(&a.add(&u.mul(&x)), &n);
+        let session = sha(&[&pad(&secret)]);
+        let group: Vec<u8> = sha(&[&n.to_be_bytes()])
+            .iter()
+            .zip(sha(&[&[5u8]]))
+            .map(|(p, q)| p ^ q)
+            .collect();
+        let m1 = sha(&[
+            &group,
+            &sha(&[b"Pair-Setup"]),
+            &salt,
+            &big_a,
+            &big_b,
+            &session,
+        ]);
+        let m4 = client
+            .tlv(
+                "/pair-setup",
+                &Tlv::new()
+                    .with(tlv::STATE, [3])
+                    .with(tlv::PUBLIC_KEY, &big_a)
+                    .with(tlv::PROOF, m1),
+            )
+            .await;
+        if let Some(e) = m4.byte(tlv::ERROR) {
+            return Err(e);
+        }
+        assert_eq!(m4.get(tlv::PROOF).unwrap(), sha(&[&big_a, &m1, &session]));
+        // M5: our identity, signed, sealed.
+        let encrypt_key = hkdf32(
+            &session,
+            "Pair-Setup-Encrypt-Salt",
+            "Pair-Setup-Encrypt-Info",
+        );
+        let sign_x = hkdf32(
+            &session,
+            "Pair-Setup-Controller-Sign-Salt",
+            "Pair-Setup-Controller-Sign-Info",
+        );
+        let ltpk = self.key.public_key().as_ref().to_vec();
+        let mut signed = sign_x.to_vec();
+        signed.extend_from_slice(self.id.as_bytes());
+        signed.extend_from_slice(&ltpk);
+        let inner = Tlv::new()
+            .with(tlv::IDENTIFIER, self.id.as_bytes())
+            .with(tlv::PUBLIC_KEY, &ltpk)
+            .with(tlv::SIGNATURE, self.key.sign(&signed).as_ref());
+        let sealed = crypto::seal(&encrypt_key, message_tag("PS-Msg05"), &[], &inner.encode());
+        let m6 = client
+            .tlv(
+                "/pair-setup",
+                &Tlv::new()
+                    .with(tlv::STATE, [5])
+                    .with(tlv::ENCRYPTED_DATA, sealed),
+            )
+            .await;
+        if let Some(e) = m6.byte(tlv::ERROR) {
+            return Err(e);
+        }
+        let opened = crypto::open(
+            &encrypt_key,
+            message_tag("PS-Msg06"),
+            &[],
+            m6.get(tlv::ENCRYPTED_DATA).unwrap(),
+        )
+        .expect("M6 authenticates");
+        let inner = Tlv::parse(&opened).unwrap();
+        // The bridge proves who it is: its signature checks against its key.
+        let accessory_x = hkdf32(
+            &session,
+            "Pair-Setup-Accessory-Sign-Salt",
+            "Pair-Setup-Accessory-Sign-Info",
+        );
+        let mut signed = accessory_x.to_vec();
+        signed.extend_from_slice(inner.get(tlv::IDENTIFIER).unwrap());
+        signed.extend_from_slice(inner.get(tlv::PUBLIC_KEY).unwrap());
+        SignatureKey::new(&ED25519, inner.get(tlv::PUBLIC_KEY).unwrap())
+            .verify(&signed, inner.get(tlv::SIGNATURE).unwrap())
+            .expect("the bridge's signature");
+        Ok(())
+    }
+
+    /// pair-verify, then the connection speaks the encrypted channel.
+    async fn verify(&self, client: &mut Client) -> Result<(), u8> {
+        let rng = SystemRandom::new();
+        let ephemeral = EphemeralPrivateKey::generate(&X25519, &rng).unwrap();
+        let public = ephemeral.compute_public_key().unwrap().as_ref().to_vec();
+        let m2 = client
+            .tlv(
+                "/pair-verify",
+                &Tlv::new()
+                    .with(tlv::STATE, [1])
+                    .with(tlv::PUBLIC_KEY, &public),
+            )
+            .await;
+        let accessory_pub = m2.get(tlv::PUBLIC_KEY).unwrap().to_vec();
+        let shared = agreement::agree_ephemeral(
+            ephemeral,
+            &UnparsedPublicKey::new(&X25519, &accessory_pub),
+            <[u8]>::to_vec,
+        )
+        .unwrap();
+        let key = hkdf32(
+            &shared,
+            "Pair-Verify-Encrypt-Salt",
+            "Pair-Verify-Encrypt-Info",
+        );
+        let opened = crypto::open(
+            &key,
+            message_tag("PV-Msg02"),
+            &[],
+            m2.get(tlv::ENCRYPTED_DATA).unwrap(),
+        )
+        .unwrap();
+        assert!(Tlv::parse(&opened).unwrap().get(tlv::SIGNATURE).is_some());
+        let mut signed = public.clone();
+        signed.extend_from_slice(self.id.as_bytes());
+        signed.extend_from_slice(&accessory_pub);
+        let inner = Tlv::new()
+            .with(tlv::IDENTIFIER, self.id.as_bytes())
+            .with(tlv::SIGNATURE, self.key.sign(&signed).as_ref());
+        let sealed = crypto::seal(&key, message_tag("PV-Msg03"), &[], &inner.encode());
+        let m4 = client
+            .tlv(
+                "/pair-verify",
+                &Tlv::new()
+                    .with(tlv::STATE, [3])
+                    .with(tlv::ENCRYPTED_DATA, sealed),
+            )
+            .await;
+        if let Some(e) = m4.byte(tlv::ERROR) {
+            return Err(e);
+        }
+        client.channel = Some(Channel::mirrored(&shared));
+        Ok(())
+    }
+}
+
+/// The `(aid, iid)` of the characteristic of `kind` in the accessory whose
+/// serial number is `serial`.
+fn find(db: &Json, serial: &str, kind: &str) -> (u64, u64) {
+    for accessory in db["accessories"].as_array().unwrap() {
+        let has_serial = accessory["services"][0]["characteristics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["type"] == "30" && c["value"] == serial);
+        if !has_serial {
+            continue;
+        }
+        for service in accessory["services"].as_array().unwrap() {
+            for c in service["characteristics"].as_array().unwrap() {
+                if c["type"] == kind {
+                    return (
+                        accessory["aid"].as_u64().unwrap(),
+                        c["iid"].as_u64().unwrap(),
+                    );
+                }
+            }
+        }
+    }
+    panic!("no {kind} on {serial}");
+}
+
+async fn wait_for(what: &str, mut ready: impl FnMut() -> bool) {
+    for _ in 0..200 {
+        if ready() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("never happened: {what}");
+}
+
+async fn count(s: &mut Client) -> usize {
+    let (_, db) = s.json("GET", "/accessories", &Json::Null).await;
+    db["accessories"].as_array().unwrap().len()
+}
+
+// ---- the tests ---------------------------------------------------------------
+
+#[tokio::test]
+async fn pairing_needs_the_right_code_and_happens_once() {
+    let b = bridge("pairing").await;
+    let code = b.homekit.status(true).setup_code.unwrap();
+    assert_eq!(
+        b.homekit.status(false).setup_code,
+        None,
+        "the code is not shown to everyone"
+    );
+    let phone = Controller::new("11111111-2222-3333-4444-555555555555");
+
+    // A wrong code is refused, and does not pair anyone.
+    let mut client = Client::connect(b.homekit.port()).await;
+    assert_eq!(
+        phone.pair(&mut client, "000-00-000").await,
+        Err(tlv::ERR_AUTHENTICATION)
+    );
+    assert_eq!(b.homekit.status(false).controllers, 0);
+
+    // The right one pairs.
+    let mut client = Client::connect(b.homekit.port()).await;
+    phone.pair(&mut client, &code).await.expect("paired");
+    assert_eq!(b.homekit.status(false).controllers, 1);
+
+    // Paired: no second pairing, and an unknown phone cannot verify.
+    let mut other = Client::connect(b.homekit.port()).await;
+    let stranger = Controller::new("99999999-0000-0000-0000-000000000000");
+    assert_eq!(
+        stranger.pair(&mut other, &code).await,
+        Err(tlv::ERR_UNAVAILABLE)
+    );
+    let mut other = Client::connect(b.homekit.port()).await;
+    assert_eq!(
+        stranger.verify(&mut other).await,
+        Err(tlv::ERR_AUTHENTICATION)
+    );
+
+    // Without verification nothing is served.
+    let mut plain = Client::connect(b.homekit.port()).await;
+    let (status, _) = plain
+        .call("GET", "/accessories", "application/hap+json", b"")
+        .await;
+    assert_eq!(status, 470);
+
+    // The paired phone verifies and reads the database.
+    let mut session = Client::connect(b.homekit.port()).await;
+    phone.verify(&mut session).await.expect("verified");
+    let (status, db) = session.json("GET", "/accessories", &Json::Null).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        db["accessories"].as_array().unwrap().len(),
+        4,
+        "the bridge, a lamp, a thermometer, an alarm"
+    );
+
+    // Unpairing everyone drops the connection and allows a new pairing.
+    b.homekit.forget_pairings();
+    assert_eq!(b.homekit.status(false).controllers, 0);
+    let mut again = Client::connect(b.homekit.port()).await;
+    phone.pair(&mut again, &code).await.expect("paired again");
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // one story: read, write, held, refused
+async fn a_paired_phone_reads_writes_and_is_stopped_by_the_guard() {
+    let b = bridge("session").await;
+    let code = b.homekit.status(true).setup_code.unwrap();
+    let phone = Controller::new("phone-1");
+    let mut client = Client::connect(b.homekit.port()).await;
+    phone.pair(&mut client, &code).await.unwrap();
+    let mut s = Client::connect(b.homekit.port()).await;
+    phone.verify(&mut s).await.unwrap();
+    let (_, db) = s.json("GET", "/accessories", &Json::Null).await;
+
+    // Reading: values come from the hub.
+    let (aid, on) = find(&db, "fake:lamp", "25");
+    let (_, brightness) = find(&db, "fake:lamp", "08");
+    let (status, read) = s
+        .json(
+            "GET",
+            &format!("/characteristics?id={aid}.{on},{aid}.{brightness}"),
+            &Json::Null,
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(read["characteristics"][0]["value"], false);
+    assert_eq!(read["characteristics"][1]["value"], 30);
+    let (taid, temp) = find(&db, "fake:thermo", "11");
+    let (_, read) = s
+        .json(
+            "GET",
+            &format!("/characteristics?id={taid}.{temp}"),
+            &Json::Null,
+        )
+        .await;
+    assert_eq!(read["characteristics"][0]["value"], 21.5);
+    // An unknown characteristic is a status, not a failure.
+    let (status, read) = s
+        .json("GET", "/characteristics?id=77.77", &Json::Null)
+        .await;
+    assert_eq!(status, 207);
+    assert_eq!(read["characteristics"][0]["status"], -70409);
+
+    // Writing: the lamp goes on, through the hub, journaled as the API.
+    let (status, _) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": aid, "iid": on, "value": true}]}),
+        )
+        .await;
+    assert_eq!(status, 204);
+    let lamp = PointId::new(&DeviceId::new(&InstanceId::from("fake"), "lamp"), "on");
+    wait_for("the lamp is on", || {
+        b.hub
+            .state(&lamp)
+            .is_some_and(|s| s.value == Value::Bool(true))
+    })
+    .await;
+    let entry = b
+        .hub
+        .journal(5)
+        .into_iter()
+        .find(|e| e.origin == Origin::Api)
+        .expect("journaled as api");
+    assert_eq!(entry.actor.as_deref(), Some("homekit"));
+    // Read-only and out-of-range writes are refused.
+    let (status, bad) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": taid, "iid": temp, "value": 5}]}),
+        )
+        .await;
+    assert_eq!(status, 207);
+    assert_eq!(bad["characteristics"][0]["status"], -70404);
+
+    // The alarm: HomeKit may ask, the guard holds the order for a human.
+    let (alarm_aid, target) = find(&db, "fake:alarm", "67");
+    let (status, _) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": alarm_aid, "iid": target, "value": 2}]}),
+        )
+        .await;
+    assert_eq!(status, 204, "accepted, then shown unchanged");
+    let mode = PointId::new(&DeviceId::new(&InstanceId::from("fake"), "alarm"), "mode");
+    assert_eq!(
+        b.hub.state(&mode).unwrap().value,
+        Value::from("disarmed"),
+        "not armed"
+    );
+    let held = b.hub.approvals();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].origin, Origin::Api);
+    assert_eq!(
+        held[0].value,
+        Value::from("partial"),
+        "Night is the panel's partial arming"
+    );
+    let (_, read) = s
+        .json(
+            "GET",
+            &format!("/characteristics?id={alarm_aid}.{target}"),
+            &Json::Null,
+        )
+        .await;
+    assert_eq!(
+        read["characteristics"][0]["value"], 3,
+        "still disarmed for the phone"
+    );
+    // A value HomeKit does not offer for this panel is refused.
+    let (status, _) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": alarm_aid, "iid": target, "value": 0}]}),
+        )
+        .await;
+    assert_eq!(status, 207);
+}
+
+#[tokio::test]
+async fn devices_are_shown_or_hidden_one_by_one() {
+    let b = bridge("choice").await;
+    let code = b.homekit.status(true).setup_code.unwrap();
+    let phone = Controller::new("phone-2");
+    let mut client = Client::connect(b.homekit.port()).await;
+    phone.pair(&mut client, &code).await.unwrap();
+    let mut s = Client::connect(b.homekit.port()).await;
+    phone.verify(&mut s).await.unwrap();
+
+    assert_eq!(count(&mut s).await, 4);
+    let config_before = b.homekit.status(false).exposed;
+    assert_eq!(config_before, 3);
+
+    // Nothing by default, except the lamp.
+    b.homekit.set_policy(Policy::None);
+    b.homekit.set_device("fake:lamp", Some(true));
+    wait_for("the database follows", || {
+        b.homekit.status(false).exposed == 1
+    })
+    .await;
+    assert_eq!(count(&mut s).await, 2);
+    let listed = b.homekit.devices();
+    assert!(
+        listed
+            .iter()
+            .any(|d| d.id == "fake:lamp" && d.exposed && d.exception)
+    );
+    assert!(listed.iter().any(|d| d.id == "fake:alarm" && !d.exposed));
+    assert!(b.homekit.knows("fake:alarm"));
+    assert!(!b.homekit.knows("fake:nothing"));
+
+    // Everything again, except the alarm.
+    b.homekit.set_policy(Policy::All);
+    b.homekit.set_device("fake:alarm", Some(false));
+    wait_for("the database follows", || {
+        b.homekit.status(false).exposed == 2
+    })
+    .await;
+    assert_eq!(count(&mut s).await, 3);
+    // Back to the policy: it comes back.
+    b.homekit.set_device("fake:alarm", None);
+    wait_for("the alarm is back", || b.homekit.status(false).exposed == 3).await;
+}

@@ -91,3 +91,12 @@ base_topic = "zigbee2mqtt"
 # local_speech = "127.0.0.1:10200"              # Piper (Wyoming), repli de la voix ; "" = aucun
 # local_voice = "fr_FR-siwis-medium"
 # local_listen = "127.0.0.1:10300"              # Whisper (Wyoming), repli de l'écoute ; "" = aucun
+
+# Pont HomeKit : Moli apparaît dans l'app Maison de l'iPhone (accessoire « pont »).
+# Les appareils montrés se règlent un par un dans le tableau de bord (Système).
+# Le code d'appairage vit dans le coffre chiffré (MOLI_MASTER_KEY obligatoire),
+# jamais ici. Le conteneur doit être en `network_mode: host` (annonce mDNS).
+# [homekit]
+# name = "Moli"
+# port = 51827
+# address = "192.168.0.x"   # seulement si la route par défaut n'est pas la bonne

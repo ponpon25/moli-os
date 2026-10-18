@@ -4,6 +4,9 @@
   "serveur.limite.trop_de_flux": "trop de flux en direct ouverts : ferme un onglet ou réessaie plus tard",
 
   "serveur.pilote.absent": "pas de pilote {pilote} dans moli.toml",
+  "serveur.homekit.absent": "HomeKit n'est pas activé (section [homekit] de moli.toml)",
+  "serveur.homekit.humain": "seule une personne (code) change ce que HomeKit voit",
+  "serveur.homekit.appareil_inconnu": "cet appareil n'existe pas pour HomeKit",
   "serveur.cle.assistant_humain": "seule une personne (code) donne une clé",
   "serveur.enregistrement.humain": "seule une personne (code) allume les enregistrements des boîtiers et les écoute",
   "serveur.cle.tuya_humain": "seule une personne (code) donne des clés",

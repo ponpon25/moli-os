@@ -1,0 +1,26 @@
+[package]
+name = "moli-homekit"
+description = "Moli OS surface: a native HomeKit bridge (HAP over IP) that shows chosen devices in the Home app, device by device."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+moli-core.workspace = true
+moli-runtime.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+socket2 = { version = "0.6", features = ["all"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

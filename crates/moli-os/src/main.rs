@@ -367,6 +367,27 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
         .map(moli_api::UiPin::new);
     let (assistant, automations, automating) =
         start_brains(&config, &hub, energy.as_ref(), history.as_ref(), &cancel).await?;
+    let homekit = match &config.homekit {
+        Some(options) => match moli_homekit::start(
+            hub.clone(),
+            &config.server.data_dir,
+            options.clone(),
+            cancel.clone(),
+        )
+        .await
+        {
+            Ok((bridge, task)) => {
+                tasks.push(task);
+                Some(bridge)
+            }
+            // A bridge that cannot start must not stop the house.
+            Err(e) => {
+                tracing::error!(error = %e, "homekit: the bridge did not start");
+                None
+            }
+        },
+        None => None,
+    };
     let surfaces = moli_api::Options {
         allowed_hosts: config.server.allowed_hosts.clone(),
         ui_pin,
@@ -382,6 +403,7 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
         phones: gates.phones,
         machines: gates.machines,
         weather: weather(&config),
+        homekit,
     };
     // Client addresses matter: human sessions are bound to them.
     axum::serve(

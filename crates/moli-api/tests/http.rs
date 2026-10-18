@@ -1194,3 +1194,18 @@ async fn an_invited_person_reaches_the_house_from_the_internet() {
     assert_eq!(status, 401);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn homekit_routes_say_so_when_there_is_no_bridge() {
+    let (addr, _hub) = server().await;
+    let (status, body) = request(&addr, "GET", "/api/homekit", None).await;
+    assert_eq!(status, 200);
+    let body: Json = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["enabled"], false);
+    // Nothing to change without a bridge.
+    let policy = serde_json::json!({ "policy": "none" });
+    let (status, _) = request(&addr, "PUT", "/api/homekit/policy", Some(&policy)).await;
+    assert_eq!(status, 503);
+    let (status, _) = request(&addr, "POST", "/api/homekit/unpair", None).await;
+    assert_eq!(status, 503);
+}

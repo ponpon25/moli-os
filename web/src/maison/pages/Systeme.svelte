@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import Icon from '../ui/Icon.svelte';
   import TuyaCloudKeys from '../ui/TuyaCloudKeys.svelte';
+  import HomeKitCard from '../ui/HomeKitCard.svelte';
   import AssistantSettings from '../ui/AssistantSettings.svelte';
   import AssistantExchanges from '../ui/AssistantExchanges.svelte';
   import AlexaAccount from '../ui/AlexaAccount.svelte';
@@ -169,6 +170,8 @@
   <AlexaAccount />
 
   <TuyaCloudKeys />
+
+  <HomeKitCard />
 
   <!-- Only where a host script measures Moli against a Home Assistant. -->
   {#if sys && last?.ha}

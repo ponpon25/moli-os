@@ -1114,6 +1114,7 @@ dependencies = [
  "moli-core",
  "moli-energy",
  "moli-history",
+ "moli-homekit",
  "moli-host",
  "moli-i18n",
  "moli-net",
@@ -1314,6 +1315,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-homekit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-core",
+ "moli-runtime",
+ "ring",
+ "serde",
+ "serde_json",
+ "socket2",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "moli-host"
 version = "0.1.0"
 dependencies = [
@@ -1455,6 +1473,7 @@ dependencies = [
  "moli-frigate",
  "moli-helpers",
  "moli-history",
+ "moli-homekit",
  "moli-host",
  "moli-hue",
  "moli-i18n",

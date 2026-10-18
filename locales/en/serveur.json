@@ -4,6 +4,9 @@
   "serveur.limite.trop_de_flux": "too many live streams open: close a tab or try again later",
 
   "serveur.pilote.absent": "no {pilote} driver in moli.toml",
+  "serveur.homekit.absent": "HomeKit is not enabled ([homekit] section of moli.toml)",
+  "serveur.homekit.humain": "only a person (with the code) can change what HomeKit sees",
+  "serveur.homekit.appareil_inconnu": "this device does not exist for HomeKit",
   "serveur.cle.assistant_humain": "only a person (with the code) can give a key",
   "serveur.enregistrement.humain": "only a person (with the code) can switch the satellites’ recordings on and listen to them",
   "serveur.cle.tuya_humain": "only a person (with the code) can give keys",

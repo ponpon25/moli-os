@@ -20,6 +20,7 @@ mod assistant;
 mod automations;
 mod caller;
 mod guard;
+mod homekit;
 mod integrations;
 mod limit;
 mod machines;
@@ -126,6 +127,8 @@ pub struct Options {
     /// The sky over the house (forecast, satellite), when its position is
     /// known.
     pub weather: Option<moli_weather::Weather>,
+    /// The HomeKit bridge, when `[homekit]` is configured.
+    pub homekit: Option<moli_homekit::HomeKit>,
 }
 
 /// Builds the complete HTTP application. Live streams end when `shutdown`
@@ -186,6 +189,11 @@ fn house_routes(humans: &Arc<session::Sessions>, options: &Options) -> Router<Hu
             "/api/integrations/tuya-cloud",
             get(integrations::tuya_cloud).put(integrations::set_tuya_cloud),
         )
+        .route("/api/homekit", get(homekit::status))
+        .route("/api/homekit/policy", put(homekit::set_policy))
+        .route("/api/homekit/devices/{id}", put(homekit::set_device))
+        .route("/api/homekit/unpair", post(homekit::unpair))
+        .layer(Extension(homekit::HomeKitGate(options.homekit.clone())))
         .route("/api/session/pin", put(rest::set_pin))
         .route(
             "/api/people",

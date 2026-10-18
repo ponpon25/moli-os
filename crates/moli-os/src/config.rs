@@ -54,6 +54,10 @@ pub struct Config {
     /// Automations: the house's position (sunrise, sunset) and time zone.
     #[serde(default)]
     pub automations: moli_automation::Config,
+    /// The HomeKit bridge (absent: no HomeKit). Its setup code is kept in
+    /// the encrypted store, never here.
+    #[serde(default)]
+    pub homekit: Option<moli_homekit::Config>,
 }
 
 /// Where and when agents need a human's approval. Edited by humans only:

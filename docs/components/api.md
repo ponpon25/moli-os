@@ -352,6 +352,15 @@ Limites de `Turn` : 14 derniers messages renvoyés au modèle, 2 000 caractères
 | GET | `/api/automations/runs` | libre | `?automation=<id>&limit=` (défaut 50, max 500) | `[Run]`, plus récente d'abord | `503` |
 | GET | `/api/automations/live` | libre | aucune | flux SSE (§ 3.2) | `503` (dont trop de flux ouverts, § 3.1) |
 
+**HomeKit** (le pont `moli-homekit`, voir [homekit.md](homekit.md))
+
+| Méthode | Chemin | Accès | Entrée | Réponse | Erreurs |
+|---|---|---|---|---|---|
+| GET | `/api/homekit` | libre ; le code d'appairage et le QR seulement à une session **humaine** | aucune | `{enabled:false}`, ou `{enabled, human, status:{name, port, policy, controllers, exposed, truncated, setup_code?, setup_uri?}, devices:[{id, name, room?, kinds, exposed, exception, absent}]}` | aucune |
+| PUT | `/api/homekit/policy` | **humain** | `{policy:"all"\|"none"}` | `{policy}` | `403` ; `503` pas de pont |
+| PUT | `/api/homekit/devices/{id}` | **humain** | `{exposed: true\|false\|null}` (`null` : suivre la politique) | `{id, exposed}` | `403` ; `404` appareil que HomeKit ne sait pas montrer ; `503` |
+| POST | `/api/homekit/unpair` | **humain** | aucune | `{unpaired:true}` (tous les téléphones sont désappairés) | `403` ; `503` |
+
 **Flux et MCP**
 
 | Méthode | Chemin | Accès | Entrée | Réponse | Erreurs |

@@ -58,6 +58,7 @@ téléphones passent sans Access, avec leur propre jeton.
 | [automatismes.md](components/automatismes.md) | modèle de graphe, validation humaine, moteur, éditeur, import HA |
 | [moli.md](components/moli.md) | l'assistant : conversation, outils, garde, création d'automatismes, filtres |
 | [api.md](components/api.md) | REST, SSE, MCP, CLI, sécurité des routes |
+| [homekit.md](components/homekit.md) | le pont HomeKit : ajouter Moli dans l'app Maison, choisir les appareils, la garde, protocole et limites |
 | [dashboard.md](components/dashboard.md) | interface Maison et Atelier (Svelte 5), carte vivante |
 | [exploitation.md](components/exploitation.md) | image Docker, clé maître, sauvegarde, mise à jour, développement |
 | [installation.md](components/installation.md) | premier démarrage, code de la maison, clé maître, premiers appareils, accès hors de chez soi |

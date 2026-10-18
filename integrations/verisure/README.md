@@ -10,10 +10,11 @@
   marqué `login_locked` dans le coffre jusqu'à ce qu'un humain le lève), jeton de rafraîchissement
   rangé dès qu'il arrive, requêtes espacées de 2 s, lecture de la centrale toutes les 2 minutes au
   plus vite, attente de 10 minutes après un blocage du pare-feu.
-- Le mode partiel de la centrale s'appelle `partial` dans Moli : le pilote essaie la commande « jour » (`ARMDAY1`) puis « nuit » (`ARMNIGHT1`), selon ce que la centrale accepte (une centrale qui n'a qu'un partiel refuse l'autre). Le tableau de bord l'affiche « Mode Nuit », à la demande du foyer.
+- Le mode partiel de la centrale s'appelle `partial` dans Moli : c'est la commande `ARMDAY1`, la seule que cette centrale (Central Unit, sans périmètre) accepte pour son partiel, éprouvée sur une vraie ; elle refuse `ARMNIGHT1`. Le tableau de bord l'affiche « Mode Nuit », à la demande du foyer. Une autre centrale peut avoir un autre partiel : à vérifier.
 - Armer et désarmer sont des points de sémantique `control` : la garde les retient pour un humain,
   y compris depuis le dashboard du foyer sans code.
-- Reste : jamais testé sur une vraie centrale à la livraison de ce paquet. Pas d'état de chaque
+- Éprouvé sur une vraie centrale : lecture de l'état, armement partiel, total et désarmement (garde et code du foyer compris).
+- Reste : pas d'état de chaque
   ouverture (l'API ne le donne pas), pas de forçage d'armement, pas de périmètre ni d'annexe en
   commande (leur état se lit). Une connexion de Moli peut déconnecter la session d'une autre
   application du même compte (Jeedom) : un utilisateur Verisure à part pour Moli est préférable.

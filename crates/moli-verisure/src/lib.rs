@@ -476,11 +476,10 @@ async fn order(
         command.reply(Err(moli_i18n::tr!("pilotes.verisure.point_non_ecrivable")));
         return Ok(());
     }
-    let verbs = model::commands_for(&mode, current);
-    if verbs.is_empty() {
+    let Some(verb) = model::command_for(&mode, current) else {
         command.reply(Err(moli_i18n::tr!("pilotes.verisure.mode_inconnu", mode = mode)));
         return Ok(());
-    }
+    };
     // A warm session: the hub's answer cannot wait for a login.
     if let Err(stop) = session(client, ctx).await {
         return match stop {
@@ -494,32 +493,15 @@ async fn order(
             }
         };
     }
-    // The commands in turn: only « this command does not exist on this
-    // panel » moves on to the next one, never a real refusal or an error.
-    let mut taken = None;
-    let mut failure = String::new();
-    for candidate in verbs {
-        match client.begin_command(installation, candidate, current).await {
-            Ok(reference) => {
-                taken = Some((candidate, reference));
-                break;
-            }
-            Err(ApiError::Refused(why)) if model::is_unsupported(&why) => {
-                tracing::info!(instance = %ctx.instance(), order = candidate, "verisure: this panel does not take that command");
-                failure = why;
-            }
-            Err(e) => {
-                failure = e.to_string();
-                break;
-            }
+    let reference = match client.begin_command(installation, verb, current).await {
+        Ok(reference) => reference,
+        Err(e) => {
+            // Said where a person looks (the card), not only to the caller.
+            let said = moli_i18n::tr!("pilotes.verisure.ordre_refuse", why = e.to_string());
+            ctx.set_state(id, "last_order", Value::Text(said.clone().into()));
+            command.reply(Err(said));
+            return Ok(());
         }
-    }
-    let Some((verb, reference)) = taken else {
-        // Said where a person looks (the card), not only to the caller.
-        let said = moli_i18n::tr!("pilotes.verisure.ordre_refuse", why = failure);
-        ctx.set_state(id, "last_order", Value::Text(said.clone().into()));
-        command.reply(Err(said));
-        return Ok(());
     };
     tracing::info!(instance = %ctx.instance(), order = verb, "verisure order taken");
     ctx.set_state(id, "last_order", Value::Text(moli_i18n::tr!("pilotes.verisure.ordre_envoye").into()));

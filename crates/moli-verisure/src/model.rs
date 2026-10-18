@@ -7,8 +7,8 @@ use std::sync::Arc;
 use serde_json::Value as Json;
 
 /// The modes a person can choose (the point `mode`). « partial » is the
-/// panel's partial arming, whatever Verisure calls it (« day » on many,
-/// « night » on others): the driver tries the commands in turn. Perimeter
+/// panel's partial arming: Verisure's `ARMDAY1`, the one this kind of panel
+/// (the Central Unit, no perimeter) takes; it refuses `ARMNIGHT1`. Perimeter
 /// and annex variants are reported by `state` but not offered.
 pub const MODES: [&str; 3] = ["disarmed", "partial", "total"];
 
@@ -42,27 +42,17 @@ fn perimeter_armed(code: &str) -> bool {
     matches!(code.trim(), "E" | "B" | "C" | "A")
 }
 
-/// The commands to try for a mode, in order, given the panel's current
-/// code (a disarm also lifts the perimeter when it is armed). A panel with
-/// one partial arming rejects the other command as « not valid for Central
-/// Unit »: the next one is tried.
+/// The command for a mode, given the panel's current code (a disarm also
+/// lifts the perimeter when it is armed).
 #[must_use]
-pub fn commands_for(mode: &str, current: &str) -> Vec<&'static str> {
-    match mode {
-        "disarmed" if perimeter_armed(current) => vec!["DARM1DARMPERI"],
-        "disarmed" => vec!["DARM1"],
-        "partial" => vec!["ARMDAY1", "ARMNIGHT1"],
-        "total" => vec!["ARM1"],
-        _ => Vec::new(),
-    }
-}
-
-/// Whether Verisure said the command does not exist on this panel (and
-/// not, say, that a window is open): then another command may do.
-#[must_use]
-pub fn is_unsupported(refusal: &str) -> bool {
-    let r = refusal.to_ascii_lowercase();
-    r.contains("not valid") || r.contains("unsupported") || r.contains("usm")
+pub fn command_for(mode: &str, current: &str) -> Option<&'static str> {
+    Some(match mode {
+        "disarmed" if perimeter_armed(current) => "DARM1DARMPERI",
+        "disarmed" => "DARM1",
+        "partial" => "ARMDAY1",
+        "total" => "ARM1",
+        _ => return None,
+    })
 }
 
 #[must_use]
@@ -224,25 +214,17 @@ mod tests {
 
     #[test]
     fn modes_become_commands() {
-        assert_eq!(commands_for("total", "D"), vec!["ARM1"]);
-        // One partial arming, under whichever code the panel knows.
-        assert_eq!(commands_for("partial", "D"), vec!["ARMDAY1", "ARMNIGHT1"]);
-        assert_eq!(commands_for("disarmed", "T"), vec!["DARM1"]);
+        assert_eq!(command_for("total", "D"), Some("ARM1"));
+        // The panel's one partial arming: only the command it takes.
+        assert_eq!(command_for("partial", "D"), Some("ARMDAY1"));
+        assert_eq!(command_for("disarmed", "T"), Some("DARM1"));
         // A disarm also lifts the perimeter when it is armed.
-        assert_eq!(commands_for("disarmed", "A"), vec!["DARM1DARMPERI"]);
-        assert!(commands_for("explode", "D").is_empty());
-        assert!(commands_for("partial_night", "D").is_empty());
+        assert_eq!(command_for("disarmed", "A"), Some("DARM1DARMPERI"));
+        assert_eq!(command_for("explode", "D"), None);
+        assert_eq!(command_for("partial_night", "D"), None);
         assert!(is_disarm("DARM1"));
         assert!(is_disarm("DARM1DARMPERI"));
         assert!(!is_disarm("ARM1"));
-    }
-
-    #[test]
-    fn a_missing_command_is_told_from_a_real_refusal() {
-        assert!(is_unsupported("Request ARMNIGHT1 is not valid for Central Unit"));
-        assert!(is_unsupported("alarm-manager.usm8"));
-        assert!(!is_unsupported("Open zone (Cuisine)"));
-        assert!(!is_unsupported("No response from panel"));
     }
 
     #[test]

@@ -1,0 +1,133 @@
+[
+  {
+    "id": "63452e0a0267fe03e70003f3",
+    "modelKey": "camera",
+    "state": "CONNECTED",
+    "name": "Caméra extérieure",
+    "type": "UVC G3 Pro",
+    "guid": null,
+    "mac": "AABBCCDDEE01",
+    "isMicEnabled": true,
+    "osdSettings": {
+      "isNameEnabled": false,
+      "isDateEnabled": true,
+      "isLogoEnabled": false,
+      "isDebugEnabled": false,
+      "overlayLocation": "topLeft"
+    },
+    "ledSettings": {
+      "isEnabled": true,
+      "welcomeLed": true,
+      "floodLed": true
+    },
+    "micVolume": 100,
+    "activePatrolSlot": null,
+    "videoMode": "default",
+    "hdrType": "off",
+    "featureFlags": {
+      "supportFullHdSnapshot": true,
+      "hasHdr": true,
+      "smartDetectTypes": [],
+      "smartDetectAudioTypes": [],
+      "videoModes": [
+        "default",
+        "sport",
+        "slowShutter"
+      ],
+      "hasMic": true,
+      "hasLedStatus": false,
+      "hasSpeaker": false
+    },
+    "smartDetectSettings": {
+      "objectTypes": [],
+      "audioTypes": []
+    },
+    "hasPackageCamera": false
+  },
+  {
+    "id": "63452e0a02a8fe03e70003f4",
+    "modelKey": "camera",
+    "state": "CONNECTED",
+    "name": "Caméra Salon",
+    "type": "UVC G3 Instant",
+    "guid": "00000000-0000-0000-0000-000000000002",
+    "mac": "AABBCCDDEE02",
+    "isMicEnabled": true,
+    "osdSettings": {
+      "isNameEnabled": false,
+      "isDateEnabled": true,
+      "isLogoEnabled": false,
+      "isDebugEnabled": false,
+      "overlayLocation": "topLeft"
+    },
+    "ledSettings": {
+      "isEnabled": true,
+      "welcomeLed": true,
+      "floodLed": true
+    },
+    "micVolume": 100,
+    "activePatrolSlot": null,
+    "videoMode": "default",
+    "hdrType": "auto",
+    "featureFlags": {
+      "supportFullHdSnapshot": false,
+      "hasHdr": true,
+      "smartDetectTypes": [],
+      "smartDetectAudioTypes": [],
+      "videoModes": [
+        "default",
+        "sport",
+        "slowShutter"
+      ],
+      "hasMic": true,
+      "hasLedStatus": true,
+      "hasSpeaker": true
+    },
+    "smartDetectSettings": {
+      "objectTypes": [],
+      "audioTypes": []
+    },
+    "hasPackageCamera": false
+  },
+  {
+    "id": "6709182c00d47603e4014076",
+    "modelKey": "camera",
+    "state": "CONNECTED",
+    "name": "Caméra garage",
+    "type": "C1",
+    "guid": null,
+    "mac": "AABBCCDDEE03",
+    "isMicEnabled": true,
+    "osdSettings": {
+      "isNameEnabled": false,
+      "isDateEnabled": false,
+      "isLogoEnabled": true,
+      "isDebugEnabled": false,
+      "overlayLocation": "topLeft"
+    },
+    "ledSettings": {
+      "isEnabled": true,
+      "welcomeLed": true,
+      "floodLed": true
+    },
+    "micVolume": 80,
+    "activePatrolSlot": null,
+    "videoMode": "default",
+    "hdrType": "off",
+    "featureFlags": {
+      "supportFullHdSnapshot": false,
+      "hasHdr": false,
+      "smartDetectTypes": [],
+      "smartDetectAudioTypes": [],
+      "videoModes": [],
+      "hasMic": true,
+      "hasLedStatus": false,
+      "hasSpeaker": false
+    },
+    "smartDetectSettings": {
+      "objectTypes": [],
+      "audioTypes": []
+    },
+    "hasPackageCamera": false
+  }
+]

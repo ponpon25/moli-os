@@ -867,6 +867,7 @@ const KINDS: &[&str] = &[
     "alexa",
     "sonos",
     "reolink",
+    "unifi",
     "tuya",
     "helpers",
     "presence",
@@ -1029,6 +1030,9 @@ fn build_driver(
             config.options.clone().try_into().with_context(context)?,
         )),
         "sonos" => Arc::new(moli_sonos::Sonos::new(
+            config.options.clone().try_into().with_context(context)?,
+        )),
+        "unifi" => Arc::new(moli_unifi::Unifi::new(
             config.options.clone().try_into().with_context(context)?,
         )),
         "reolink" => Arc::new(moli_reolink::Reolink::new(

@@ -23,6 +23,7 @@ moli-energy = { path = "crates/moli-energy" }
 moli-tuya = { path = "crates/moli-tuya" }
 moli-net = { path = "crates/moli-net" }
 moli-reolink = { path = "crates/moli-reolink" }
+moli-unifi = { path = "crates/moli-unifi" }
 moli-sonos = { path = "crates/moli-sonos" }
 moli-bambu = { path = "crates/moli-bambu" }
 moli-frigate = { path = "crates/moli-frigate" }

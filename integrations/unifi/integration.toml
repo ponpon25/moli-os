@@ -1,0 +1,29 @@
+[integration]
+id = "unifi"
+name = "Caméras UniFi Protect (API d'intégration)"
+brands = ["Ubiquiti", "UniFi"]
+models = ["Cloud Key Gen2 Plus", "G3 Instant", "G3 Pro", "C1"]
+transport = "https"
+driver = "unifi"
+crate = "moli-unifi"
+
+[discovery]
+# No discovery: the instance gives the console's address.
+mdns = []
+ssdp = []
+ports = [443]
+
+[needs]
+# api_key: created in Protect (Integrations), stored with `moli-os secrets set`.
+# cert_sha256 is written by the driver itself at first contact.
+secrets = ["api_key"]
+vars = []
+options = ["host"]
+
+[origin]
+reused = ""
+author = "agent"
+
+# Replayed by the crate's tests (crates/moli-unifi/src/lib.rs).
+[[fixture]]
+file = "fixtures/cameras.json"

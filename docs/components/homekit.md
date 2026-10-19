@@ -121,6 +121,12 @@ connexion, ou quand il se tait plus de 30 s après avoir parlé. Pas de HomeKit 
 d'enregistrement), pas de détection de mouvement dans le service caméra : le mouvement est un accessoire
 à part.
 
+**Caméras tierces (ONVIF) adoptées dans UniFi Protect.** Certaines (une Foscam, essayée) n'envoient en mode
+« Default » que des images différentielles (rafraîchissement progressif, aucune image IDR) : l'iPhone ne peut
+pas démarrer le flux, malgré des paquets reçus sans perte (journal `nal_types=1:…` sans `5:`). Réglage de la
+caméra dans UniFi Protect : **Stream Compatibility Mode → Improved**, et les images clés arrivent. Sans cela, la
+caméra n'est pas affichable sans transcodage (que Moli ne fait pas).
+
 ### La garde et les caméras
 
 HomeKit est une **surface comme l'API REST**, jamais une session humaine : un ordre venu d'HomeKit part avec

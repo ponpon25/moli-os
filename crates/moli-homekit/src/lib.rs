@@ -379,6 +379,7 @@ impl Shared {
             tracing::info!(
                 accessories = catalog.accessories.len() - 1,
                 config_number = saved.config_number,
+                database = %catalog.structure(),
                 "homekit: the accessory database changed"
             );
         }

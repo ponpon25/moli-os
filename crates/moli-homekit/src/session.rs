@@ -740,8 +740,10 @@ impl Conn {
         colors: &mut Colors,
     ) -> i32 {
         match &c.bind {
-            Bind::Identify => OK,
-            Bind::Static(_) | Bind::ArmCurrent { .. } => ST_READ_ONLY,
+            // A constant that is writable (the camera's microphone settings) is
+            // accepted and unused; the permissions already refuse the others.
+            Bind::Identify | Bind::Static(_) => OK,
+            Bind::ArmCurrent { .. } => ST_READ_ONLY,
             Bind::Camera { device, what } => match what {
                 CameraChar::Setup => {
                     match self

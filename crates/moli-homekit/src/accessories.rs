@@ -44,6 +44,9 @@ const SVC_LEAK: &str = "83";
 const SVC_SMOKE: &str = "87";
 const SVC_SECURITY: &str = "7E";
 const SVC_CAMERA: &str = "110";
+const SVC_MICROPHONE: &str = "112";
+const C_VOLUME: &str = "119";
+const C_MUTE: &str = "11A";
 
 // Characteristic types.
 const C_IDENTIFY: &str = "14";
@@ -657,16 +660,16 @@ fn camera_services(device: &DeviceId) -> Vec<ServiceSpec> {
             "Selected RTP Stream Configuration",
         ),
         (
-            C_SETUP_ENDPOINTS,
-            READ_WRITE,
-            CameraChar::Setup,
-            "Setup Endpoints",
-        ),
-        (
             C_STREAMING_STATUS,
             READ_NOTIFY,
             CameraChar::Status,
             "Streaming Status",
+        ),
+        (
+            C_SETUP_ENDPOINTS,
+            READ_WRITE,
+            CameraChar::Setup,
+            "Setup Endpoints",
         ),
     ]
     .into_iter()
@@ -683,10 +686,35 @@ fn camera_services(device: &DeviceId) -> Vec<ServiceSpec> {
         )
     })
     .collect();
-    vec![ServiceSpec {
-        kind: SVC_CAMERA,
-        chars,
-    }]
+    // The Home app wants a microphone service on a camera, silent or not
+    // (as HAP-python's cameras have): its settings are accepted and unused.
+    let microphone = ServiceSpec {
+        kind: SVC_MICROPHONE,
+        chars: vec![
+            spec(
+                C_VOLUME,
+                "uint8",
+                READ_WRITE_NOTIFY,
+                Bind::Static(json!(0)),
+                "Volume",
+            )
+            .meta(percent_meta()),
+            spec(
+                C_MUTE,
+                "bool",
+                READ_WRITE_NOTIFY,
+                Bind::Static(json!(false)),
+                "Mute",
+            ),
+        ],
+    };
+    vec![
+        microphone,
+        ServiceSpec {
+            kind: SVC_CAMERA,
+            chars,
+        },
+    ]
 }
 
 /// The key of a device's camera among HomeKit's choices: the device itself

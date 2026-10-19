@@ -106,35 +106,44 @@ const RESOLUTIONS: [(u16, u16, u8); 5] = [
     (320, 180, 15),
 ];
 
-/// `SupportedVideoStreamConfiguration`.
+/// `SupportedVideoStreamConfiguration`, laid out byte for byte like
+/// HAP-python's (an iPhone-tested reference): packetization first, every
+/// profile and level as its own item, no separators, frame rate on two bytes.
 pub fn supported_video() -> Vec<u8> {
     let params = Tlv::new()
-        .with(1, [2]) // profile: High
-        .with(2, [2]) // level: 4
-        .with(3, [0]); // packetization: non-interleaved
+        .with(3, [0]) // packetization: non-interleaved
+        .with(1, [0]) // profiles: baseline, main, high
+        .with(1, [1])
+        .with(1, [2])
+        .with(2, [0]) // levels: 3.1, 3.2, 4
+        .with(2, [1])
+        .with(2, [2]);
     let mut config = Tlv::new().with(1, [0]).with(2, params.encode());
-    for (i, (width, height, fps)) in RESOLUTIONS.into_iter().enumerate() {
-        if i > 0 {
-            config = config.with(0, []);
-        }
+    for (width, height, fps) in RESOLUTIONS {
         let mut size = Vec::new();
         size.extend_from_slice(&Tlv::new().with(1, width.to_le_bytes()).encode());
         size.extend_from_slice(&Tlv::new().with(2, height.to_le_bytes()).encode());
-        size.extend_from_slice(&Tlv::new().with(3, [fps]).encode());
+        size.extend_from_slice(&Tlv::new().with(3, u16::from(fps).to_le_bytes()).encode());
         config = config.with(3, size);
     }
     Tlv::new().with(1, config.encode()).encode()
 }
 
 /// `SupportedAudioStreamConfiguration`: required by the Home app though no
-/// audio is sent (one Opus entry).
+/// audio is sent. As HAP-python's: Opus 24 kHz and AAC-ELD 16 kHz.
 pub fn supported_audio() -> Vec<u8> {
-    let params = Tlv::new()
-        .with(1, [1]) // one channel
-        .with(2, [0]) // variable bit rate
-        .with(3, [1]); // 16 kHz
-    let config = Tlv::new().with(1, [3]).with(2, params.encode());
-    Tlv::new().with(1, config.encode()).with(2, [0]).encode()
+    let codec = |kind: u8, rate: u8| {
+        let params = Tlv::new()
+            .with(1, [1]) // one channel
+            .with(2, [0]) // variable bit rate
+            .with(3, [rate]);
+        Tlv::new().with(1, [kind]).with(2, params.encode()).encode()
+    };
+    Tlv::new()
+        .with(1, codec(3, 2))
+        .with(1, codec(2, 1))
+        .with(2, [0])
+        .encode()
 }
 
 /// `SupportedRTPConfiguration`: SRTP with AES-CM-128 and HMAC-SHA1-80.
@@ -820,8 +829,8 @@ mod tests {
         let config = Tlv::parse(video.get(1).unwrap()).unwrap();
         let params = Tlv::parse(config.get(2).unwrap()).unwrap();
         assert_eq!(
-            (params.byte(1), params.byte(2), params.byte(3)),
-            (Some(2), Some(2), Some(0))
+            (params.byte(3), params.all(1).count(), params.all(2).count()),
+            (Some(0), 3, 3)
         );
         let sizes: Vec<(u16, u16)> = config
             .all(3)
@@ -838,5 +847,30 @@ mod tests {
         assert_eq!(supported_rtp(), [2, 1, 0]);
         assert_eq!(streaming_status(1), [1, 1, 1]);
         assert!(Tlv::parse(&supported_audio()).is_some());
+    }
+
+    /// HAP-python's camera, accepted by iPhones, is the reference: its
+    /// values for the audio, RTP and status, and the start of its video
+    /// configuration (everything before the sizes), byte for byte.
+    #[test]
+    fn the_values_equal_hap_pythons() {
+        assert_eq!(
+            b64(&supported_audio()),
+            "AQ4BAQMCCQEBAQIBAAMBAgEOAQECAgkBAQECAQADAQECAQA="
+        );
+        assert_eq!(b64(&supported_rtp()), "AgEA");
+        assert_eq!(b64(&streaming_status(0)), "AQEA");
+        let reference = unb64("AUQBAQACFQMBAAEBAAEBAQEBAgIBAAIBAQIBAgMMAQJAAQIC8AADAg8A").unwrap();
+        // Skip the two length bytes (the sizes differ), compare the rest.
+        assert_eq!(supported_video()[2..28], reference[2..28]);
+        // A size: width, height, frame rate (two bytes).
+        assert_eq!(
+            &supported_video()[28..],
+            &{
+                let mut first = vec![3, 12, 1, 2, 0x80, 0x07, 2, 2, 0x38, 0x04, 3, 2, 30, 0];
+                first.extend_from_slice(&supported_video()[42..]);
+                first
+            }[..]
+        );
     }
 }

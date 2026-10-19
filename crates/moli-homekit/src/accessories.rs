@@ -953,7 +953,11 @@ fn characteristic_json(c: &Characteristic, value: Option<Json>) -> Json {
 
 /// Integers stay integers in the metadata of integer formats.
 fn number(v: f64, format: &str) -> Json {
-    if matches!(format, "int" | "uint8" | "uint16" | "uint32" | "uint64") {
+    // Whole numbers stay whole, as other HomeKit accessories print them
+    // (360, not 360.0): the Home app is strict about its database.
+    if matches!(format, "int" | "uint8" | "uint16" | "uint32" | "uint64")
+        || (v - v.trunc()).abs() < f64::EPSILON
+    {
         json!(v as i64)
     } else {
         json!(v)

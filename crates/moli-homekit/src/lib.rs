@@ -332,8 +332,10 @@ impl Shared {
                     .and_then(|text| hex_to_hs(&text))
                     .unwrap_or((0.0, 0.0));
                 Ok(match part {
-                    accessories::ColorPart::Hue => serde_json::json!(hue.round()),
-                    accessories::ColorPart::Saturation => serde_json::json!(saturation.round()),
+                    accessories::ColorPart::Hue => serde_json::json!(hue.round() as i64),
+                    accessories::ColorPart::Saturation => {
+                        serde_json::json!(saturation.round() as i64)
+                    }
                 })
             }
             Bind::ArmCurrent { state, mode } => {

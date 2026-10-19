@@ -40,7 +40,7 @@ const MAX_TOTAL: usize = 6;
 const PENDING_TTL: Duration = Duration::from_secs(30);
 /// A phone that was sending reports and went silent is gone.
 const CONTROLLER_SILENT: Duration = Duration::from_secs(30);
-const REPORT_EVERY: Duration = Duration::from_secs(5);
+const REPORT_EVERY: Duration = Duration::from_secs(2);
 /// What the Home app assumes when the phone gives no packet size.
 const DEFAULT_MTU: usize = 1378;
 
@@ -384,9 +384,10 @@ impl Streams {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// 0 available, 1 in use (the camera serves all it can).
+    /// 0 available, 1 in use: a stream is running (what HAP-python and
+    /// HAP-NodeJS report; the phone reads it while it watches).
     pub fn status_of(&self, device: &DeviceId) -> u8 {
-        u8::from(self.lock().count(device) >= MAX_PER_CAMERA)
+        u8::from(self.lock().active.values().any(|a| &a.device == device))
     }
 
     /// Ends a stream (negotiated or running); the devices it served.
@@ -590,6 +591,7 @@ impl Shared {
 
 /// Sends the camera's frames to the phone until `cancel`, the camera or the
 /// phone gives up.
+#[allow(clippy::too_many_lines)] // one select loop, counters included
 async fn relay(
     shared: &Arc<Shared>,
     device: &DeviceId,
@@ -597,6 +599,7 @@ async fn relay(
     video: VideoChoice,
     cancel: &CancellationToken,
 ) {
+    let begun = Instant::now();
     let want = LiveWant {
         width: u32::from(video.width),
         height: u32::from(video.height),
@@ -609,7 +612,16 @@ async fn relay(
         }
     };
     let info = live.info().clone();
-    tracing::info!(%device, width = info.width, height = info.height, "homekit: relaying the camera");
+    let opened = begun;
+    tracing::info!(
+        %device,
+        width = info.width,
+        height = info.height,
+        wanted_width = video.width,
+        wanted_height = video.height,
+        open_ms = u64::try_from(begun.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "homekit: relaying the camera"
+    );
     let destination = SocketAddr::new(pending.request.address, pending.request.video_port);
     let socket = pending.video_socket;
     let mut srtp = Sender::new(&pending.request.video.key, &pending.request.video.salt);
@@ -626,6 +638,19 @@ async fn relay(
     let mut report = tokio::time::interval(REPORT_EVERY);
     report.tick().await;
     let mut inbound = [0u8; 2048];
+    // Counters for the journal (never a key).
+    let (mut frames_in, mut key_frames, mut skipped, mut send_errors, mut phone_packets) =
+        (0u32, 0u32, 0u32, 0u32, 0u32);
+    tracing::info!(
+        %device,
+        to = %destination,
+        from_port = socket.local_addr().map_or(0, |a| a.port()),
+        ssrc,
+        payload_type = video.payload_type,
+        mtu = video.mtu,
+        max_kbps = video.max_bitrate,
+        "homekit: camera stream destination"
+    );
     loop {
         tokio::select! {
             () = cancel.cancelled() => break,
@@ -637,6 +662,8 @@ async fn relay(
                         break;
                     }
                 };
+                frames_in += 1;
+                key_frames += u32::from(frame.keyframe);
                 for nal in &frame.nals {
                     match moli_net::h264::nal_type(nal) {
                         moli_net::h264::NAL_SPS => sps = Some(nal.clone()),
@@ -646,7 +673,21 @@ async fn relay(
                 }
                 // A phone can only begin on a picture it can decode alone.
                 if !started && !frame.keyframe {
+                    skipped += 1;
                     continue;
+                }
+                if !started {
+                    tracing::info!(
+                        %device,
+                        waited_ms = u64::try_from(opened.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        skipped,
+                        "homekit: first key frame, the video starts"
+                    );
+                    // The report first: it ties the stream's clock to the wall clock.
+                    let sr = sender_report(ssrc, ntp_now(), frame.timestamp, 0, 0);
+                    if socket.send_to(&srtp.protect_rtcp(&sr), destination).await.is_err() {
+                        return;
+                    }
                 }
                 started = true;
                 let mut nals = frame.nals;
@@ -660,8 +701,22 @@ async fn relay(
                     let sealed = srtp.protect_rtp(&packet);
                     packets = packets.wrapping_add(1);
                     octets = octets.wrapping_add((packet.len() - 12) as u32);
-                    if socket.send_to(&sealed, destination).await.is_err() {
-                        return;
+                    if let Err(e) = socket.send_to(&sealed, destination).await {
+                        send_errors += 1;
+                        if send_errors == 1 {
+                            tracing::warn!(%device, error = %e, "homekit: a video packet could not be sent");
+                        }
+                        if send_errors > 50 {
+                            return;
+                        }
+                    }
+                    if packets == 1 {
+                        tracing::info!(
+                            %device,
+                            header = %crate::setup::hex(&packet[..12]),
+                            size = sealed.len(),
+                            "homekit: first video packet sent (clear header)"
+                        );
                     }
                 }
             }
@@ -674,6 +729,16 @@ async fn relay(
                     tracing::info!(%device, "homekit: the camera's room became protected, closing the stream");
                     break;
                 }
+                tracing::info!(
+                    %device,
+                    frames_in,
+                    key_frames,
+                    packets,
+                    octets,
+                    send_errors,
+                    phone_packets,
+                    "homekit: camera stream counters"
+                );
                 if started {
                     let ticks = (last_frame.elapsed().as_secs_f64() * 90_000.0) as u32;
                     let sr = sender_report(ssrc, ntp_now(), last_ts.wrapping_add(ticks), packets, octets);
@@ -684,8 +749,12 @@ async fn relay(
             }
             // What the phone sends back (reports): proof it is still there.
             received = socket.recv_from(&mut inbound) => {
-                if received.is_ok() {
+                if let Ok((n, from)) = received {
                     heard = Some(Instant::now());
+                    phone_packets += 1;
+                    if phone_packets <= 3 {
+                        tracing::info!(%device, bytes = n, %from, "homekit: the phone sent a packet (RTCP)");
+                    }
                 }
             }
         }

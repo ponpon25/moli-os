@@ -1052,18 +1052,25 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
     let receiver = crate::srtp::Sender::new(&key, &salt);
     let mut depacketizer = moli_net::h264::Depacketizer::new();
     let mut frames = Vec::new();
+    let mut reports = 0;
     let mut buf = vec![0u8; 2048];
     while frames.len() < 2 {
         let (n, _) = tokio::time::timeout(Duration::from_secs(5), udp.recv_from(&mut buf))
             .await
             .expect("the bridge sends video")
             .unwrap();
+        if buf[1] == 200 {
+            // The sender report that opens the stream (RTCP is not RTP).
+            reports += 1;
+            continue;
+        }
         let clear = receiver.open_rtp(&buf[..n], 0).expect("the tag is valid");
         assert!(n <= 1378, "within the packet size the phone gave");
         assert_eq!(clear[1] & 0x7F, 99);
         assert_eq!(u32::from_be_bytes(clear[8..12].try_into().unwrap()), ssrc);
         frames.extend(depacketizer.push(&clear));
     }
+    assert_eq!(reports, 1, "a sender report comes first");
     assert!(frames[0].keyframe, "starts on a key frame");
     assert_eq!(frames[0].nals, vec![SPS.to_vec(), PPS.to_vec(), idr()]);
     assert!(!frames[1].keyframe);
@@ -1081,11 +1088,7 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
         &crate::camera::unb64(read["characteristics"][0]["value"].as_str().unwrap()).unwrap(),
     )
     .unwrap();
-    assert_eq!(
-        status.byte(1),
-        Some(0),
-        "one stream of two: still available"
-    );
+    assert_eq!(status.byte(1), Some(1), "in use while it streams");
     let (code, jpeg) = s
         .call(
             "POST",

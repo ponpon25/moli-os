@@ -85,6 +85,11 @@ pub(crate) async fn serve(shared: Arc<Shared>, stream: TcpStream, cancel: Cancel
         subscribed: HashSet::new(),
     };
     conn.run(stream, cancel).await;
+    tracing::info!(
+        conn = conn.id,
+        verified = conn.channel.is_some(),
+        "homekit: connection closed"
+    );
 }
 
 fn tlv_reply(state: u8) -> Tlv {
@@ -165,13 +170,22 @@ impl Conn {
             if let Some(channel) = self.channel.as_mut() {
                 match channel.decrypt(inbuf) {
                     Ok(more) => plain.extend(more),
-                    Err(()) => return false,
+                    Err(()) => {
+                        tracing::info!(
+                            conn = self.id,
+                            "homekit: a frame did not authenticate, closing"
+                        );
+                        return false;
+                    }
                 }
             }
             let source: &mut Vec<u8> = if self.channel.is_some() { plain } else { inbuf };
             match http::parse(source) {
                 Parsed::Incomplete => return true,
-                Parsed::Bad => return false,
+                Parsed::Bad => {
+                    tracing::info!(conn = self.id, "homekit: an unreadable request, closing");
+                    return false;
+                }
                 Parsed::Done(request, used) => {
                     source.drain(..used);
                     let line = format!("{} {}?{}", request.method, request.path, request.query);
@@ -179,7 +193,16 @@ impl Conn {
                     let response = self.handle(request).await;
                     // What the Home app asked and what it was told: the way to
                     // see where it gives up on an accessory. No body is logged.
+                    let detail = if response.status == 207 {
+                        String::from_utf8_lossy(&response.body)
+                            .chars()
+                            .take(300)
+                            .collect()
+                    } else {
+                        String::new()
+                    };
                     tracing::info!(
+                        detail = %detail,
                         conn = self.id,
                         request = %line,
                         body = body_len,

@@ -77,7 +77,7 @@ impl Depacketizer {
         }
         let keyframe = nals
             .iter()
-            .any(|n| nal_type(n) == NAL_IDR || is_intra_picture(n));
+            .any(|n| nal_type(n) == NAL_IDR || is_intra_picture(n) || has_recovery_point(n));
         Some(AccessUnit {
             timestamp,
             nals,
@@ -173,6 +173,43 @@ pub fn is_intra_picture(nal: &[u8]) -> bool {
     };
     // slice_type 2, 4, 7, 9: I or SI (the second range says every slice is).
     r.ue().is_some_and(|t| matches!(t % 5, 2 | 4))
+}
+
+/// An SEI message announcing a recovery point: the stream is decodable from
+/// the picture that follows (cameras that refresh the picture bit by bit,
+/// with no IDR, mark where a viewer may begin this way).
+#[must_use]
+pub fn has_recovery_point(nal: &[u8]) -> bool {
+    if nal_type(nal) != 6 {
+        return false;
+    }
+    let mut rest = &nal[1..];
+    // Messages: payload type, size (each coded in 0xFF steps), payload.
+    while rest.len() > 2 {
+        let (mut kind, mut size) = (0usize, 0usize);
+        while let Some((&b, tail)) = rest.split_first() {
+            rest = tail;
+            kind += usize::from(b);
+            if b != 0xFF {
+                break;
+            }
+        }
+        while let Some((&b, tail)) = rest.split_first() {
+            rest = tail;
+            size += usize::from(b);
+            if b != 0xFF {
+                break;
+            }
+        }
+        if kind == 6 {
+            return true;
+        }
+        if size > rest.len() {
+            return false;
+        }
+        rest = &rest[size..];
+    }
+    false
 }
 
 // ---- the sequence parameter set ------------------------------------------
@@ -432,5 +469,14 @@ mod tests {
         assert_eq!((info.profile_idc, info.level_idc), (100, 40));
         assert!(info.frame_mbs_only);
         assert_eq!(info.poc_type, 0);
+    }
+
+    #[test]
+    fn a_recovery_point_sei_is_found_among_other_messages() {
+        // User data (type 5, 2 bytes), then a recovery point (type 6, 1 byte).
+        let sei = [0x06, 5, 2, 0xAA, 0xBB, 6, 1, 0x84, 0x80];
+        assert!(has_recovery_point(&sei));
+        assert!(!has_recovery_point(&[0x06, 5, 2, 0xAA, 0xBB, 0x80]));
+        assert!(!has_recovery_point(&[0x41, 6, 1, 0x84]));
     }
 }

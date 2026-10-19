@@ -515,7 +515,14 @@ impl Conn {
         let shared = &self.shared;
         let body = catalog.render(&|c: &Characteristic| {
             if c.perms.contains(&"pr") {
-                shared.read(c).ok()
+                // A readable characteristic always has a value in the
+                // database (the Home app rejects one without); a device
+                // that does not answer shows a neutral value until it does.
+                Some(
+                    shared
+                        .read(c)
+                        .unwrap_or_else(|_| accessories::placeholder(c)),
+                )
             } else {
                 None
             }

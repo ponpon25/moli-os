@@ -793,7 +793,7 @@ fn characteristic_json(c: &Characteristic, value: Option<Json>) -> Json {
         map.insert("maxValue".into(), number(v, c.format));
     }
     if let Some(v) = m.step {
-        map.insert("minStep".into(), json!(v));
+        map.insert("minStep".into(), number(v, c.format));
     }
     if let Some(u) = m.unit {
         map.insert("unit".into(), json!(u));
@@ -923,7 +923,7 @@ fn accessory(aid: u64, view: &Entry, specs: Vec<ServiceSpec>) -> Accessory {
         device.manufacturer.as_deref().unwrap_or("Moli"),
         device.model.as_deref().unwrap_or("Moli"),
         device.id.as_str(),
-        "1",
+        "1.0.0",
         &name,
         &mut iid,
     )];
@@ -949,6 +949,21 @@ fn accessory(aid: u64, view: &Entry, specs: Vec<ServiceSpec>) -> Accessory {
         });
     }
     Accessory { aid, services }
+}
+
+/// A neutral value for a readable characteristic whose device has not
+/// answered (yet): what the database carries instead of nothing.
+pub fn placeholder(c: &Characteristic) -> Json {
+    if matches!(c.bind, Bind::ArmCurrent { .. } | Bind::ArmTarget(_)) {
+        return json!(ARM_DISARMED);
+    }
+    let low = c.meta.min.unwrap_or(0.0);
+    match c.format {
+        "bool" => json!(false),
+        "string" => json!(""),
+        "float" => json!(low),
+        _ => json!(low as i64),
+    }
 }
 
 // ---- values ------------------------------------------------------------
@@ -1384,6 +1399,24 @@ mod tests {
         assert_eq!(to_hap(bounded, &Value::Float(220.0)), Some(json!(100.0)));
         assert_eq!(to_hap(bounded, &Value::Int(21)), Some(json!(21.0)));
         assert_eq!(to_hap(Conv::Int, &Value::Float(366.4)), Some(json!(366)));
+    }
+
+    #[test]
+    fn a_silent_device_still_has_a_value_in_the_database() {
+        let sensor = view(
+            "quiet",
+            vec![point("occupancy", Kind::Binary, false, Semantic::Occupancy)],
+        );
+        let c = catalog(&[sensor]);
+        let json = c.render(&|ch| Some(placeholder(ch)));
+        let chars = json["accessories"][1]["services"][1]["characteristics"]
+            .as_array()
+            .unwrap();
+        assert_eq!(chars[1]["value"], false);
+        assert_eq!(
+            placeholder(&c.accessories[1].services[0].chars[0]),
+            json!(false)
+        );
     }
 
     #[test]

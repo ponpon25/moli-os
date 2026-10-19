@@ -273,6 +273,7 @@ struct Model {
     drivers: BTreeMap<InstanceId, DriverSlot>,
     labels: BTreeMap<DeviceId, Label>,
     snapshots: HashMap<DeviceId, Arc<dyn crate::media::SnapshotSource>>,
+    live: HashMap<DeviceId, Arc<dyn crate::media::LiveSource>>,
     printers: HashMap<DeviceId, Arc<dyn crate::media::PrintSink>>,
 }
 
@@ -1408,6 +1409,7 @@ impl Hub {
             model.states.remove(id);
             model.availability.remove(id);
             model.snapshots.remove(id);
+            model.live.remove(id);
             model.printers.remove(id);
             model.devices.remove(id).is_some()
         };
@@ -1427,6 +1429,42 @@ impl Hub {
         source: Arc<dyn crate::media::SnapshotSource>,
     ) {
         self.write().snapshots.insert(device.clone(), source);
+    }
+
+    pub(crate) fn provide_live(
+        &self,
+        device: &DeviceId,
+        source: Arc<dyn crate::media::LiveSource>,
+    ) {
+        self.write().live.insert(device.clone(), source);
+    }
+
+    /// Whether `device` can show live video.
+    #[must_use]
+    pub fn has_live(&self, device: &DeviceId) -> bool {
+        self.read().live.contains_key(device)
+    }
+
+    /// Opens a live stream of a camera. No guard here: a surface that shows
+    /// video checks [`Hub::protected_room`] first (humans only).
+    pub async fn camera_live(
+        &self,
+        device: &DeviceId,
+        want: crate::media::LiveWant,
+    ) -> Result<Box<dyn crate::media::LiveStream>, crate::media::LiveError> {
+        use crate::media::LiveError;
+        let source = {
+            let model = self.read();
+            if !model.devices.contains_key(device) {
+                return Err(LiveError::UnknownDevice);
+            }
+            model.live.get(device).cloned().ok_or(LiveError::NoLive)?
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(20), source.open(want)).await {
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(e)) => Err(LiveError::Failed(format!("{e:#}"))),
+            Err(_) => Err(LiveError::Failed("no answer in time".to_owned())),
+        }
     }
 
     pub(crate) fn provide_printing(

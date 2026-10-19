@@ -120,6 +120,14 @@ l'appelle (20 s maxi) sans tenir de verrou. Une caméra d'une pièce protégée 
 **qu'à une session humaine** ; l'outil MCP la refuse toujours ; l'assistant ne voit jamais
 d'images.
 
+## Vidéo en direct (`moli-runtime/src/media.rs`)
+
+Un pilote peut aussi fournir une `LiveSource` (`ctx.provide_live`) : `hub.camera_live` ouvre un
+`LiveStream` (images H.264 déjà encodées, sans décodage) et le referme à la fin. Rien ne tourne tant
+que personne ne regarde. Le hub ne garde pas : la surface qui montre la vidéo vérifie
+`hub.protected_room` (une pièce protégée n'est montrée qu'à une session humaine) avant d'ouvrir. Seul le
+pont HomeKit s'en sert pour l'instant.
+
 ## Tests
 
 `crates/moli-runtime/tests/hub.rs` : pilote factice (prise), aller-retour de commande, panic

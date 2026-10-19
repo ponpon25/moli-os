@@ -1,21 +1,27 @@
 //! UniFi Protect cameras, through the console's Integration API
 //! (`/proxy/protect/integration/v1`, an API key in `X-API-KEY`): the cameras
 //! the console knows, their latest image on demand, and motion from its
-//! event websocket. Read-only: nothing here changes a camera.
+//! event websocket, and live video (the console's RTSPS stream, relayed as
+//! H.264 without decoding). Nothing here changes a camera's settings; asking
+//! for a stream makes the console publish one (`rtsps-stream`).
 //!
 //! The console's certificate is self-signed: it is pinned at first contact,
 //! before the key is sent. The key lives in the encrypted secret store
 //! (`moli-os secrets set <instance> api_key`), never in `moli.toml`.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
 use moli_core::{Access, Device, Kind, PointSpec, Semantic, Value};
+use moli_net::h264::{self, Depacketizer};
+use moli_net::rtsp;
 use moli_net::ws::WebSocket;
 use moli_net::{Method, PIN_MISMATCH, PinnedHttps, PinnedTls};
-use moli_runtime::media::{Image, SnapshotSource};
+use moli_runtime::media::{
+    Image, LiveInfo, LiveSource, LiveStream, LiveWant, SnapshotSource, VideoFrame,
+};
 use moli_runtime::{BoxFuture, Driver, DriverCtx};
 use serde::Deserialize;
 use serde_json::Value as Json;
@@ -23,6 +29,11 @@ use serde_json::Value as Json;
 const BASE: &str = "/proxy/protect/integration/v1";
 const CERT: &str = "cert_sha256";
 const API_KEY: &str = "api_key";
+/// The certificate of the console's RTSPS port, pinned on its own: it is not
+/// necessarily the one of the API port.
+const RTSPS_CERT: &str = "rtsps_cert_sha256";
+/// The streams the console published stay valid; asked again after this.
+const STREAM_URLS_TTL: Duration = Duration::from_secs(300);
 /// The camera list is read again this often (new cameras, connection state).
 const POLL: Duration = Duration::from_secs(60);
 /// A camera that never reported the end of its motion is still after this.
@@ -119,7 +130,10 @@ impl Console {
         probe.pinned_fingerprint().context("no certificate seen")
     }
 
-    fn request(&self, path: &str) -> anyhow::Result<http::Request<http_body_util::Full<moli_net::Body>>> {
+    fn request(
+        &self,
+        path: &str,
+    ) -> anyhow::Result<http::Request<http_body_util::Full<moli_net::Body>>> {
         moli_net::empty(
             self.http
                 .request(Method::GET, &format!("{BASE}{path}"))
@@ -165,7 +179,11 @@ impl Camera {
 
     /// Ids go into URL paths: only what the console really uses.
     fn sane(&self) -> bool {
-        !self.id.is_empty() && self.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        !self.id.is_empty()
+            && self
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
     }
 }
 
@@ -185,12 +203,14 @@ fn camera_device(ctx: &DriverCtx, camera: &Camera) -> Device {
         instance: ctx.instance().clone(),
         native_name: name.into(),
         manufacturer: Some("Ubiquiti".into()),
-        model: Some(if camera.model.is_empty() {
-            moli_i18n::tr!("pilotes.unifi.camera")
-        } else {
-            camera.model.clone()
-        }
-        .into()),
+        model: Some(
+            if camera.model.is_empty() {
+                moli_i18n::tr!("pilotes.unifi.camera")
+            } else {
+                camera.model.clone()
+            }
+            .into(),
+        ),
         description: None,
         native_room: None,
         members: Vec::new(),
@@ -223,7 +243,10 @@ impl SnapshotSource for Snapshots {
                 .slow(&format!("/cameras/{}/snapshot", self.camera))
                 .await?;
             if !status.is_success() || !bytes.starts_with(&[0xFF, 0xD8]) {
-                bail!(moli_i18n::tr!("pilotes.unifi.aucune_image", status = status));
+                bail!(moli_i18n::tr!(
+                    "pilotes.unifi.aucune_image",
+                    status = status
+                ));
             }
             Ok(Image {
                 content_type: "image/jpeg".into(),
@@ -283,9 +306,229 @@ fn secrets_problem(ctx: &DriverCtx) -> String {
 }
 
 /// What the driver knows of the cameras it published.
-#[derive(Default)]
 struct Cameras {
     online: HashMap<String, bool>,
+    live: Arc<LiveShared>,
+}
+
+impl Cameras {
+    fn new(host: &str, rtsps_pin: Option<String>) -> Self {
+        Self {
+            online: HashMap::new(),
+            live: Arc::new(LiveShared {
+                host: host.to_owned(),
+                pin: Mutex::new(rtsps_pin),
+                learned: Mutex::new(None),
+            }),
+        }
+    }
+}
+
+/// What every camera's live source shares: where the console is, and the
+/// certificate pinned for its RTSPS port.
+#[derive(Debug)]
+struct LiveShared {
+    host: String,
+    pin: Mutex<Option<String>>,
+    /// A pin learned at first contact, not yet in the secret store.
+    learned: Mutex<Option<String>>,
+}
+
+impl LiveShared {
+    /// TLS settings for the RTSPS port: the stored pin, else the certificate
+    /// seen by a bare handshake (nothing sent), kept for next time.
+    async fn tls(&self, port: u16) -> anyhow::Result<PinnedTls> {
+        let known = self
+            .pin
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let pin = if let Some(pin) = known {
+            pin
+        } else {
+            let probe = PinnedTls::new(None)?;
+            drop(
+                probe
+                    .connect(&self.host, port)
+                    .await
+                    .context("rtsps first contact")?,
+            );
+            let seen = probe.seen_fingerprint().context("no certificate seen")?;
+            *self.pin.lock().unwrap_or_else(PoisonError::into_inner) = Some(seen.clone());
+            *self.learned.lock().unwrap_or_else(PoisonError::into_inner) = Some(seen.clone());
+            seen
+        };
+        PinnedTls::new(Some(pin))
+    }
+
+    fn take_learned(&self) -> Option<String> {
+        self.learned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+}
+
+/// The streams the console publishes for a camera, by quality
+/// (`{"high":"rtsps://…","medium":…,"low":…}`).
+fn parse_streams(body: &[u8]) -> HashMap<String, String> {
+    let Ok(Json::Object(map)) = serde_json::from_slice::<Json>(body) else {
+        return HashMap::new();
+    };
+    map.into_iter()
+        .filter_map(|(quality, url)| Some((quality, url.as_str()?.to_owned())))
+        .collect()
+}
+
+/// The quality to read for a picture of this height: the smallest one at
+/// least that tall, else the tallest there is. (Protect's usual sizes.)
+fn pick_quality(want_height: u32, available: &HashMap<String, String>) -> Option<&'static str> {
+    const QUALITIES: [(&str, u32); 3] = [("low", 360), ("medium", 720), ("high", 1080)];
+    let have: Vec<(&'static str, u32)> = QUALITIES
+        .into_iter()
+        .filter(|(name, _)| available.contains_key(*name))
+        .collect();
+    have.iter()
+        .find(|(_, height)| *height >= want_height)
+        .or(have.last())
+        .map(|(name, _)| *name)
+}
+
+/// The console's own URL for a stream, aimed at the address Moli knows it
+/// by, without the SRTP option (RTSPS already protects the stream).
+fn stream_url(announced: &str, host: &str) -> Option<rtsp::Url> {
+    let mut url = rtsp::Url::parse(announced)?.at(host);
+    if let Some((path, query)) = url.path.split_once('?') {
+        let query: Vec<&str> = query.split('&').filter(|q| *q != "enableSrtp").collect();
+        url.path = if query.is_empty() {
+            path.to_owned()
+        } else {
+            format!("{path}?{}", query.join("&"))
+        };
+    }
+    Some(url)
+}
+
+/// Live video of one camera.
+#[derive(Debug)]
+struct Live {
+    console: Arc<Console>,
+    shared: Arc<LiveShared>,
+    camera: String,
+    urls: Mutex<Option<(Instant, HashMap<String, String>)>>,
+}
+
+impl Live {
+    /// The published streams (asked for, if the console has none yet).
+    async fn streams(&self, fresh: bool) -> anyhow::Result<HashMap<String, String>> {
+        if !fresh
+            && let Some((at, urls)) = self
+                .urls
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+            && at.elapsed() < STREAM_URLS_TTL
+        {
+            return Ok(urls.clone());
+        }
+        let path = format!("{BASE}/cameras/{}/rtsps-stream", self.camera);
+        let request = moli_net::json_body(
+            self.console
+                .http
+                .request(Method::POST, &path)
+                .header("x-api-key", &self.console.key),
+            &serde_json::json!({ "qualities": ["high", "medium", "low"] }),
+        )?;
+        let (status, body) = self.console.http.send(request).await?;
+        if !status.is_success() {
+            bail!("unifi {path}: {status}");
+        }
+        let urls = parse_streams(&body);
+        *self.urls.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((Instant::now(), urls.clone()));
+        Ok(urls)
+    }
+
+    async fn connect(&self, want: LiveWant, fresh: bool) -> anyhow::Result<UnifiStream> {
+        let urls = self.streams(fresh).await?;
+        let quality =
+            pick_quality(want.height, &urls).context("the console published no stream")?;
+        let url =
+            stream_url(&urls[quality], &self.shared.host).context("unusable stream address")?;
+        let tls = self.shared.tls(url.port).await?;
+        let mut client = rtsp::Client::connect(&url, Some(&tls)).await?;
+        let track = client.play_video().await?;
+        let (width, height) = track
+            .sps
+            .as_deref()
+            .and_then(h264::picture_size)
+            .unwrap_or_default();
+        tracing::debug!(camera = %self.camera, quality, width, height, "unifi live stream opened");
+        Ok(UnifiStream {
+            client,
+            depacketizer: Depacketizer::new(),
+            pending: VecDeque::new(),
+            info: LiveInfo {
+                width,
+                height,
+                sps: track.sps.unwrap_or_default(),
+                pps: track.pps.unwrap_or_default(),
+            },
+        })
+    }
+}
+
+impl LiveSource for Live {
+    fn open(&self, want: LiveWant) -> BoxFuture<'_, anyhow::Result<Box<dyn LiveStream>>> {
+        Box::pin(async move {
+            // The published addresses can be stale (the console restarted):
+            // one more try with fresh ones.
+            let stream = match self.connect(want, false).await {
+                Ok(stream) => stream,
+                Err(e) if format!("{e:#}").contains(PIN_MISMATCH) => return Err(e),
+                Err(e) => {
+                    tracing::debug!(error = %format!("{e:#}"), "unifi live stream: trying again");
+                    self.connect(want, true).await?
+                }
+            };
+            Ok(Box::new(stream) as Box<dyn LiveStream>)
+        })
+    }
+}
+
+struct UnifiStream {
+    client: rtsp::Client,
+    depacketizer: Depacketizer,
+    pending: VecDeque<VideoFrame>,
+    info: LiveInfo,
+}
+
+impl LiveStream for UnifiStream {
+    fn info(&self) -> &LiveInfo {
+        &self.info
+    }
+
+    fn next_frame(&mut self) -> BoxFuture<'_, anyhow::Result<VideoFrame>> {
+        Box::pin(async move {
+            loop {
+                if let Some(frame) = self.pending.pop_front() {
+                    return Ok(frame);
+                }
+                let packet = self.client.next_packet().await?;
+                self.pending
+                    .extend(
+                        self.depacketizer
+                            .push(&packet)
+                            .into_iter()
+                            .map(|unit| VideoFrame {
+                                timestamp: unit.timestamp,
+                                nals: unit.nals,
+                                keyframe: unit.keyframe,
+                            }),
+                    );
+            }
+        })
+    }
 }
 
 /// Reads the camera list and brings the hub in line with it.
@@ -314,6 +557,15 @@ async fn refresh(
                     camera: camera.id.clone(),
                 }),
             );
+            ctx.provide_live(
+                &device,
+                Arc::new(Live {
+                    console: Arc::clone(console),
+                    shared: Arc::clone(&known.live),
+                    camera: camera.id.clone(),
+                    urls: Mutex::new(None),
+                }),
+            );
             ctx.set_state(&device, "motion", Value::Bool(false));
         }
         if known.online.get(&camera.id) != Some(&camera.online()) {
@@ -324,6 +576,7 @@ async fn refresh(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // one select loop
 async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
     let pin = match config.cert_sha256.clone().or_else(|| ctx.secret(CERT)) {
         Some(pin) => pin,
@@ -355,9 +608,14 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
         return park(ctx, reason).await;
     };
 
-    let console = Arc::new(Console::new(&config.host, config.port, pin.clone(), key.clone())?);
+    let console = Arc::new(Console::new(
+        &config.host,
+        config.port,
+        pin.clone(),
+        key.clone(),
+    )?);
     let tls = PinnedTls::new(Some(pin))?;
-    let mut known = Cameras::default();
+    let mut known = Cameras::new(&config.host, ctx.secret(RTSPS_CERT));
     match refresh(&console, ctx, &mut known).await {
         Ok(()) => {}
         Err(e) if e.is::<KeyRejected>() => {
@@ -438,6 +696,11 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
                 }
             },
             _ = poll.tick() => {
+                if let Some(pin) = known.live.take_learned()
+                    && let Err(e) = ctx.store_secret(RTSPS_CERT, &pin).await
+                {
+                    tracing::warn!(instance = %ctx.instance(), error = %format!("{e:#}"), "unifi: cannot keep the RTSPS certificate");
+                }
                 if let Err(e) = refresh(&console, ctx, &mut known).await {
                     if e.is::<KeyRejected>() {
                         let reason = moli_i18n::tr!("pilotes.unifi.cle_refusee", host = config.host, instance = ctx.instance());
@@ -445,10 +708,10 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
                     }
                     return Err(e);
                 }
-                if let Some(s) = socket.as_mut() {
-                    if s.ping().await.is_err() {
-                        socket = None;
-                    }
+                if let Some(s) = socket.as_mut()
+                    && s.ping().await.is_err()
+                {
+                    socket = None;
                 }
             }
             _ = hold.tick() => {
@@ -515,6 +778,31 @@ mod tests {
         ] {
             assert_eq!(parse_event(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn the_quality_follows_the_height_asked() {
+        let all: HashMap<String, String> = ["high", "medium", "low"]
+            .into_iter()
+            .map(|q| (q.to_owned(), format!("rtsps://h:7441/{q}")))
+            .collect();
+        assert_eq!(pick_quality(1080, &all), Some("high"));
+        assert_eq!(pick_quality(720, &all), Some("medium"));
+        assert_eq!(pick_quality(270, &all), Some("low"));
+        assert_eq!(pick_quality(2000, &all), Some("high"));
+        let some: HashMap<String, String> = [("medium".to_owned(), String::new())].into();
+        assert_eq!(pick_quality(1080, &some), Some("medium"));
+        assert_eq!(pick_quality(1, &HashMap::new()), None);
+    }
+
+    #[test]
+    fn the_published_streams_are_read_and_aimed_at_the_console_address() {
+        let body = br#"{"high":"rtsps://203.0.113.5:7441/AbC123?enableSrtp","medium":null,"low":"rtsps://203.0.113.5:7441/Def456?enableSrtp"}"#;
+        let streams = parse_streams(body);
+        assert_eq!(streams.len(), 2);
+        let url = stream_url(&streams["high"], "192.168.1.2").unwrap();
+        assert_eq!(url.text(), "rtsps://192.168.1.2:7441/AbC123");
+        assert!(parse_streams(b"[]").is_empty());
     }
 
     #[test]

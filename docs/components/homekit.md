@@ -2,7 +2,7 @@
 
 Moli s'annonce comme un **accessoire pont HomeKit** (HAP, *HomeKit Accessory Protocol*, sur IP).
 On l'ajoute une fois dans l'app Maison de l'iPhone avec un code ; les appareils que **vous** avez
-choisis y apparaissent (lumières, prises, capteurs, alarme) et se commandent depuis l'iPhone, l'Apple
+choisis y apparaissent (lumières, prises, capteurs, alarme, caméras en direct) et se commandent depuis l'iPhone, l'Apple
 Watch, Siri, les automatisations de l'app Maison. Ni Homebridge ni Home Assistant : c'est Moli lui-même.
 
 C'est une **surface**, comme l'API REST et MCP, pas un pilote : elle lit les appareils et les valeurs
@@ -74,8 +74,62 @@ La correspondance se fait par **sens** (`Semantic`), jamais par marque :
 | un point `mode` de sémantique `control` proposant `disarmed` (l'alarme Verisure) | **Système de sécurité** |
 
 Un appareil à plusieurs lumières donne plusieurs services (`state_l1`/`state_l2`, `light2.on`…).
-Une consigne (température inscriptible) n'est pas un capteur. Les caméras (flux SRTP) ne sont **pas**
-exposées dans cette version.
+Une consigne (température inscriptible) n'est pas un capteur. Une **caméra** (un appareil dont le pilote
+sait ouvrir un flux vidéo en direct, aujourd'hui UniFi Protect) donne **deux entrées** dans la carte
+HomeKit, avec chacune son interrupteur : l'appareil lui-même (ses capteurs, par exemple le mouvement, qui
+reste un accessoire à part) et sa **caméra** (`<id>#camera`, le flux en direct et l'image). On peut donc
+montrer le mouvement sans l'image, ou l'inverse.
+
+## Les caméras
+
+Dans l'app Maison, la caméra s'ouvre en direct (tuile, plein écran, notifications avec image). Moli
+**relaie** le flux H.264 de la caméra, sans le décoder ni le recoder (pas de ffmpeg dans l'image) :
+
+1. Le pilote UniFi demande à la console un flux RTSPS par caméra (`rtsps-stream`, trois qualités) et le
+   lit en RTSP sur TLS (certificat du port 7441 épinglé à part, au premier contact, avant d'envoyer
+   quoi que ce soit), paquets RTP entrelacés sur la connexion (`moli-net/src/rtsp.rs`, `h264.rs`).
+2. L'app Maison négocie un flux (`SetupEndpoints` : son adresse, ses ports UDP, ses clés SRTP ;
+   `SelectedRTPStreamConfiguration` : résolution, type de charge, MTU, démarrer/arrêter).
+3. Moli attend une image clé, **refait les paquets** (STAP-A pour SPS/PPS, FU-A découpés à la taille
+   demandée, mode 1) puis les **chiffre en SRTP** (`AES_CM_128_HMAC_SHA1_80`, `srtp.rs`, écrit pour
+   l'occasion avec `aes` et `ring`) vers l'adresse de l'iPhone. Un rapport d'émetteur SRTCP part toutes
+   les 5 s. Les clés sont celles du téléphone, renvoyées telles quelles dans la réponse (c'est ce que
+   font les accessoires vidéo courants et ce que l'iPhone attend pour ouvrir le flux).
+4. L'image fixe (`POST /resource`, JPEG) vient de `hub.camera_image` (même cache d'une seconde).
+
+**Résolution et débit.** La caméra n'encode que trois qualités fixes. Moli annonce cinq tailles
+(1920×1080, 1280×720, 640×360, 480×270, 320×180) et lit la qualité la plus proche **au moins aussi haute**
+que celle demandée (haute ≥ 1080, moyenne ≥ 720, sinon basse). Le **débit maximal** demandé par l'iPhone
+n'est pas appliqué (il faudrait recoder) : c'est le débit de la qualité lue. À distance sur une liaison
+lente, c'est la qualité basse de la caméra qu'on obtient, pas moins. Profil et niveau annoncés : High 4.0 ;
+le flux garde ce que la caméra encode (le décodeur lit le SPS).
+
+**Pas d'audio.** Les caméras envoient de l'AAC-LC, HomeKit n'accepte que l'AAC-ELD ou l'Opus : il
+faudrait un transcodage (une bibliothèque Opus et un décodeur AAC, ou un sidecar ffmpeg). Il n'y a donc ni
+micro ni haut-parleur (services `Microphone` / `Speaker` non annoncés) ; la caractéristique audio
+obligatoire est annoncée (Opus) mais aucun paquet audio ne part.
+
+**Limites.** Deux flux par caméra, six au total. Un flux s'arrête sur `End`, quand l'iPhone ferme sa
+connexion, ou quand il se tait plus de 30 s après avoir parlé. Pas de HomeKit Secure Video (pas
+d'enregistrement), pas de détection de mouvement dans le service caméra : le mouvement est un accessoire
+à part.
+
+### La garde et les caméras
+
+HomeKit est une **surface comme l'API REST**, jamais une session humaine : un ordre venu d'HomeKit part avec
+l'origine `api`. Pour la vidéo, on applique la règle de `hub.camera_image` à l'identique : **une caméra
+d'une pièce protégée n'est montrée qu'à une session humaine** (code du tableau de bord), donc **jamais à
+HomeKit**. Concrètement :
+
+- l'accessoire caméra d'une pièce protégée **n'existe pas** dans la base HomeKit (l'entrée de la carte
+  reste, marquée « pièce protégée », interrupteur bloqué) ; ses capteurs, eux, sont des capteurs comme les
+  autres ;
+- si malgré tout un flux ou une image est demandé (la pièce est devenue protégée entre-temps), la
+  négociation est refusée, l'image répond 500, et un flux en cours est coupé dans les 5 s ;
+- il n'y a pas de demande d'approbation : une approbation valide un *ordre*, pas un regard. Pour voir
+  cette caméra, on utilise le tableau de bord.
+
+Une caméra hors ligne répond « ne répond pas » (état de streaming indisponible).
 
 **L'alarme.** Mode d'armement ↔ état HomeKit : `disarmed` ↔ *Désarmé* ; `partial` (« Mode Nuit »
 dans le tableau de bord) ↔ *Nuit* ; `total` ↔ *Absent*. *Domicile* n'est pas proposé (pas d'équivalent
@@ -124,7 +178,8 @@ le retire vraiment, ou quand on le décoche.
 - **`/pair-verify`** : X25519 + Ed25519, puis canal chiffré (trames de 1 024 octets au plus,
   ChaCha20-Poly1305, un compteur par sens).
 - **`/accessories`**, **`/characteristics`** (lecture, écriture, abonnement aux événements `EVENT/1.0`),
-  **`/pairings`** (ajouter, retirer, lister), `/identify`. Pas d'écriture temporisée, pas de caméras.
+  **`/pairings`** (ajouter, retirer, lister), `/identify`, **`/resource`** (image d'une caméra). Pas
+  d'écriture temporisée.
 - Les téléphones non vérifiés ne peuvent atteindre que l'appairage ; une connexion muette est coupée
   après 60 s ; 24 connexions au plus.
 
@@ -132,14 +187,26 @@ le retire vraiment, ou quand on le décoche.
 
 - Tests unitaires de la crate : vecteur SRP produit par aiohomekit (client et serveur d'accord sur
   `B`, `M1`, `M2`, `K`), HKDF-SHA512, TLV8, canal chiffré, mDNS (encodage, questions, compression),
-  URI `X-HM://` et `sh` (valeurs de HAP-python), correspondance des appareils, identifiants stables.
+  URI `X-HM://` et `sh` (valeurs de HAP-python), correspondance des appareils, identifiants stables ;
+  caméras : TLV de `SetupEndpoints` et de la configuration choisie, SRTP (vecteurs de la RFC 3711 pour le
+  flux d'AES-CM et les clés de session, et paquets produits par **libsrtp** via pylibsrtp, y compris le
+  passage du compteur de séquence 65535 → 0 et le SRTCP), repaquetisation H.264 aller-retour, client RTSP
+  contre un serveur factice, lecture de la taille d'image d'un SPS 1080p.
 - Essai de bout en bout, hors dépôt : un contrôleur `aiohomekit` (Python) appaire, vérifie, lit,
   écrit et s'abonne contre un Moli de démonstration ; un résolveur `zeroconf` retrouve le service.
-  Ce qui n'a **pas** été essayé : l'app Maison d'un iPhone réel (à faire à la première installation).
+  Pour les caméras, `tests.rs` joue un téléphone de bout en bout contre un pont réel et une caméra
+  factice : appairage, `SetupEndpoints`, démarrage, réception des paquets SRTP sur un socket UDP, ouverture
+  avec la clé du téléphone, reconstitution de l'image clé (SPS, PPS, IDR découpé), image JPEG, fin du
+  flux, interrupteur de la carte, pièce protégée. Ce qui n'a **pas** été essayé : l'app Maison d'un iPhone
+  réel (à faire à la première installation), et la console UniFi réelle (le point d'API `rtsps-stream` et
+  le certificat du port 7441 sont supposés d'après la documentation de Protect).
 
 ## Fichiers
 
 `crates/moli-homekit/src/` : `lib.rs` (état partagé, base d'accessoires, démarrage), `session.rs`
-(une connexion), `accessories.rs` (correspondance appareils → services), `srp.rs`, `bigint.rs`,
-`crypto.rs`, `tlv.rs`, `http.rs`, `mdns.rs`, `store.rs`, `setup.rs`. Côté API : `moli-api/src/homekit.rs`.
+(une connexion), `accessories.rs` (correspondance appareils → services), `camera.rs` (TLV de la caméra,
+flux en cours, image), `rtp.rs` (repaquetisation H.264, rapport d'émetteur), `srtp.rs`, `srp.rs`,
+`bigint.rs`, `crypto.rs`, `tlv.rs`, `http.rs`, `mdns.rs`, `store.rs`, `setup.rs`. Côté réseau :
+`moli-net/src/rtsp.rs` (client RTSP/RTSPS) et `h264.rs` ; côté runtime : `moli-runtime/src/media.rs`
+(`LiveSource`, `LiveStream`, `Hub::camera_live`) ; côté pilote : `moli-unifi/src/lib.rs`. Côté API : `moli-api/src/homekit.rs`.
 Côté tableau de bord : `web/src/maison/ui/HomeKitCard.svelte`.

@@ -3,6 +3,7 @@
 //! characteristics (read, write, notifications) and the pairings list.
 
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -21,6 +22,7 @@ use crate::accessories::{
     self, Bind, Characteristic, ColorPart, OK, ST_INVALID, ST_NOT_FOUND, ST_NOTIFY_UNSUPPORTED,
     ST_READ_ONLY, ST_WRITE_ONLY, hex_to_hs, hs_to_hex, mode_of_arm_target,
 };
+use crate::camera::{self, CameraChar};
 use crate::crypto::{self, Channel, hkdf32, message_tag};
 use crate::http::{self, Parsed, Request, Response};
 use crate::setup::{hex, unhex};
@@ -60,10 +62,18 @@ struct Conn {
     setup: Option<Setup>,
     verify: Option<Verify>,
     subscribed: HashSet<(u64, u64)>,
+    /// The address this connection reached us at (the phone's view of us).
+    local: Option<IpAddr>,
+    /// The last `SetupEndpoints` answer, per camera accessory, for the phone to read.
+    camera_replies: HashMap<u64, Vec<u8>>,
 }
 
 impl Drop for Conn {
     fn drop(&mut self) {
+        // A phone that goes away takes its video streams with it.
+        for device in self.shared.streams.stop_owned_by(self.id) {
+            self.shared.camera_changed(&device);
+        }
         let mut owner = self.shared.setup_owner.lock().expect("setup lock");
         if *owner == Some(self.id) {
             *owner = None;
@@ -74,6 +84,7 @@ impl Drop for Conn {
 pub(crate) async fn serve(shared: Arc<Shared>, stream: TcpStream, cancel: CancellationToken) {
     let _ = stream.set_nodelay(true);
     let id = shared.new_conn_id();
+    let local = stream.local_addr().ok().map(|a| a.ip());
     let mut conn = Conn {
         shared,
         id,
@@ -83,6 +94,8 @@ pub(crate) async fn serve(shared: Arc<Shared>, stream: TcpStream, cancel: Cancel
         setup: None,
         verify: None,
         subscribed: HashSet::new(),
+        local,
+        camera_replies: HashMap::new(),
     };
     conn.run(stream, cancel).await;
     tracing::info!(
@@ -168,16 +181,14 @@ impl Conn {
     ) -> bool {
         loop {
             if let Some(channel) = self.channel.as_mut() {
-                match channel.decrypt(inbuf) {
-                    Ok(more) => plain.extend(more),
-                    Err(()) => {
-                        tracing::info!(
-                            conn = self.id,
-                            "homekit: a frame did not authenticate, closing"
-                        );
-                        return false;
-                    }
-                }
+                let Ok(more) = channel.decrypt(inbuf) else {
+                    tracing::info!(
+                        conn = self.id,
+                        "homekit: a frame did not authenticate, closing"
+                    );
+                    return false;
+                };
+                plain.extend(more);
             }
             let source: &mut Vec<u8> = if self.channel.is_some() { plain } else { inbuf };
             match http::parse(source) {
@@ -263,6 +274,7 @@ impl Conn {
             ("GET", "/characteristics") => self.read_characteristics(&request.query),
             ("PUT", "/characteristics") => self.write_characteristics(&request.body).await,
             ("POST", "/pairings") => self.pairings(&request.body),
+            ("POST", "/resource") => self.resource(&request.body).await,
             _ => Response::empty(404),
         }
     }
@@ -546,6 +558,32 @@ impl Conn {
 
     // ---- accessories and characteristics ------------------------------------------
 
+    /// `POST /resource`: the picture of a camera.
+    async fn resource(&self, body: &[u8]) -> Response {
+        let Ok(request) = serde_json::from_slice::<Json>(body) else {
+            return Response::empty(400);
+        };
+        match (request["resource-type"].as_str(), request["aid"].as_u64()) {
+            (Some("image"), Some(aid)) => self.shared.camera_image(aid).await,
+            _ => Response::empty(400),
+        }
+    }
+
+    /// A characteristic's value as this connection sees it.
+    fn read_value(&self, aid: u64, c: &Characteristic) -> Result<Json, i32> {
+        if matches!(
+            &c.bind,
+            Bind::Camera {
+                what: CameraChar::Setup,
+                ..
+            }
+        ) {
+            let reply = self.camera_replies.get(&aid).map_or(&[][..], Vec::as_slice);
+            return Ok(Json::String(camera::b64(reply)));
+        }
+        self.shared.read(c)
+    }
+
     fn accessories(&self) -> Response {
         let catalog = self.shared.catalog();
         let shared = &self.shared;
@@ -583,7 +621,7 @@ impl Conn {
             let outcome = match catalog.find(aid, iid) {
                 None => Err(ST_NOT_FOUND),
                 Some(c) if !c.perms.contains(&"pr") => Err(ST_WRITE_ONLY),
-                Some(c) => self.shared.read(c).map(|v| (c, v)),
+                Some(c) => self.read_value(aid, c).map(|v| (c, v)),
             };
             match outcome {
                 Ok((c, value)) => {
@@ -666,7 +704,7 @@ impl Conn {
                 if !c.perms.contains(&"pw") {
                     status = ST_READ_ONLY;
                 } else if status == OK {
-                    status = self.apply(c, value, index, &mut colors).await;
+                    status = self.apply(aid, c, value, index, &mut colors).await;
                 }
             }
             results.push((aid, iid, status));
@@ -694,7 +732,8 @@ impl Conn {
 
     /// One written value; the status to answer.
     async fn apply(
-        &self,
+        &mut self,
+        aid: u64,
         c: &Characteristic,
         value: &Json,
         index: usize,
@@ -703,6 +742,23 @@ impl Conn {
         match &c.bind {
             Bind::Identify => OK,
             Bind::Static(_) | Bind::ArmCurrent { .. } => ST_READ_ONLY,
+            Bind::Camera { device, what } => match what {
+                CameraChar::Setup => {
+                    match self
+                        .shared
+                        .camera_setup(self.id, self.local, device, value)
+                        .await
+                    {
+                        Ok(reply) => {
+                            self.camera_replies.insert(aid, reply);
+                            OK
+                        }
+                        Err(status) => status,
+                    }
+                }
+                CameraChar::Selected => self.shared.camera_select(device, value),
+                _ => ST_READ_ONLY,
+            },
             Bind::Point(point, conv) => match accessories::from_hap(*conv, value) {
                 Some(v) => self.command(point, v).await,
                 None => ST_INVALID,

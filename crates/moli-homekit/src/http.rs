@@ -106,6 +106,15 @@ impl Response {
         }
     }
 
+    /// A raw body (an image).
+    pub fn bytes(status: u16, content_type: &'static str, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            content_type,
+            body,
+        }
+    }
+
     pub fn empty(status: u16) -> Self {
         Self {
             status,

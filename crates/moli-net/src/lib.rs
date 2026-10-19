@@ -5,9 +5,11 @@
 //! time (trust on first use) and enforced afterwards: another machine
 //! answering on that address is refused.
 
+pub mod h264;
 pub mod lan;
 mod legacy;
 pub mod proto;
+pub mod rtsp;
 pub mod upnp;
 pub mod wol;
 pub mod ws;

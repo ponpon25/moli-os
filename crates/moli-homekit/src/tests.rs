@@ -140,21 +140,26 @@ impl Drop for Bridge {
 }
 
 async fn bridge(name: &str) -> Bridge {
+    bridge_with(name, Arc::new(FakeHouse)).await
+}
+
+async fn bridge_with(name: &str, house: Arc<dyn Driver>) -> Bridge {
     let dir = std::env::temp_dir().join(format!("moli-homekit-it-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let hub = Hub::new(HubOptions {
         secrets: Some((dir.join("secrets.enc"), MasterKey::generate().unwrap())),
+        guard: moli_runtime::guard::GuardPolicy {
+            protected_rooms: vec!["Chambre".into()],
+            quiet_hours: None,
+            protect_unassigned: false,
+            dashboard: moli_runtime::guard::Dashboard::Trusted,
+        },
         ..HubOptions::default()
     })
     .unwrap();
     let cancel = CancellationToken::new();
-    spawn_driver(
-        &hub,
-        InstanceId::from("fake"),
-        Arc::new(FakeHouse),
-        cancel.clone(),
-    );
+    spawn_driver(&hub, InstanceId::from("fake"), house, cancel.clone());
     for _ in 0..200 {
         if hub.stats().drivers_running == 1 {
             break;
@@ -774,4 +779,342 @@ async fn a_reset_makes_a_new_bridge() {
             .iter()
             .any(|d| d.id == "fake:alarm" && !d.exposed)
     );
+}
+
+// ---- cameras -----------------------------------------------------------------
+
+const SPS: [u8; 4] = [0x67, 0x64, 0x00, 0x28];
+const PPS: [u8; 3] = [0x68, 0xEB, 0xEC];
+
+fn idr() -> Vec<u8> {
+    std::iter::once(0x65)
+        .chain((0..4000).map(|i| (i % 253) as u8))
+        .collect()
+}
+
+/// A camera that sends a key frame, then small frames, every 10 ms.
+#[derive(Debug)]
+struct FakeLive;
+
+struct FakeStream {
+    info: moli_runtime::media::LiveInfo,
+    n: u32,
+}
+
+impl moli_runtime::media::LiveStream for FakeStream {
+    fn info(&self) -> &moli_runtime::media::LiveInfo {
+        &self.info
+    }
+
+    fn next_frame(&mut self) -> BoxFuture<'_, anyhow::Result<moli_runtime::media::VideoFrame>> {
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let n = self.n;
+            self.n += 1;
+            let key = n.is_multiple_of(30);
+            Ok(moli_runtime::media::VideoFrame {
+                timestamp: 90_000 + n * 3000,
+                nals: if key {
+                    vec![SPS.to_vec(), PPS.to_vec(), idr()]
+                } else {
+                    vec![vec![0x41; 200]]
+                },
+                keyframe: key,
+            })
+        })
+    }
+}
+
+impl moli_runtime::media::LiveSource for FakeLive {
+    fn open(
+        &self,
+        _want: moli_runtime::media::LiveWant,
+    ) -> BoxFuture<'_, anyhow::Result<Box<dyn moli_runtime::media::LiveStream>>> {
+        Box::pin(async {
+            Ok(Box::new(FakeStream {
+                info: moli_runtime::media::LiveInfo {
+                    width: 1280,
+                    height: 720,
+                    sps: SPS.to_vec(),
+                    pps: PPS.to_vec(),
+                },
+                n: 0,
+            }) as Box<dyn moli_runtime::media::LiveStream>)
+        })
+    }
+}
+
+#[derive(Debug)]
+struct FakeJpeg;
+
+impl moli_runtime::media::SnapshotSource for FakeJpeg {
+    fn snapshot(&self) -> BoxFuture<'_, anyhow::Result<moli_runtime::media::Image>> {
+        Box::pin(async {
+            Ok(moli_runtime::media::Image {
+                content_type: "image/jpeg".into(),
+                bytes: vec![0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9],
+            })
+        })
+    }
+}
+
+/// Two cameras (with a motion point each); one is in a protected room.
+struct FakeCameras;
+
+impl Driver for FakeCameras {
+    fn kind(&self) -> &'static str {
+        "fake"
+    }
+
+    fn run<'a>(&'a self, ctx: &'a mut DriverCtx) -> BoxFuture<'a, anyhow::Result<()>> {
+        Box::pin(async move {
+            for (native, room) in [("cam", None), ("camp", Some("Chambre"))] {
+                let mut d = device(
+                    ctx,
+                    native,
+                    vec![spec("motion", Kind::Binary, false, Semantic::Occupancy)],
+                );
+                d.native_room = room.map(Into::into);
+                let id = d.id.clone();
+                ctx.upsert_device(d);
+                ctx.provide_live(&id, Arc::new(FakeLive));
+                ctx.provide_snapshots(&id, Arc::new(FakeJpeg));
+                ctx.set_state(&id, "motion", Value::Bool(false));
+            }
+            ctx.ready();
+            while let Some(cmd) = ctx.next_command().await {
+                cmd.reply(Ok(()));
+            }
+            Ok(())
+        })
+    }
+}
+
+fn b64_of(tlv: &Tlv) -> Json {
+    json!(crate::camera::b64(&tlv.encode()))
+}
+
+fn le16(n: u16) -> [u8; 2] {
+    n.to_le_bytes()
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // one scenario, start to end
+async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_out() {
+    let b = bridge_with("camera", Arc::new(FakeCameras)).await;
+    let code = b.homekit.status(true).setup_code.unwrap();
+    let phone = Controller::new("phone-cam");
+    let mut client = Client::connect(b.homekit.port()).await;
+    phone.pair(&mut client, &code).await.unwrap();
+    let mut s = Client::connect(b.homekit.port()).await;
+    phone.verify(&mut s).await.unwrap();
+    wait_for("both cameras are known", || b.homekit.devices().len() == 4).await;
+
+    // The dashboard lists the picture of each camera apart from its motion
+    // sensor; the one in a protected room is marked, and never shown.
+    let list = b.homekit.devices();
+    let camera = |id: &str| list.iter().find(|d| d.id == id).unwrap();
+    assert_eq!(camera("fake:cam#camera").kinds, ["camera"]);
+    assert_eq!(camera("fake:cam").kinds, ["motion"]);
+    assert!(!camera("fake:cam#camera").protected);
+    assert!(camera("fake:camp#camera").protected);
+    wait_for("the database is built", || {
+        b.homekit.status(false).exposed == 3
+    })
+    .await;
+    let (_, db) = s.json("GET", "/accessories", &Json::Null).await;
+    let serials: Vec<&str> = db["accessories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a["services"][0]["characteristics"][4]["value"].as_str())
+        .collect();
+    assert!(serials.contains(&"fake:cam#camera"));
+    assert!(
+        serials.contains(&"fake:cam"),
+        "its motion sensor stays apart"
+    );
+    assert!(
+        serials.contains(&"fake:camp"),
+        "the sensor of the protected one is a sensor"
+    );
+    assert!(
+        !serials.contains(&"fake:camp#camera"),
+        "its video never leaves"
+    );
+
+    // What the camera supports.
+    let (aid, supported) = find(&db, "fake:cam#camera", "114");
+    let (_, status_iid) = find(&db, "fake:cam#camera", "120");
+    let (_, setup_iid) = find(&db, "fake:cam#camera", "118");
+    let (_, select_iid) = find(&db, "fake:cam#camera", "117");
+    let (_, read) = s
+        .json(
+            "GET",
+            &format!("/characteristics?id={aid}.{supported}"),
+            &Json::Null,
+        )
+        .await;
+    let config = Tlv::parse(
+        &crate::camera::unb64(read["characteristics"][0]["value"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let config = Tlv::parse(config.get(1).unwrap()).unwrap();
+    assert_eq!(config.byte(1), Some(0), "H.264");
+    assert_eq!(config.all(3).count(), 5, "five picture sizes");
+
+    // The phone sets a stream up: its address, its keys.
+    let udp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let session: [u8; 16] = random();
+    let (key, salt): ([u8; 16], [u8; 14]) = (random(), random());
+    let srtp = Tlv::new().with(1, [0]).with(2, key).with(3, salt);
+    let setup = Tlv::new()
+        .with(1, session)
+        .with(
+            3,
+            Tlv::new()
+                .with(1, [0])
+                .with(2, "127.0.0.1")
+                .with(3, le16(port))
+                .with(4, le16(port + 1))
+                .encode(),
+        )
+        .with(4, srtp.encode())
+        .with(5, srtp.encode());
+    let (status, _) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": aid, "iid": setup_iid, "value": b64_of(&setup)}]}),
+        )
+        .await;
+    assert_eq!(status, 204);
+    let (_, read) = s
+        .json(
+            "GET",
+            &format!("/characteristics?id={aid}.{setup_iid}"),
+            &Json::Null,
+        )
+        .await;
+    let answer = Tlv::parse(
+        &crate::camera::unb64(read["characteristics"][0]["value"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(answer.get(1), Some(&session[..]));
+    assert_eq!(answer.byte(2), Some(0), "accepted");
+    let address = Tlv::parse(answer.get(3).unwrap()).unwrap();
+    assert_eq!(address.get(2), Some(&b"127.0.0.1"[..]));
+    let ssrc = u32::from_le_bytes(answer.get(6).unwrap().try_into().unwrap());
+    assert_eq!(
+        Tlv::parse(answer.get(4).unwrap()).unwrap().get(2),
+        Some(&key[..])
+    );
+
+    // It starts the stream: 720p, payload type 99, a packet size.
+    let select = Tlv::new()
+        .with(1, Tlv::new().with(1, session).with(2, [1]).encode())
+        .with(
+            2,
+            Tlv::new()
+                .with(1, [0])
+                .with(
+                    3,
+                    Tlv::new()
+                        .with(1, le16(1280))
+                        .with(2, le16(720))
+                        .with(3, [30])
+                        .encode(),
+                )
+                .with(
+                    4,
+                    Tlv::new()
+                        .with(1, [99])
+                        .with(2, ssrc.to_le_bytes())
+                        .with(3, le16(2000))
+                        .with(4, 0.5f32.to_le_bytes())
+                        .with(5, le16(1378))
+                        .encode(),
+                )
+                .encode(),
+        );
+    let (status, _) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": aid, "iid": select_iid, "value": b64_of(&select)}]}),
+        )
+        .await;
+    assert_eq!(status, 204);
+
+    // SRTP arrives; opened with the phone's key it is a decodable stream:
+    // parameter sets, then the key frame cut to the packet size.
+    let receiver = crate::srtp::Sender::new(&key, &salt);
+    let mut depacketizer = moli_net::h264::Depacketizer::new();
+    let mut frames = Vec::new();
+    let mut buf = vec![0u8; 2048];
+    while frames.len() < 2 {
+        let (n, _) = tokio::time::timeout(Duration::from_secs(5), udp.recv_from(&mut buf))
+            .await
+            .expect("the bridge sends video")
+            .unwrap();
+        let clear = receiver.open_rtp(&buf[..n], 0).expect("the tag is valid");
+        assert!(n <= 1378, "within the packet size the phone gave");
+        assert_eq!(clear[1] & 0x7F, 99);
+        assert_eq!(u32::from_be_bytes(clear[8..12].try_into().unwrap()), ssrc);
+        frames.extend(depacketizer.push(&clear));
+    }
+    assert!(frames[0].keyframe, "starts on a key frame");
+    assert_eq!(frames[0].nals, vec![SPS.to_vec(), PPS.to_vec(), idr()]);
+    assert!(!frames[1].keyframe);
+
+    // It is in use for the phone, a picture is available, and ending it
+    // stops the video.
+    let (_, read) = s
+        .json(
+            "GET",
+            &format!("/characteristics?id={aid}.{status_iid}"),
+            &Json::Null,
+        )
+        .await;
+    let status = Tlv::parse(
+        &crate::camera::unb64(read["characteristics"][0]["value"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        status.byte(1),
+        Some(0),
+        "one stream of two: still available"
+    );
+    let (code, jpeg) = s
+        .call(
+            "POST",
+            "/resource",
+            "application/hap+json",
+            json!({"aid": aid, "resource-type": "image", "image-width": 320, "image-height": 180})
+                .to_string()
+                .as_bytes(),
+        )
+        .await;
+    assert_eq!(code, 200);
+    assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
+    let end = Tlv::new().with(1, Tlv::new().with(1, session).with(2, [0]).encode());
+    let (status, _) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": aid, "iid": select_iid, "value": b64_of(&end)}]}),
+        )
+        .await;
+    assert_eq!(status, 204);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    while udp.try_recv_from(&mut buf).is_ok() {}
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(udp.try_recv_from(&mut buf).is_err(), "no more video");
+
+    // The switch of the dashboard removes the camera, not its sensor.
+    b.homekit.set_device("fake:cam#camera", Some(false));
+    wait_for("the camera leaves", || b.homekit.status(false).exposed == 2).await;
+    let (_, db) = s.json("GET", "/accessories", &Json::Null).await;
+    assert_eq!(db["accessories"].as_array().unwrap().len(), 3);
 }

@@ -163,13 +163,14 @@
         {#each shown as d (d.id)}
           <li class:off={!d.exposed}>
             <label>
-              <input type="checkbox" checked={d.exposed} disabled={busy} onchange={(e) => setDevice(d, e.currentTarget.checked)} />
+              <input type="checkbox" checked={d.exposed && !d.protected} disabled={busy || d.protected} onchange={(e) => setDevice(d, e.currentTarget.checked)} />
               <span class="name">{d.name}</span>
             </label>
             {#if d.room}<span class="muted room">{d.room}</span>{/if}
             <span class="kinds">
               {#each d.kinds as k (k)}<span class="chip">{t('systeme.homekit.type.' + k)}</span>{/each}
               {#if d.absent}<span class="chip warm">{t('systeme.homekit.absent')}</span>{/if}
+              {#if d.protected}<span class="chip warm" title={t('systeme.homekit.protegee_aide')}>{t('systeme.homekit.protegee')}</span>{/if}
             </span>
             {#if d.exception}
               <button class="link" disabled={busy} title={t('systeme.homekit.suivre_defaut')} onclick={() => setDevice(d, null)}>↺</button>

@@ -18,7 +18,8 @@
 //! ChaCha20-Poly1305, the encrypted channel), `tlv`, `http`, `session` (one
 //! connection: pairing, verification, characteristics), `accessories` (the
 //! mapping of devices to services), `mdns` (the `_hap._tcp` announcement),
-//! `store` (what is kept on disk), `setup` (code, identifiers, QR payload).
+//! `store` (what is kept on disk), `setup` (code, identifiers, QR payload),
+//! `camera`, `rtp` and `srtp` (live video of cameras, relayed as SRTP).
 
 // Wire formats and unit conversions: every cast is of a value bounded by
 // construction (a clamp, a length check, a protocol limit), and the
@@ -31,12 +32,15 @@
 
 mod accessories;
 mod bigint;
+mod camera;
 mod crypto;
 mod http;
 mod mdns;
+mod rtp;
 mod session;
 mod setup;
 mod srp;
+mod srtp;
 mod store;
 mod tlv;
 
@@ -148,6 +152,8 @@ pub(crate) struct Shared {
     pub kick: broadcast::Sender<Option<String>>,
     pub announce: watch::Sender<Announcement>,
     rebuild: Notify,
+    /// Camera streams being negotiated or relayed.
+    pub(crate) streams: camera::Streams,
     /// The connection currently pairing, if any.
     pub setup_owner: Mutex<Option<u64>>,
     pub failures: AtomicU32,
@@ -271,6 +277,12 @@ impl Shared {
             .is_none_or(|view| view.online == Some(false))
     }
 
+    fn offline_device(&self, device: &DeviceId) -> bool {
+        self.hub
+            .device(device)
+            .is_none_or(|view| view.online == Some(false))
+    }
+
     /// The value of a characteristic, or a HAP status.
     pub fn read(&self, c: &Characteristic) -> Result<Json, i32> {
         use accessories::{
@@ -279,6 +291,30 @@ impl Shared {
         match &c.bind {
             Bind::Static(v) => Ok(v.clone()),
             Bind::Identify => Err(ST_WRITE_ONLY),
+            Bind::Camera { device, what } => {
+                use camera::CameraChar::{
+                    Selected, Setup, Status, SupportedAudio, SupportedRtp, SupportedVideo,
+                };
+                let tlv = match what {
+                    SupportedVideo => camera::supported_video(),
+                    SupportedAudio => camera::supported_audio(),
+                    SupportedRtp => camera::supported_rtp(),
+                    // Read back on the connection that wrote them.
+                    Selected | Setup => Vec::new(),
+                    Status => {
+                        if self.offline_device(device) {
+                            return Err(ST_COMMUNICATION);
+                        }
+                        let unavailable = self.hub.protected_room(device).is_some();
+                        camera::streaming_status(if unavailable {
+                            2
+                        } else {
+                            self.streams.status_of(device)
+                        })
+                    }
+                };
+                Ok(Json::String(camera::b64(&tlv)))
+            }
             Bind::Point(point, conv) => {
                 if self.offline(point) {
                     return Err(ST_COMMUNICATION);
@@ -342,10 +378,23 @@ impl Shared {
         // while drivers are still starting), and forget what is not.
         for view in &snapshot.devices {
             let id = view.device.id.as_str();
+            let live = self.hub.has_live(&view.device.id);
             if saved.exposed(id) && !accessories::kinds_of(&view.device).is_empty() {
-                saved
-                    .devices
-                    .insert(id.to_owned(), Entry::new(view.device.clone(), &view.label));
+                saved.devices.insert(
+                    id.to_owned(),
+                    Entry::new(view.device.clone(), &view.label, live),
+                );
+            }
+            // Video of a protected room never leaves the house: no accessory.
+            if live {
+                let key = accessories::camera_key(&view.device.id);
+                if saved.exposed(&key) && self.hub.protected_room(&view.device.id).is_none() {
+                    saved
+                        .devices
+                        .insert(key, Entry::camera(view.device.clone(), &view.label));
+                } else {
+                    saved.devices.remove(&key);
+                }
             }
         }
         let keep: Vec<String> = saved
@@ -366,7 +415,7 @@ impl Shared {
         let catalog = Catalog::build(
             &self.config.name,
             &entries,
-            |id| policy_saved.exposed(id.as_str()),
+            |key| policy_saved.exposed(key),
             &mut aids,
         );
         saved.aids = aids.assigned;
@@ -392,6 +441,7 @@ impl Shared {
     fn forget_device(&self, id: &DeviceId) {
         let mut saved = self.saved.lock().expect("saved lock");
         saved.devices.remove(id.as_str());
+        saved.devices.remove(&accessories::camera_key(id));
     }
 }
 
@@ -420,6 +470,7 @@ pub struct Status {
 }
 
 /// One device in the settings list.
+#[allow(clippy::struct_excessive_bools)] // flags the dashboard shows as they are
 #[derive(Debug, Serialize)]
 pub struct DeviceEntry {
     pub id: String,
@@ -433,6 +484,9 @@ pub struct DeviceEntry {
     pub exception: bool,
     /// Not in the hub right now (its driver is down or starting).
     pub absent: bool,
+    /// A camera of a protected room: never shown to HomeKit, whatever the choice.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub protected: bool,
 }
 
 impl HomeKit {
@@ -469,23 +523,38 @@ impl HomeKit {
         let mut out: Vec<DeviceEntry> = Vec::new();
         for view in &snapshot.devices {
             let kinds = accessories::kinds_of(&view.device);
-            if kinds.is_empty() {
-                continue;
+            let live = self.0.hub.has_live(&view.device.id);
+            let room = view
+                .label
+                .room
+                .clone()
+                .or_else(|| view.device.native_room.as_deref().map(str::to_owned));
+            if !kinds.is_empty() {
+                let id = view.device.id.as_str().to_owned();
+                out.push(DeviceEntry {
+                    name: Entry::new(view.device.clone(), &view.label, live).name,
+                    room: room.clone(),
+                    kinds: kinds.into_iter().map(accessories::Kinds::name).collect(),
+                    exposed: saved.exposed(&id),
+                    exception: saved.exceptions.contains_key(&id),
+                    absent: false,
+                    protected: false,
+                    id,
+                });
             }
-            let id = view.device.id.as_str().to_owned();
-            out.push(DeviceEntry {
-                name: Entry::new(view.device.clone(), &view.label).name,
-                room: view
-                    .label
-                    .room
-                    .clone()
-                    .or_else(|| view.device.native_room.as_deref().map(str::to_owned)),
-                kinds: kinds.into_iter().map(accessories::Kinds::name).collect(),
-                exposed: saved.exposed(&id),
-                exception: saved.exceptions.contains_key(&id),
-                absent: false,
-                id,
-            });
+            if live {
+                let id = accessories::camera_key(&view.device.id);
+                out.push(DeviceEntry {
+                    name: Entry::camera(view.device.clone(), &view.label).name,
+                    room,
+                    kinds: vec![accessories::Kinds::Camera.name()],
+                    exposed: saved.exposed(&id),
+                    exception: saved.exceptions.contains_key(&id),
+                    absent: false,
+                    protected: self.0.hub.protected_room(&view.device.id).is_some(),
+                    id,
+                });
+            }
         }
         for (id, entry) in &saved.devices {
             if out.iter().any(|d| &d.id == id) {
@@ -495,13 +564,18 @@ impl HomeKit {
                 id: id.clone(),
                 name: entry.name.clone(),
                 room: entry.device.native_room.as_deref().map(str::to_owned),
-                kinds: accessories::kinds_of(&entry.device)
-                    .into_iter()
-                    .map(accessories::Kinds::name)
-                    .collect(),
+                kinds: if entry.camera {
+                    vec![accessories::Kinds::Camera.name()]
+                } else {
+                    accessories::kinds_of(&entry.device)
+                        .into_iter()
+                        .map(accessories::Kinds::name)
+                        .collect()
+                },
                 exposed: saved.exposed(id),
                 exception: saved.exceptions.contains_key(id),
                 absent: true,
+                protected: false,
             });
         }
         out.sort_by(|a, b| {
@@ -682,6 +756,7 @@ pub async fn start(
         kick,
         announce,
         rebuild: Notify::new(),
+        streams: camera::Streams::new(cancel.clone()),
         setup_owner: Mutex::new(None),
         failures: AtomicU32::new(0),
         next_conn: AtomicU64::new(1),

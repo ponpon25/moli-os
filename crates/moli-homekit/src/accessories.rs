@@ -16,6 +16,8 @@ use moli_core::{Device, DeviceId, Kind, Label, PointId, PointSpec, Semantic, Val
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
+use crate::camera::CameraChar;
+
 /// Most bridged accessories HomeKit accepts behind one bridge.
 pub const MAX_ACCESSORIES: usize = 140;
 /// Status codes of HAP (`HAPStatus`).
@@ -41,6 +43,7 @@ const SVC_LIGHT_LEVEL: &str = "84";
 const SVC_LEAK: &str = "83";
 const SVC_SMOKE: &str = "87";
 const SVC_SECURITY: &str = "7E";
+const SVC_CAMERA: &str = "110";
 
 // Characteristic types.
 const C_IDENTIFY: &str = "14";
@@ -65,10 +68,17 @@ const C_LEAK: &str = "70";
 const C_SMOKE: &str = "76";
 const C_SEC_CURRENT: &str = "66";
 const C_SEC_TARGET: &str = "67";
+const C_SUPPORTED_VIDEO: &str = "114";
+const C_SUPPORTED_AUDIO: &str = "115";
+const C_SUPPORTED_RTP: &str = "116";
+const C_SELECTED_RTP: &str = "117";
+const C_SETUP_ENDPOINTS: &str = "118";
+const C_STREAMING_STATUS: &str = "120";
 
 const READ_NOTIFY: &[&str] = &["pr", "ev"];
 const READ_WRITE_NOTIFY: &[&str] = &["pr", "pw", "ev"];
 const READ_ONLY: &[&str] = &["pr"];
+const READ_WRITE: &[&str] = &["pr", "pw"];
 
 /// HomeKit's security states.
 const ARM_STAY: i64 = 0;
@@ -91,6 +101,8 @@ pub enum Kinds {
     Leak,
     Smoke,
     Alarm,
+    /// Live video (a camera of its own, apart from the device's sensors).
+    Camera,
 }
 
 impl Kinds {
@@ -107,6 +119,7 @@ impl Kinds {
             Self::Leak => "leak",
             Self::Smoke => "smoke",
             Self::Alarm => "alarm",
+            Self::Camera => "camera",
         }
     }
 }
@@ -126,6 +139,11 @@ pub enum Bind {
         mode: Option<PointId>,
     },
     ArmTarget(PointId),
+    /// A characteristic of a camera's stream management.
+    Camera {
+        device: DeviceId,
+        what: CameraChar,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -283,7 +301,7 @@ fn writable(p: &PointSpec) -> bool {
 /// The services a device offers HomeKit, and what they are. Empty: nothing
 /// HomeKit has a place for.
 #[allow(clippy::too_many_lines)] // one block per kind of device
-fn services_of(device: &Device, name: &str) -> (Vec<ServiceSpec>, Vec<Kinds>) {
+fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Vec<Kinds>) {
     let mut services = Vec::new();
     let mut kinds = Vec::new();
     let id = |key: &str| PointId::new(&device.id, key);
@@ -475,7 +493,7 @@ fn services_of(device: &Device, name: &str) -> (Vec<ServiceSpec>, Vec<Kinds>) {
     let many = sensors.iter().filter(|p| sensor_kind(p).is_some()).count() > 1;
     for p in sensors {
         let Some(kind) = sensor_kind(p) else { continue };
-        let label = if many || !services.is_empty() {
+        let label = if many || live || !services.is_empty() {
             format!("{name} {}", p.label)
         } else {
             name.to_owned()
@@ -608,7 +626,73 @@ fn sensor_kind(p: &PointSpec) -> Option<Kinds> {
 
 /// What HomeKit would show of a device (the dashboard lists these).
 pub fn kinds_of(device: &Device) -> Vec<Kinds> {
-    services_of(device, "").1
+    services_of(device, "", false).1
+}
+
+/// The stream management service of a camera.
+fn camera_services(device: &DeviceId) -> Vec<ServiceSpec> {
+    let chars = [
+        (
+            C_SUPPORTED_VIDEO,
+            READ_ONLY,
+            CameraChar::SupportedVideo,
+            "Supported Video Stream Configuration",
+        ),
+        (
+            C_SUPPORTED_AUDIO,
+            READ_ONLY,
+            CameraChar::SupportedAudio,
+            "Supported Audio Stream Configuration",
+        ),
+        (
+            C_SUPPORTED_RTP,
+            READ_ONLY,
+            CameraChar::SupportedRtp,
+            "Supported RTP Configuration",
+        ),
+        (
+            C_SELECTED_RTP,
+            READ_WRITE,
+            CameraChar::Selected,
+            "Selected RTP Stream Configuration",
+        ),
+        (
+            C_SETUP_ENDPOINTS,
+            READ_WRITE,
+            CameraChar::Setup,
+            "Setup Endpoints",
+        ),
+        (
+            C_STREAMING_STATUS,
+            READ_NOTIFY,
+            CameraChar::Status,
+            "Streaming Status",
+        ),
+    ]
+    .into_iter()
+    .map(|(kind, perms, what, description)| {
+        spec(
+            kind,
+            "tlv8",
+            perms,
+            Bind::Camera {
+                device: device.clone(),
+                what,
+            },
+            description,
+        )
+    })
+    .collect();
+    vec![ServiceSpec {
+        kind: SVC_CAMERA,
+        chars,
+    }]
+}
+
+/// The key of a device's camera among HomeKit's choices: the device itself
+/// is its sensors, this is its picture.
+pub fn camera_key(device: &DeviceId) -> String {
+    format!("{}#camera", device.as_str())
 }
 
 /// The accessory database and its indexes.
@@ -629,14 +713,14 @@ pub struct Aids {
 }
 
 impl Aids {
-    fn get(&mut self, id: &DeviceId) -> u64 {
-        if let Some(aid) = self.assigned.get(id.as_str()) {
+    fn get(&mut self, id: &str) -> u64 {
+        if let Some(aid) = self.assigned.get(id) {
             return *aid;
         }
         // 1 is the bridge.
         let aid = self.next.max(2);
         self.next = aid + 1;
-        self.assigned.insert(id.as_str().to_owned(), aid);
+        self.assigned.insert(id.to_owned(), aid);
         aid
     }
 }
@@ -647,10 +731,16 @@ impl Aids {
 pub struct Entry {
     pub name: String,
     pub device: Arc<Device>,
+    /// This is the camera accessory of the device (its live video).
+    #[serde(default)]
+    pub camera: bool,
+    /// The device has live video, shown apart as its camera.
+    #[serde(default)]
+    pub live: bool,
 }
 
 impl Entry {
-    pub fn new(device: Arc<Device>, label: &Label) -> Self {
+    pub fn new(device: Arc<Device>, label: &Label, live: bool) -> Self {
         let name = label
             .name
             .as_deref()
@@ -665,6 +755,26 @@ impl Entry {
                 name
             },
             device,
+            camera: false,
+            live,
+        }
+    }
+
+    /// The camera accessory of a device with live video.
+    pub fn camera(device: Arc<Device>, label: &Label) -> Self {
+        Self {
+            camera: true,
+            live: true,
+            ..Self::new(device, label, true)
+        }
+    }
+
+    /// What the choices are keyed by.
+    pub fn key(&self) -> String {
+        if self.camera {
+            camera_key(&self.device.id)
+        } else {
+            self.device.id.as_str().to_owned()
         }
     }
 }
@@ -675,17 +785,24 @@ impl Catalog {
     pub fn build(
         bridge_name: &str,
         entries: &[Entry],
-        exposed: impl Fn(&DeviceId) -> bool,
+        exposed: impl Fn(&str) -> bool,
         aids: &mut Aids,
     ) -> Self {
         let mut accessories = vec![bridge(bridge_name)];
         let mut chosen: Vec<(u64, &Entry, Vec<ServiceSpec>)> = Vec::new();
-        let mut candidates: Vec<&Entry> =
-            entries.iter().filter(|e| exposed(&e.device.id)).collect();
-        candidates.sort_by(|a, b| a.device.id.cmp(&b.device.id));
+        let mut candidates: Vec<(String, &Entry)> = entries
+            .iter()
+            .map(|e| (e.key(), e))
+            .filter(|(key, _)| exposed(key))
+            .collect();
+        candidates.sort_by(|a, b| a.0.cmp(&b.0));
         let mut truncated = false;
-        for view in candidates {
-            let (services, _) = services_of(&view.device, &view.name);
+        for (key, view) in candidates {
+            let services = if view.camera {
+                camera_services(&view.device.id)
+            } else {
+                services_of(&view.device, &view.name, view.live).0
+            };
             if services.is_empty() {
                 continue;
             }
@@ -693,7 +810,7 @@ impl Catalog {
                 truncated = true;
                 break;
             }
-            chosen.push((aids.get(&view.device.id), view, services));
+            chosen.push((aids.get(&key), view, services));
         }
         chosen.sort_by_key(|(aid, _, _)| *aid);
         for (aid, view, services) in chosen {
@@ -720,7 +837,7 @@ impl Catalog {
                         Bind::ArmCurrent { state, mode } => {
                             state.iter().chain(mode.iter()).collect()
                         }
-                        Bind::Static(_) | Bind::Identify => Vec::new(),
+                        Bind::Static(_) | Bind::Identify | Bind::Camera { .. } => Vec::new(),
                     };
                     for p in points {
                         self.by_point
@@ -736,6 +853,36 @@ impl Catalog {
     pub fn find(&self, aid: u64, iid: u64) -> Option<&Characteristic> {
         let (a, s, c) = *self.index.get(&(aid, iid))?;
         Some(&self.accessories[a].services[s].chars[c])
+    }
+
+    /// The `(aid, iid)` of a camera's streaming status.
+    pub fn camera_status(&self, device: &DeviceId) -> Option<(u64, u64)> {
+        self.accessories.iter().find_map(|a| {
+            a.services
+                .iter()
+                .flat_map(|s| &s.chars)
+                .find_map(|c| match &c.bind {
+                    Bind::Camera {
+                        device: d,
+                        what: CameraChar::Status,
+                    } if d == device => Some((a.aid, c.iid)),
+                    _ => None,
+                })
+        })
+    }
+
+    /// The device whose camera accessory `aid` is.
+    pub fn camera_device(&self, aid: u64) -> Option<&DeviceId> {
+        self.accessories
+            .iter()
+            .find(|a| a.aid == aid)?
+            .services
+            .iter()
+            .flat_map(|s| &s.chars)
+            .find_map(|c| match &c.bind {
+                Bind::Camera { device, .. } => Some(device),
+                _ => None,
+            })
     }
 
     /// The characteristics a Moli point feeds.
@@ -931,7 +1078,7 @@ fn accessory(aid: u64, view: &Entry, specs: Vec<ServiceSpec>) -> Accessory {
     let mut services = vec![info_service(
         "Moli",
         if model.is_empty() { "Moli" } else { &model },
-        device.id.as_str(),
+        &view.key(),
         "1.0.0",
         &name,
         &mut iid,
@@ -963,6 +1110,9 @@ fn accessory(aid: u64, view: &Entry, specs: Vec<ServiceSpec>) -> Accessory {
 /// A neutral value for a readable characteristic whose device has not
 /// answered (yet): what the database carries instead of nothing.
 pub fn placeholder(c: &Characteristic) -> Json {
+    if c.format == "tlv8" {
+        return json!("");
+    }
     if matches!(c.bind, Bind::ArmCurrent { .. } | Bind::ArmTarget(_)) {
         return json!(ARM_DISARMED);
     }
@@ -1144,7 +1294,7 @@ mod tests {
             members: Vec::new(),
             points,
         });
-        Entry::new(device, &Label::default())
+        Entry::new(device, &Label::default(), false)
     }
 
     fn catalog(views: &[Entry]) -> Catalog {
@@ -1349,7 +1499,7 @@ mod tests {
         let only_b = Catalog::build(
             "Moli",
             &[a.clone(), b.clone()],
-            |id| id.as_str().ends_with(":b"),
+            |key| key.ends_with(":b"),
             &mut aids,
         );
         assert_eq!(only_b.accessories.len(), 2);
@@ -1480,6 +1630,7 @@ mod tests {
                 name: Some("Salon".into()),
                 room: None,
             },
+            false,
         );
         assert_eq!(labelled.name, "Salon");
     }

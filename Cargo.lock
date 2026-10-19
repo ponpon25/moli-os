@@ -1318,8 +1318,10 @@ dependencies = [
 name = "moli-homekit"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "anyhow",
  "moli-core",
+ "moli-net",
  "moli-runtime",
  "ring",
  "serde",

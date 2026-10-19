@@ -274,6 +274,7 @@ struct Model {
     labels: BTreeMap<DeviceId, Label>,
     snapshots: HashMap<DeviceId, Arc<dyn crate::media::SnapshotSource>>,
     live: HashMap<DeviceId, Arc<dyn crate::media::LiveSource>>,
+    talk: HashMap<DeviceId, Arc<dyn crate::media::TalkSource>>,
     printers: HashMap<DeviceId, Arc<dyn crate::media::PrintSink>>,
 }
 
@@ -1410,6 +1411,7 @@ impl Hub {
             model.availability.remove(id);
             model.snapshots.remove(id);
             model.live.remove(id);
+            model.talk.remove(id);
             model.printers.remove(id);
             model.devices.remove(id).is_some()
         };
@@ -1437,6 +1439,45 @@ impl Hub {
         source: Arc<dyn crate::media::LiveSource>,
     ) {
         self.write().live.insert(device.clone(), source);
+    }
+
+    pub(crate) fn provide_talk(
+        &self,
+        device: &DeviceId,
+        source: Arc<dyn crate::media::TalkSource>,
+    ) {
+        self.write().talk.insert(device.clone(), source);
+    }
+
+    /// Whether a person can talk to `device` (it has a speaker).
+    #[must_use]
+    pub fn has_talk(&self, device: &DeviceId) -> bool {
+        self.read().talk.contains_key(device)
+    }
+
+    /// Opens a session with a camera's speaker. No guard here, as for
+    /// [`Hub::camera_live`]: the surface checks [`Hub::protected_room`].
+    pub async fn camera_talk(
+        &self,
+        device: &DeviceId,
+    ) -> Result<Box<dyn crate::media::TalkSink>, crate::media::TalkError> {
+        use crate::media::TalkError;
+        let source = {
+            let model = self.read();
+            if !model.devices.contains_key(device) {
+                return Err(TalkError::UnknownDevice);
+            }
+            model
+                .talk
+                .get(device)
+                .cloned()
+                .ok_or(TalkError::NoSpeaker)?
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(10), source.open()).await {
+            Ok(Ok(sink)) => Ok(sink),
+            Ok(Err(e)) => Err(TalkError::Failed(format!("{e:#}"))),
+            Err(_) => Err(TalkError::Failed("no answer in time".to_owned())),
+        }
     }
 
     /// Whether `device` can show live video.

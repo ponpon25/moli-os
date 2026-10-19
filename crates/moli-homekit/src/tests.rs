@@ -880,8 +880,35 @@ impl moli_runtime::media::SnapshotSource for FakeJpeg {
     }
 }
 
-/// Two cameras (with a motion point each); one is in a protected room.
-struct FakeCameras;
+/// A speaker that keeps the voice it is given.
+#[derive(Debug)]
+struct FakeTalk(Arc<std::sync::Mutex<Vec<i16>>>);
+
+struct FakeSink(Arc<std::sync::Mutex<Vec<i16>>>);
+
+impl moli_runtime::media::TalkSink for FakeSink {
+    fn rate(&self) -> u32 {
+        24_000
+    }
+
+    fn send(&mut self, samples: &[i16]) -> BoxFuture<'_, anyhow::Result<()>> {
+        self.0.lock().unwrap().extend_from_slice(samples);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl moli_runtime::media::TalkSource for FakeTalk {
+    fn open(&self) -> BoxFuture<'_, anyhow::Result<Box<dyn moli_runtime::media::TalkSink>>> {
+        let heard = Arc::clone(&self.0);
+        Box::pin(
+            async move { Ok(Box::new(FakeSink(heard)) as Box<dyn moli_runtime::media::TalkSink>) },
+        )
+    }
+}
+
+/// Two cameras (with a motion point each); one is in a protected room. The
+/// first has a speaker.
+struct FakeCameras(Arc<std::sync::Mutex<Vec<i16>>>);
 
 impl Driver for FakeCameras {
     fn kind(&self) -> &'static str {
@@ -901,6 +928,9 @@ impl Driver for FakeCameras {
                 ctx.upsert_device(d);
                 ctx.provide_live(&id, Arc::new(FakeLive));
                 ctx.provide_snapshots(&id, Arc::new(FakeJpeg));
+                if native == "cam" {
+                    ctx.provide_talk(&id, Arc::new(FakeTalk(Arc::clone(&self.0))));
+                }
                 ctx.set_state(&id, "motion", Value::Bool(false));
             }
             ctx.ready();
@@ -923,7 +953,8 @@ fn le16(n: u16) -> [u8; 2] {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // one scenario, start to end
 async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_out() {
-    let b = bridge_with("camera", Arc::new(FakeCameras)).await;
+    let spoken = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let b = bridge_with("camera", Arc::new(FakeCameras(Arc::clone(&spoken)))).await;
     let code = b.homekit.status(true).setup_code.unwrap();
     let phone = Controller::new("phone-cam");
     let mut client = Client::connect(b.homekit.port()).await;
@@ -964,6 +995,25 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
         !serials.contains(&"fake:camp#camera"),
         "its video never leaves"
     );
+
+    // A camera with a speaker offers the Speaker service (the talk button).
+    let services = |serial: &str| -> Vec<String> {
+        db["accessories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["services"][0]["characteristics"][4]["value"] == serial)
+            .map(|a| {
+                a["services"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|s| s["type"].as_str().unwrap().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(services("fake:cam#camera"), ["3E", "112", "113", "110"]);
 
     // What the camera supports.
     let (aid, supported) = find(&db, "fake:cam#camera", "114");
@@ -1155,6 +1205,48 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
         samples_out.extend_from_slice(&pcm[..got]);
         heard += 1;
     }
+    // The phone talks: Opus in SRTP with its audio key to the audio port the
+    // bridge announced; the camera's speaker gets the voice (resampled to the
+    // 24 kHz that speaker takes).
+    let bridge_audio = u16::from_le_bytes(address.get(4).unwrap().try_into().unwrap());
+    let mut voice_sender = crate::srtp::Sender::new(&audio_key, &audio_salt);
+    let mut encoder = opus_rs::OpusEncoder::new(16_000, 1, opus_rs::Application::Voip).unwrap();
+    for n in 0..40u32 {
+        let pcm: Vec<i16> = (0..320u32)
+            .map(|i| {
+                let t = f64::from(n * 320 + i) / 16_000.0;
+                (8_000.0 * (2.0 * std::f64::consts::PI * 800.0 * t).sin()) as i16
+            })
+            .collect();
+        let mut opus = vec![0u8; 400];
+        let len = encoder.encode_i16(&pcm, 320, &mut opus).unwrap();
+        let mut packet = vec![0x80, 110];
+        packet.extend_from_slice(&(1000 + n as u16).to_be_bytes());
+        packet.extend_from_slice(&(n * 320).to_be_bytes());
+        packet.extend_from_slice(&0xFACE_B00Cu32.to_be_bytes());
+        packet.extend_from_slice(&opus[..len]);
+        audio_udp
+            .send_to(
+                &voice_sender.protect_rtp(&packet),
+                ("127.0.0.1", bridge_audio),
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    wait_for("the camera's speaker hears the phone", || {
+        spoken.lock().unwrap().len() > 6_000
+    })
+    .await;
+    let voice = spoken.lock().unwrap().clone();
+    let level = (voice[3_000..]
+        .iter()
+        .map(|s| f64::from(*s).powi(2))
+        .sum::<f64>()
+        / f64::from(u32::try_from(voice.len() - 3_000).unwrap()))
+    .sqrt();
+    assert!((3_000.0..9_000.0).contains(&level), "voice level {level}");
+
     let peak = samples_out.iter().fold(0f32, |m, v| m.max(v.abs()));
     assert!(
         peak > 0.05 || peak > 1_500.0,

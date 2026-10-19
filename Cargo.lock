@@ -1705,6 +1705,7 @@ dependencies = [
  "moli-i18n",
  "moli-net",
  "moli-runtime",
+ "opus-rs",
  "serde",
  "serde_json",
  "tokio",

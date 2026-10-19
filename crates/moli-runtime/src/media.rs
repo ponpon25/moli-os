@@ -175,3 +175,30 @@ pub enum LiveError {
     #[error("live video unavailable: {0}")]
     Failed(String),
 }
+
+// ---- talking back ------------------------------------------------------------
+
+/// Where a person's voice goes: the open session with a camera's speaker.
+/// Dropping it ends the session.
+pub trait TalkSink: Send {
+    /// The sample rate of the 16-bit mono samples it takes.
+    fn rate(&self) -> u32;
+    /// Some voice, at [`TalkSink::rate`].
+    fn send(&mut self, samples: &[i16]) -> BoxFuture<'_, anyhow::Result<()>>;
+}
+
+/// Opens a session with a camera's speaker on demand. Nothing is opened (and
+/// the speaker stays quiet) until somebody speaks.
+pub trait TalkSource: std::fmt::Debug + Send + Sync + 'static {
+    fn open(&self) -> BoxFuture<'_, anyhow::Result<Box<dyn TalkSink>>>;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TalkError {
+    #[error("unknown device")]
+    UnknownDevice,
+    #[error("this device has no speaker to talk to")]
+    NoSpeaker,
+    #[error("talking back unavailable: {0}")]
+    Failed(String),
+}

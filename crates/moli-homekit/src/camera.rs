@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use moli_core::DeviceId;
-use moli_runtime::media::{LiveItem, LiveWant};
+use moli_runtime::media::{LiveItem, LiveWant, TalkSink};
 use ring::rand::{SecureRandom as _, SystemRandom};
 use serde_json::Value as Json;
 use tokio::net::UdpSocket;
@@ -27,10 +27,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::Shared;
 use crate::accessories::{OK, ST_COMMUNICATION, ST_INVALID};
-use crate::audio::OpusPipe;
+use crate::audio::{OpusPipe, Resampler};
 use crate::http::Response;
 use crate::rtp::{Packetizer, Retimer, ntp_now, sender_report};
-use crate::srtp::{KEY_LEN, SALT_LEN, Sender};
+use crate::srtp::{KEY_LEN, Receiver, SALT_LEN, Sender, header_len};
 use crate::tlv::Tlv;
 
 /// Streams one camera serves at once (waiting for their start included).
@@ -767,6 +767,109 @@ fn log_stream_parameters(device: &DeviceId, sps: &[u8], asked: &VideoChoice, cha
     }
 }
 
+/// The phone's voice on its way to a camera's speaker: SRTP in, Opus
+/// decoded, brought to the rate the camera takes. The session with the
+/// speaker is opened when the first voice arrives, not before.
+struct VoiceIn {
+    receiver: Receiver,
+    decoder: opus_rs::OpusDecoder,
+    payload_type: u8,
+    sink: Option<Box<dyn TalkSink>>,
+    resampler: Option<Resampler>,
+    /// After a refusal or a failure, not tried again before this.
+    retry_at: Option<Instant>,
+    packets: u32,
+    samples: u32,
+    unreadable: u32,
+}
+
+impl VoiceIn {
+    fn new(pending: &Pending, choice: AudioChoice) -> Option<Self> {
+        Some(Self {
+            receiver: Receiver::new(&pending.request.audio.key, &pending.request.audio.salt),
+            decoder: opus_rs::OpusDecoder::new(16_000, 1).ok()?,
+            payload_type: choice.payload_type,
+            sink: None,
+            resampler: None,
+            retry_at: None,
+            packets: 0,
+            samples: 0,
+            unreadable: 0,
+        })
+    }
+
+    async fn push(&mut self, shared: &Shared, device: &DeviceId, datagram: &[u8]) {
+        let Some(clear) = self.receiver.unprotect(datagram) else {
+            self.unreadable += 1;
+            if self.unreadable <= 3 {
+                tracing::warn!(%device, bytes = datagram.len(), "homekit: the phone's voice cannot be opened");
+            }
+            return;
+        };
+        // Comfort noise and the like carry another payload type.
+        let Some(header) = header_len(&clear) else {
+            return;
+        };
+        if clear[1] & 0x7F != self.payload_type || clear.len() <= header + 1 {
+            return;
+        }
+        let mut pcm = vec![0f32; 960];
+        let Ok(n) = self.decoder.decode(&clear[header..], 960, &mut pcm) else {
+            return;
+        };
+        let voice: Vec<i16> = pcm[..n]
+            .iter()
+            .map(|v| (v * 32768.0).round().clamp(-32768.0, 32767.0) as i16)
+            .collect();
+        if self.packets == 0 {
+            tracing::info!(%device, "homekit: the phone speaks");
+        }
+        self.packets += 1;
+        self.samples = self.samples.wrapping_add(n as u32);
+        if self.sink.is_none() && !self.open(shared, device).await {
+            return;
+        }
+        let Some(sink) = self.sink.as_mut() else {
+            return;
+        };
+        let voice = match self.resampler.as_mut() {
+            Some(r) => r.push(&voice),
+            None => voice,
+        };
+        if let Err(e) = sink.send(&voice).await {
+            tracing::warn!(%device, error = %format!("{e:#}"), "homekit: the voice could not be sent to the camera");
+            self.sink = None;
+            self.retry_at = Some(Instant::now() + Duration::from_secs(5));
+        }
+    }
+
+    /// The session with the speaker, if the guard and the camera allow it.
+    async fn open(&mut self, shared: &Shared, device: &DeviceId) -> bool {
+        if self.retry_at.is_some_and(|at| at > Instant::now()) {
+            return false;
+        }
+        self.retry_at = Some(Instant::now() + Duration::from_secs(10));
+        if !shared.camera_allowed(device) {
+            tracing::info!(%device, "homekit: no talking to a camera of a protected room");
+            return false;
+        }
+        match shared.hub.camera_talk(device).await {
+            Ok(sink) => {
+                tracing::info!(%device, rate = sink.rate(), "homekit: talking to the camera's speaker");
+                self.resampler =
+                    (sink.rate() != 16_000).then(|| Resampler::new(16_000, sink.rate()));
+                self.sink = Some(sink);
+                self.retry_at = None;
+                true
+            }
+            Err(e) => {
+                tracing::warn!(%device, error = %e, "homekit: the camera's speaker could not be opened");
+                false
+            }
+        }
+    }
+}
+
 /// The sound of a stream: camera samples to Opus packets to SRTP, on the
 /// audio socket and keys the phone gave.
 struct AudioOut {
@@ -911,6 +1014,10 @@ async fn relay(
         relayed = sound.is_some(),
         "homekit: the camera's sound"
     );
+    let mut voice = audio
+        .filter(|_| shared.hub.has_talk(device))
+        .and_then(|choice| VoiceIn::new(&pending, choice));
+    let audio_socket = Arc::clone(&pending.audio_socket);
     let destination = SocketAddr::new(pending.request.address, pending.request.video_port);
     let socket = pending.video_socket;
     let mut srtp = Sender::new(&pending.request.video.key, &pending.request.video.salt);
@@ -958,6 +1065,7 @@ async fn relay(
         "homekit: camera stream destination"
     );
     loop {
+        let listening = sound.is_some() || voice.is_some();
         tokio::select! {
             () = cancel.cancelled() => break,
             item = live.next() => {
@@ -1125,6 +1233,16 @@ async fn relay(
                         "homekit: phone_report"
                     );
                 }
+                if let Some(v) = voice.as_ref().filter(|v| v.packets > 0) {
+                    tracing::info!(
+                        %device,
+                        voice_packets = v.packets,
+                        voice_samples = v.samples,
+                        unreadable = v.unreadable,
+                        speaker_open = v.sink.is_some(),
+                        "homekit: camera voice counters"
+                    );
+                }
                 if let Some(out) = sound.as_mut() {
                     tracing::info!(
                         %device,
@@ -1154,18 +1272,26 @@ async fn relay(
                     }
                 }
             }
-            // The phone's reports on the sound.
+            // What the phone sends on the audio port: reports on our sound, and
+            // its voice when it talks.
             received = async {
-                match sound.as_ref() {
-                    Some(out) => out.socket.recv_from(&mut audio_inbound).await,
-                    None => std::future::pending().await,
+                if listening {
+                    audio_socket.recv_from(&mut audio_inbound).await
+                } else {
+                    std::future::pending().await
                 }
             } => {
-                if let Ok((n, _)) = received
-                    && let Some(out) = sound.as_mut()
-                    && let Err(why) = out.heard(&audio_inbound[..n])
-                {
-                    tracing::warn!(%device, why, bytes = n, "homekit: the phone's audio RTCP cannot be opened");
+                if let Ok((n, _)) = received {
+                    let datagram = &audio_inbound[..n];
+                    if n >= 8 && (200..=204).contains(&datagram[1]) {
+                        if let Some(out) = sound.as_mut()
+                            && let Err(why) = out.heard(datagram)
+                        {
+                            tracing::warn!(%device, why, bytes = n, "homekit: the phone's audio RTCP cannot be opened");
+                        }
+                    } else if let Some(v) = voice.as_mut() {
+                        v.push(shared, device, datagram).await;
+                    }
                 }
             }
             // What the phone sends back (reports): proof it is still there.

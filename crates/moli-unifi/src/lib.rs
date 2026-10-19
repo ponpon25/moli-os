@@ -22,7 +22,7 @@ use moli_net::ws::WebSocket;
 use moli_net::{Method, PIN_MISMATCH, PinnedHttps, PinnedTls};
 use moli_runtime::media::{
     AudioChunk, Image, LiveInfo, LiveItem, LiveSource, LiveStream, LiveWant, SnapshotSource,
-    VideoFrame,
+    TalkSink, TalkSource, VideoFrame,
 };
 use moli_runtime::{BoxFuture, Driver, DriverCtx};
 use serde::Deserialize;
@@ -172,6 +172,15 @@ struct Camera {
     model: String,
     #[serde(default)]
     state: String,
+    #[serde(default, rename = "featureFlags")]
+    flags: Flags,
+}
+
+/// What the console says a camera can do.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+struct Flags {
+    #[serde(default, rename = "hasSpeaker")]
+    has_speaker: bool,
 }
 
 impl Camera {
@@ -559,6 +568,164 @@ impl LiveStream for UnifiStream {
     }
 }
 
+/// What the console answers to a talkback request.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct TalkSession {
+    /// Where the camera listens: `rtp://<camera>:<port>` (or `udp://`).
+    url: String,
+    #[serde(default)]
+    codec: String,
+    #[serde(default, alias = "sampling_rate", rename = "samplingRate")]
+    sampling_rate: u32,
+    #[serde(default, alias = "bits_per_sample", rename = "bitsPerSample")]
+    bits_per_sample: u32,
+}
+
+/// `host:port` out of `rtp://host:port`.
+fn talk_target(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let authority = rest.split(['/', '?']).next()?;
+    let (host, port) = authority.rsplit_once(':')?;
+    (!host.is_empty() && port.parse::<u16>().is_ok()).then(|| authority.to_owned())
+}
+
+/// Talking to a camera's speaker: a session asked for from the console when
+/// somebody first speaks, then the voice as Opus over RTP to the camera.
+#[derive(Debug)]
+struct Talk {
+    console: Arc<Console>,
+    camera: String,
+}
+
+impl TalkSource for Talk {
+    fn open(&self) -> BoxFuture<'_, anyhow::Result<Box<dyn TalkSink>>> {
+        Box::pin(async move {
+            let path = format!("{BASE}/cameras/{}/talkback-session", self.camera);
+            let request = moli_net::empty(
+                self.console
+                    .http
+                    .request(Method::POST, &path)
+                    .header("x-api-key", &self.console.key),
+            )?;
+            // Never repeated: a second request would open a second session.
+            let (status, body) = self.console.http.send_once(request).await?;
+            if !status.is_success() {
+                bail!("unifi {path}: {status}");
+            }
+            let session: TalkSession =
+                serde_json::from_slice(&body).context("unifi talkback session")?;
+            let target = talk_target(&session.url).context("unusable talkback address")?;
+            tracing::info!(
+                camera = %self.camera,
+                codec = %session.codec,
+                rate = session.sampling_rate,
+                bits = session.bits_per_sample,
+                to = %target,
+                "unifi: talkback session opened"
+            );
+            if !session.codec.eq_ignore_ascii_case("opus") {
+                bail!(
+                    "the camera wants {} for talkback, only Opus is made here",
+                    session.codec
+                );
+            }
+            let stream = TalkStream::connect(&target, session.sampling_rate).await?;
+            Ok(Box::new(stream) as Box<dyn TalkSink>)
+        })
+    }
+}
+
+/// Opus as RTP, to a camera's speaker.
+struct TalkStream {
+    socket: tokio::net::UdpSocket,
+    encoder: opus_rs::OpusEncoder,
+    rate: u32,
+    pcm: Vec<i16>,
+    seq: u16,
+    timestamp: u32,
+    ssrc: u32,
+    packets: u32,
+}
+
+/// Dynamic payload type, and Opus's RTP clock (RFC 7587: always 48 kHz).
+const TALK_PAYLOAD_TYPE: u8 = 96;
+const TALK_TICKS: u32 = 960;
+
+impl TalkStream {
+    #[allow(clippy::cast_possible_truncation)] // a seed, cut to the width it feeds
+    async fn connect(target: &str, rate: u32) -> anyhow::Result<Self> {
+        if !matches!(rate, 8_000 | 12_000 | 16_000 | 24_000 | 48_000) {
+            bail!("the camera takes Opus at {rate} Hz, which Opus does not do");
+        }
+        let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+        socket.connect(target).await.context("talkback address")?;
+        let rate_i32 = i32::try_from(rate)?;
+        let mut encoder = opus_rs::OpusEncoder::new(rate_i32, 1, opus_rs::Application::Voip)
+            .map_err(|e| anyhow::anyhow!("opus encoder: {e:?}"))?;
+        encoder.bitrate_bps = 24_000;
+        encoder.use_cbr = true;
+        // Not secret, only unlike the next stream's.
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| {
+                d.subsec_nanos() ^ (d.as_secs() as u32).rotate_left(16)
+            });
+        Ok(Self {
+            socket,
+            encoder,
+            rate,
+            pcm: Vec::new(),
+            seq: seed as u16,
+            timestamp: seed.wrapping_mul(2_654_435_761),
+            ssrc: seed.rotate_left(7) ^ 0x5A5A_1234,
+            packets: 0,
+        })
+    }
+
+    /// The RTP packets the voice so far completes (20 ms each).
+    fn packets(&mut self, samples: &[i16]) -> Vec<Vec<u8>> {
+        self.pcm.extend_from_slice(samples);
+        let frame = (self.rate / 50) as usize;
+        let mut out = Vec::new();
+        while self.pcm.len() >= frame {
+            let pcm: Vec<i16> = self.pcm.drain(..frame).collect();
+            let mut opus = vec![0u8; 1276];
+            let Ok(n) = self.encoder.encode_i16(&pcm, frame, &mut opus) else {
+                continue;
+            };
+            let mut packet = vec![0x80, TALK_PAYLOAD_TYPE];
+            packet.extend_from_slice(&self.seq.to_be_bytes());
+            packet.extend_from_slice(&self.timestamp.to_be_bytes());
+            packet.extend_from_slice(&self.ssrc.to_be_bytes());
+            packet.extend_from_slice(&opus[..n]);
+            self.seq = self.seq.wrapping_add(1);
+            self.timestamp = self.timestamp.wrapping_add(TALK_TICKS);
+            out.push(packet);
+        }
+        out
+    }
+}
+
+impl TalkSink for TalkStream {
+    fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    fn send(&mut self, samples: &[i16]) -> BoxFuture<'_, anyhow::Result<()>> {
+        let packets = self.packets(samples);
+        Box::pin(async move {
+            for packet in packets {
+                self.socket.send(&packet).await?;
+                self.packets = self.packets.wrapping_add(1);
+                if self.packets == 1 || self.packets.is_multiple_of(250) {
+                    tracing::info!(packets = self.packets, "unifi: voice sent to the camera");
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
 /// Reads the camera list and brings the hub in line with it.
 async fn refresh(
     console: &Arc<Console>,
@@ -594,6 +761,15 @@ async fn refresh(
                     urls: Mutex::new(None),
                 }),
             );
+            if camera.flags.has_speaker {
+                ctx.provide_talk(
+                    &device,
+                    Arc::new(Talk {
+                        console: Arc::clone(console),
+                        camera: camera.id.clone(),
+                    }),
+                );
+            }
             ctx.set_state(&device, "motion", Value::Bool(false));
         }
         if known.online.get(&camera.id) != Some(&camera.online()) {
@@ -831,6 +1007,74 @@ mod tests {
         let url = stream_url(&streams["high"], "192.168.1.2").unwrap();
         assert_eq!(url.text(), "rtsps://192.168.1.2:7441/AbC123");
         assert!(parse_streams(b"[]").is_empty());
+    }
+
+    #[test]
+    fn the_talkback_session_and_its_address_are_read() {
+        let body = br#"{"url":"rtp://192.168.1.50:7004","codec":"opus","samplingRate":24000,"bitsPerSample":16}"#;
+        let session: TalkSession = serde_json::from_slice(body).unwrap();
+        assert_eq!(
+            (
+                session.codec.as_str(),
+                session.sampling_rate,
+                session.bits_per_sample
+            ),
+            ("opus", 24000, 16)
+        );
+        assert_eq!(
+            talk_target(&session.url).as_deref(),
+            Some("192.168.1.50:7004")
+        );
+        assert_eq!(
+            talk_target("udp://cam:7004/x?y").as_deref(),
+            Some("cam:7004")
+        );
+        assert_eq!(talk_target("rtp://nope"), None);
+    }
+
+    #[test]
+    fn the_flag_of_a_speaker_comes_from_the_console() {
+        let cameras = parse_cameras(CAMERAS.as_bytes()).unwrap();
+        let speakers: Vec<&str> = cameras
+            .iter()
+            .filter(|c| c.flags.has_speaker)
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(speakers, ["Caméra Salon"]);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::cast_possible_truncation)]
+    async fn the_voice_goes_out_as_opus_rtp_in_steps_of_20_ms() {
+        let camera = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let target = camera.local_addr().unwrap().to_string();
+        let mut stream = TalkStream::connect(&target, 24_000).await.unwrap();
+        // 70 ms of a tone: three whole packets, 10 ms kept for the next.
+        let tone: Vec<i16> = (0..1_680)
+            .map(|n| (8_000.0 * (f64::from(n) * 0.26).sin()) as i16)
+            .collect();
+        stream.send(&tone).await.unwrap();
+        let mut buf = [0u8; 1500];
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let n = camera.recv(&mut buf).await.unwrap();
+            seen.push(buf[..n].to_vec());
+        }
+        assert!(
+            seen.iter()
+                .all(|p| p[0] == 0x80 && p[1] == 96 && p.len() > 12)
+        );
+        let seq = |p: &Vec<u8>| u16::from_be_bytes([p[2], p[3]]);
+        let ts = |p: &Vec<u8>| u32::from_be_bytes([p[4], p[5], p[6], p[7]]);
+        assert_eq!(seq(&seen[1]), seq(&seen[0]).wrapping_add(1));
+        assert_eq!(ts(&seen[2]), ts(&seen[0]).wrapping_add(1920));
+        assert_eq!(&seen[0][8..12], &seen[2][8..12]);
+        // And it is Opus: a decoder takes the payload of 20 ms at 24 kHz.
+        let mut decoder = opus_rs::OpusDecoder::new(24_000, 1).unwrap();
+        let mut pcm = vec![0f32; 480];
+        assert_eq!(decoder.decode(&seen[0][12..], 480, &mut pcm).unwrap(), 480);
+        assert!(stream.send(&[0; 100]).await.is_ok());
+        assert!(TalkStream::connect(&target, 22_050).await.is_err());
     }
 
     #[test]

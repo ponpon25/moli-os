@@ -398,9 +398,14 @@ impl Shared {
             if live {
                 let key = accessories::camera_key(&view.device.id);
                 if saved.exposed(&key) && self.hub.protected_room(&view.device.id).is_none() {
-                    saved
-                        .devices
-                        .insert(key, Entry::camera(view.device.clone(), &view.label));
+                    saved.devices.insert(
+                        key,
+                        Entry::camera(
+                            view.device.clone(),
+                            &view.label,
+                            self.hub.has_talk(&view.device.id),
+                        ),
+                    );
                 } else {
                     saved.devices.remove(&key);
                 }
@@ -554,7 +559,7 @@ impl HomeKit {
             if live {
                 let id = accessories::camera_key(&view.device.id);
                 out.push(DeviceEntry {
-                    name: Entry::camera(view.device.clone(), &view.label).name,
+                    name: Entry::camera(view.device.clone(), &view.label, false).name,
                     room,
                     kinds: vec![accessories::Kinds::Camera.name()],
                     exposed: saved.exposed(&id),

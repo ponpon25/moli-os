@@ -116,6 +116,19 @@ rien au repos ; en usage, environ 2 % d'un cœur par flux pour le son (mesuré :
 calcul sur un Xeon E5-2680 v3, compilation `cargo test --release`, c'est-à-dire sans l'`opt-level = "s"` de
 l'image, qui sera un peu plus lente). L'image passe de 24,9 à 25,3 Mo avec `opus-rs`.
 
+**Parler à la caméra.** Une caméra dont la console annonce un haut-parleur (`featureFlags.hasSpeaker`, par
+exemple la G3 Instant) reçoit un service *Speaker* en plus du *Microphone* : l'app Maison propose alors de
+parler. L'iPhone envoie sa voix en Opus 16 kHz dans le flux SRTP audio, vers le port audio annoncé, avec les
+clés audio qu'il a données. Moli la déchiffre (`srtp::Receiver`, numéro de séquence étendu), la décode
+(`opus-rs`), la ramène à la fréquence de la caméra et la lui envoie en Opus/RTP (`moli-unifi` : session
+`POST /cameras/{id}/talkback-session` sur l'API d'intégration, avec la même clé que le reste). La session
+n'est ouverte qu'à la **première voix** reçue, jamais à l'ouverture du flux, et se referme avec lui. Si la
+caméra demande autre chose que de l'Opus (une session en AAC), c'est refusé avec ce message dans le journal :
+il n'existe pas d'encodeur AAC en Rust pur ici. **La garde** : on ne parle que dans un flux en cours, donc
+avec les mêmes règles que la vidéo, revérifiées à l'ouverture de la session : une pièce protégée n'est
+jamais ni vue ni écoutée ni parlée depuis HomeKit. Volume et Mute du Speaker sont acceptés sans effet. Non
+vérifié sur une vraie caméra (type de charge RTP 96 et horloge 48 kHz supposés comme ffmpeg).
+
 **Limites.** Deux flux par caméra, six au total. Un flux s'arrête sur `End`, quand l'iPhone ferme sa
 connexion, ou quand il se tait plus de 30 s après avoir parlé. Pas de HomeKit Secure Video (pas
 d'enregistrement), pas de détection de mouvement dans le service caméra : le mouvement est un accessoire

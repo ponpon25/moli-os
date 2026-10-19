@@ -12,6 +12,7 @@ moli-core.workspace = true
 moli-runtime.workspace = true
 moli-net.workspace = true
 moli-audio.workspace = true
+opus-rs.workspace = true
 anyhow.workspace = true
 http.workspace = true
 http-body-util.workspace = true

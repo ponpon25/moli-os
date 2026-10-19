@@ -143,6 +143,24 @@ impl Sender {
         out
     }
 
+    /// Like [`Sender::protect_rtp`] for a header longer than 12 bytes
+    /// (tests: a phone's packets may carry an extension).
+    #[cfg(test)]
+    pub fn protect_rtp_with_header(&mut self, packet: &[u8], header: usize) -> Vec<u8> {
+        let seq = u16::from_be_bytes([packet[2], packet[3]]);
+        let ssrc = u32::from_be_bytes([packet[8], packet[9], packet[10], packet[11]]);
+        let index = (u64::from(self.roc) << 16) | u64::from(seq);
+        let mut out = packet.to_vec();
+        apply(
+            &self.rtp.cipher,
+            &self.rtp.iv(ssrc, index),
+            &mut out[header..],
+        );
+        let tag = self.rtp.tag(&out, &self.roc.to_be_bytes());
+        out.extend_from_slice(&tag);
+        out
+    }
+
     /// What a receiver does with a packet of this sender (tests): checks the
     /// tag against the rollover counter and returns the clear packet.
     #[cfg(test)]
@@ -199,6 +217,86 @@ impl Sender {
         let tag = self.rtcp.tag(&out, &[]);
         out.extend_from_slice(&tag);
         out
+    }
+}
+
+/// Opens the RTP packets the other side sends (the phone's voice), keeping
+/// the rollover counter by the estimate of RFC 3711 appendix A.
+pub struct Receiver {
+    rtp: Keys,
+    roc: u32,
+    last_seq: Option<u16>,
+}
+
+impl std::fmt::Debug for Receiver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Receiver").finish_non_exhaustive()
+    }
+}
+
+/// Bytes of an RTP header: fixed part, CSRCs, extension.
+pub fn header_len(packet: &[u8]) -> Option<usize> {
+    if packet.len() < 12 || packet[0] >> 6 != 2 {
+        return None;
+    }
+    let mut len = 12 + 4 * usize::from(packet[0] & 0x0F);
+    if packet[0] & 0x10 != 0 {
+        let words = packet.get(len + 2..len + 4)?;
+        len += 4 + 4 * usize::from(u16::from_be_bytes([words[0], words[1]]));
+    }
+    (len <= packet.len()).then_some(len)
+}
+
+impl Receiver {
+    #[must_use]
+    pub fn new(master_key: &[u8; KEY_LEN], master_salt: &[u8; SALT_LEN]) -> Self {
+        Self {
+            rtp: Keys::new(master_key, master_salt, [0, 1, 2]),
+            roc: 0,
+            last_seq: None,
+        }
+    }
+
+    /// The clear RTP packet, or `None` when the tag does not match.
+    pub fn unprotect(&mut self, packet: &[u8]) -> Option<Vec<u8>> {
+        let header = header_len(packet.get(..packet.len().checked_sub(TAG_LEN)?)?)?;
+        let (body, tag) = packet.split_at(packet.len() - TAG_LEN);
+        let seq = u16::from_be_bytes([body[2], body[3]]);
+        let roc = match self.last_seq {
+            None => self.roc,
+            Some(last) if last < 0x8000 => {
+                if seq > last + 0x8000 {
+                    self.roc.wrapping_sub(1)
+                } else {
+                    self.roc
+                }
+            }
+            Some(last) => {
+                if last - 0x8000 > seq {
+                    self.roc.wrapping_add(1)
+                } else {
+                    self.roc
+                }
+            }
+        };
+        if tag != self.rtp.tag(body, &roc.to_be_bytes()) {
+            return None;
+        }
+        if roc == self.roc.wrapping_add(1) {
+            self.roc = roc;
+            self.last_seq = Some(seq);
+        } else if roc == self.roc && self.last_seq.is_none_or(|last| seq > last) {
+            self.last_seq = Some(seq);
+        }
+        let ssrc = u32::from_be_bytes([body[8], body[9], body[10], body[11]]);
+        let index = (u64::from(roc) << 16) | u64::from(seq);
+        let mut out = body.to_vec();
+        apply(
+            &self.rtp.cipher,
+            &self.rtp.iv(ssrc, index),
+            &mut out[header..],
+        );
+        Some(out)
     }
 }
 
@@ -370,5 +468,34 @@ mod tests {
         p.extend_from_slice(&0x0102_0304u32.to_be_bytes());
         p.extend_from_slice(payload);
         p
+    }
+
+    #[test]
+    fn a_receiver_opens_what_a_sender_sealed_across_the_sequence_wrap() {
+        let (key, salt) = ([5u8; 16], [6u8; 14]);
+        let mut sender = Sender::new(&key, &salt);
+        let mut receiver = Receiver::new(&key, &salt);
+        let payload = [9u8; 60];
+        for seq in [65_533u16, 65_534, 65_535, 0, 1, 2] {
+            let sealed = sender.protect_rtp(&rtp_with(seq, u32::from(seq), false, &payload));
+            let clear = receiver.unprotect(&sealed).expect("opens");
+            assert_eq!(&clear[12..], &payload[..], "seq {seq}");
+        }
+        // A late packet from before the wrap still opens (previous rollover).
+        let late = Sender::new(&key, &salt).protect_rtp(&rtp_with(65_535, 7, false, &payload));
+        assert!(receiver.unprotect(&late).is_some());
+        // Tampering and other keys are refused.
+        let mut sealed = Sender::new(&key, &salt).protect_rtp(&rtp_with(3, 7, false, &payload));
+        sealed[20] ^= 1;
+        assert!(receiver.unprotect(&sealed).is_none());
+        assert!(Receiver::new(&[1; 16], &salt).unprotect(&late).is_none());
+        // A header extension is skipped over, left in the clear.
+        let mut ext = vec![
+            0x90, 111, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0xBE, 0xDE, 0, 1, 1, 2, 3, 4,
+        ];
+        ext.extend_from_slice(&payload);
+        let sealed = Sender::new(&key, &salt).protect_rtp_with_header(&ext, 20);
+        let clear = Receiver::new(&key, &salt).unprotect(&sealed).unwrap();
+        assert_eq!(&clear[20..], &payload[..]);
     }
 }

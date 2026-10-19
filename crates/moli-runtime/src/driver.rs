@@ -187,6 +187,13 @@ impl DriverCtx {
         }
     }
 
+    /// Declares that `device` (one of ours) has a speaker people can talk to.
+    pub fn provide_talk(&self, device: &DeviceId, source: Arc<dyn crate::media::TalkSource>) {
+        if self.owns(device) {
+            self.hub.provide_talk(device, source);
+        }
+    }
+
     /// Declares that `device` (one of ours) prints documents.
     pub fn provide_printing(&self, device: &DeviceId, sink: Arc<dyn crate::media::PrintSink>) {
         if self.owns(device) {

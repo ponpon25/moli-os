@@ -45,6 +45,7 @@ const SVC_SMOKE: &str = "87";
 const SVC_SECURITY: &str = "7E";
 const SVC_CAMERA: &str = "110";
 const SVC_MICROPHONE: &str = "112";
+const SVC_SPEAKER: &str = "113";
 const C_VOLUME: &str = "119";
 const C_MUTE: &str = "11A";
 
@@ -633,7 +634,7 @@ pub fn kinds_of(device: &Device) -> Vec<Kinds> {
 }
 
 /// The stream management service of a camera.
-fn camera_services(device: &DeviceId) -> Vec<ServiceSpec> {
+fn camera_services(device: &DeviceId, talk: bool) -> Vec<ServiceSpec> {
     let chars = [
         (
             C_SUPPORTED_VIDEO,
@@ -708,13 +709,34 @@ fn camera_services(device: &DeviceId) -> Vec<ServiceSpec> {
             ),
         ],
     };
-    vec![
-        microphone,
-        ServiceSpec {
-            kind: SVC_CAMERA,
-            chars,
-        },
-    ]
+    // A camera with a speaker: the Home app offers to talk.
+    let speaker = talk.then(|| ServiceSpec {
+        kind: SVC_SPEAKER,
+        chars: vec![
+            spec(
+                C_MUTE,
+                "bool",
+                READ_WRITE_NOTIFY,
+                Bind::Static(json!(false)),
+                "Mute",
+            ),
+            spec(
+                C_VOLUME,
+                "uint8",
+                READ_WRITE_NOTIFY,
+                Bind::Static(json!(0)),
+                "Volume",
+            )
+            .meta(percent_meta()),
+        ],
+    });
+    let mut services = vec![microphone];
+    services.extend(speaker);
+    services.push(ServiceSpec {
+        kind: SVC_CAMERA,
+        chars,
+    });
+    services
 }
 
 /// The key of a device's camera among HomeKit's choices: the device itself
@@ -765,6 +787,9 @@ pub struct Entry {
     /// The device has live video, shown apart as its camera.
     #[serde(default)]
     pub live: bool,
+    /// The camera has a speaker people can talk to (a Speaker service).
+    #[serde(default)]
+    pub talk: bool,
 }
 
 impl Entry {
@@ -785,14 +810,16 @@ impl Entry {
             device,
             camera: false,
             live,
+            talk: false,
         }
     }
 
     /// The camera accessory of a device with live video.
-    pub fn camera(device: Arc<Device>, label: &Label) -> Self {
+    pub fn camera(device: Arc<Device>, label: &Label, talk: bool) -> Self {
         Self {
             camera: true,
             live: true,
+            talk,
             ..Self::new(device, label, true)
         }
     }
@@ -827,7 +854,7 @@ impl Catalog {
         let mut truncated = false;
         for (key, view) in candidates {
             let services = if view.camera {
-                camera_services(&view.device.id)
+                camera_services(&view.device.id, view.talk)
             } else {
                 services_of(&view.device, &view.name, view.live).0
             };

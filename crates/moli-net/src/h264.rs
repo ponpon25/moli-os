@@ -219,6 +219,51 @@ pub fn has_recovery_point(nal: &[u8]) -> bool {
     false
 }
 
+/// `(first_mb_in_slice, slice_type % 5)` of a slice NAL (types 1 and 5):
+/// 0 P, 1 B, 2 I, 3 SP, 4 SI.
+#[must_use]
+pub fn slice_header(nal: &[u8]) -> Option<(u32, u32)> {
+    if !matches!(nal_type(nal), 1 | 5) || nal.len() < 3 {
+        return None;
+    }
+    let mut r = Bits::new(&nal[1..]);
+    Some((r.ue()?, r.ue()? % 5))
+}
+
+/// The payload types of the messages in an SEI NAL (5 user data, 6 recovery
+/// point, 1 picture timing…).
+#[must_use]
+pub fn sei_types(nal: &[u8]) -> Vec<usize> {
+    let mut found = Vec::new();
+    if nal_type(nal) != 6 {
+        return found;
+    }
+    let mut rest = &nal[1..];
+    while rest.len() > 2 {
+        let (mut kind, mut size) = (0usize, 0usize);
+        while let Some((&b, tail)) = rest.split_first() {
+            rest = tail;
+            kind += usize::from(b);
+            if b != 0xFF {
+                break;
+            }
+        }
+        while let Some((&b, tail)) = rest.split_first() {
+            rest = tail;
+            size += usize::from(b);
+            if b != 0xFF {
+                break;
+            }
+        }
+        found.push(kind);
+        if size > rest.len() {
+            break;
+        }
+        rest = &rest[size..];
+    }
+    found
+}
+
 // ---- the sequence parameter set ------------------------------------------
 
 struct Bits {
@@ -485,5 +530,16 @@ mod tests {
         assert!(has_recovery_point(&sei));
         assert!(!has_recovery_point(&[0x06, 5, 2, 0xAA, 0xBB, 0x80]));
         assert!(!has_recovery_point(&[0x41, 6, 1, 0x84]));
+    }
+
+    #[test]
+    fn slices_and_sei_messages_are_described() {
+        assert_eq!(slice_header(&[0x41, 0b1000_1000, 0x80]), Some((0, 2)));
+        assert_eq!(slice_header(&[0x41, 0b1001_1000, 0x80]), Some((0, 0)));
+        assert_eq!(slice_header(&[0x67, 1, 2]), None);
+        assert_eq!(
+            sei_types(&[0x06, 5, 2, 0xAA, 0xBB, 6, 1, 0x84, 0x80]),
+            vec![5, 6]
+        );
     }
 }

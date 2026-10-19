@@ -529,6 +529,17 @@ impl Shared {
 
     /// A write of `SelectedRTPStreamConfiguration`.
     pub(crate) fn camera_select(self: &Arc<Self>, device: &DeviceId, value: &Json) -> i32 {
+        // The phone's choice as it sent it. It holds no key (those came with
+        // SetupEndpoints): the codec, the rates, the payload types.
+        if let Some(raw) = value.as_str().and_then(unb64) {
+            let parsed = Tlv::parse(&raw);
+            tracing::info!(
+                %device,
+                selected = %crate::setup::hex(&raw),
+                has_audio = parsed.as_ref().is_some_and(|t| t.get(3).is_some()),
+                "homekit: the phone's stream choice"
+            );
+        }
         let Some(selected) = value
             .as_str()
             .and_then(unb64)
@@ -697,6 +708,21 @@ pub fn read_phone_report(clear: &[u8], our_ssrc: u32) -> PhoneReport {
 
 /// Sends the camera's frames to the phone until `cancel`, the camera or the
 /// phone gives up.
+/// `1:P:0` for a slice (type, P/B/I/SP/SI, first macroblock), `6:[5,6]` for an
+/// SEI (its message types), the type alone otherwise.
+fn describe_nal(nal: &[u8]) -> String {
+    use moli_net::h264::{nal_type, sei_types, slice_header};
+    let kind = nal_type(nal);
+    if let Some((first_mb, slice)) = slice_header(nal) {
+        let letter = ["P", "B", "I", "SP", "SI"][slice as usize % 5];
+        format!("{kind}:{letter}:{first_mb}")
+    } else if kind == 6 {
+        format!("6:{:?}", sei_types(nal))
+    } else {
+        kind.to_string()
+    }
+}
+
 /// `5:3,1:40` : how many NAL units of each type went by.
 fn nal_census(counts: &[u32; 32]) -> String {
     counts
@@ -900,6 +926,8 @@ async fn relay(
     let (mut frames_in, mut key_frames, mut skipped, mut send_errors, mut phone_packets) =
         (0u32, 0u32, 0u32, 0u32, 0u32);
     let mut held_ms = 0u64;
+    let mut trace: Vec<String> = Vec::new();
+    let mut traced = false;
     let mut nal_counts = [0u32; 32];
     let mut max_packet = 0usize;
     let mut last_report: Option<PhoneReport> = None;
@@ -939,6 +967,17 @@ async fn relay(
                 frames_in += 1;
                 for nal in &frame.nals {
                     nal_counts[usize::from(moli_net::h264::nal_type(nal))] += 1;
+                    if !started && trace.len() < 120 {
+                        trace.push(describe_nal(nal));
+                    }
+                }
+                if !started && !traced && (trace.len() >= 120 || begun.elapsed() > FORCE_START) {
+                    traced = true;
+                    tracing::info!(
+                        %device,
+                        nals = %trace.join(" "),
+                        "homekit: what the camera sends before a start (type:kind:first_mb, SEI types)"
+                    );
                 }
                 key_frames += u32::from(frame.keyframe);
                 for nal in &frame.nals {

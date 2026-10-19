@@ -817,7 +817,12 @@ impl moli_runtime::media::LiveStream for FakeStream {
                 nals: if key {
                     vec![SPS.to_vec(), PPS.to_vec(), idr()]
                 } else {
-                    vec![vec![0x41; 200]]
+                    vec![
+                        std::iter::once(0x41)
+                            .chain([0x98])
+                            .chain(std::iter::repeat_n(0x80, 198))
+                            .collect(),
+                    ]
                 },
                 keyframe: key,
             })

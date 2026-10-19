@@ -40,6 +40,8 @@ const MAX_TOTAL: usize = 6;
 const PENDING_TTL: Duration = Duration::from_secs(30);
 /// A phone that was sending reports and went silent is gone.
 const CONTROLLER_SILENT: Duration = Duration::from_secs(30);
+/// A camera that sends no key frame is started without one after this.
+const FORCE_START: Duration = Duration::from_secs(5);
 const REPORT_EVERY: Duration = Duration::from_secs(2);
 /// What the Home app assumes when the phone gives no packet size.
 const DEFAULT_MTU: usize = 1378;
@@ -671,6 +673,17 @@ pub fn read_phone_report(clear: &[u8], our_ssrc: u32) -> PhoneReport {
 
 /// Sends the camera's frames to the phone until `cancel`, the camera or the
 /// phone gives up.
+/// `5:3,1:40` : how many NAL units of each type went by.
+fn nal_census(counts: &[u32; 32]) -> String {
+    counts
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| **n > 0)
+        .map(|(kind, n)| format!("{kind}:{n}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// The address this machine reaches `to` from (what the phone sees as the
 /// source of the video).
 fn source_ip(to: SocketAddr) -> Option<IpAddr> {
@@ -760,6 +773,7 @@ async fn relay(
     let (mut frames_in, mut key_frames, mut skipped, mut send_errors, mut phone_packets) =
         (0u32, 0u32, 0u32, 0u32, 0u32);
     let mut held_ms = 0u64;
+    let mut nal_counts = [0u32; 32];
     let mut max_packet = 0usize;
     let mut last_report: Option<PhoneReport> = None;
     let mut unreadable = 0u32;
@@ -789,6 +803,9 @@ async fn relay(
                     }
                 };
                 frames_in += 1;
+                for nal in &frame.nals {
+                    nal_counts[usize::from(moli_net::h264::nal_type(nal))] += 1;
+                }
                 key_frames += u32::from(frame.keyframe);
                 for nal in &frame.nals {
                     match moli_net::h264::nal_type(nal) {
@@ -803,10 +820,25 @@ async fn relay(
                         _ => {}
                     }
                 }
-                // A phone can only begin on a picture it can decode alone.
-                if !started && !frame.keyframe {
+                // A phone can only begin on a picture it can decode alone. A camera
+                // that never sends one (it refreshes the picture bit by bit) gets
+                // started anyway after a few seconds, behind its parameter sets.
+                let forced = !started
+                    && !frame.keyframe
+                    && begun.elapsed() > FORCE_START
+                    && sps.is_some()
+                    && pps.is_some();
+                if !started && !frame.keyframe && !forced {
                     skipped += 1;
                     continue;
+                }
+                if forced {
+                    tracing::warn!(
+                        %device,
+                        skipped,
+                        nal_types = %nal_census(&nal_counts),
+                        "homekit: no key frame from the camera, starting without one"
+                    );
                 }
                 if !started {
                     tracing::info!(
@@ -823,8 +855,12 @@ async fn relay(
                 }
                 started = true;
                 let mut nals = frame.nals;
-                if frame.keyframe && !nals.iter().any(|n| moli_net::h264::nal_type(n) == moli_net::h264::NAL_SPS) {
-                    let sets: Vec<Vec<u8>> = [sps.clone(), pps.clone()].into_iter().flatten().collect();
+                let has_sps = nals
+                    .iter()
+                    .any(|n| moli_net::h264::nal_type(n) == moli_net::h264::NAL_SPS);
+                if (frame.keyframe && !has_sps) || forced {
+                    let sets: Vec<Vec<u8>> =
+                        [sps.clone(), pps.clone()].into_iter().flatten().collect();
                     nals.splice(0..0, sets);
                 }
                 let (hold, timestamp) = retimer.frame(frame.timestamp, Instant::now());
@@ -883,6 +919,7 @@ async fn relay(
                     phone_packets,
                     reanchors = retimer.reanchors,
                     max_packet,
+                    nal_types = %nal_census(&nal_counts),
                     max_hold_ms = held_ms,
                     "homekit: camera stream counters"
                 );

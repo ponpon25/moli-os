@@ -75,7 +75,9 @@ impl Depacketizer {
         if std::mem::take(&mut self.damaged) || nals.is_empty() {
             return None;
         }
-        let keyframe = nals.iter().any(|n| nal_type(n) == NAL_IDR);
+        let keyframe = nals
+            .iter()
+            .any(|n| nal_type(n) == NAL_IDR || is_intra_picture(n));
         Some(AccessUnit {
             timestamp,
             nals,
@@ -156,6 +158,21 @@ impl<'a> Rtp<'a> {
             payload: packet.get(start..end)?,
         })
     }
+}
+
+/// A non-IDR slice (type 1) that is intra coded (I or SI): some cameras
+/// refresh with these instead of IDR pictures, and a viewer can begin on one.
+#[must_use]
+pub fn is_intra_picture(nal: &[u8]) -> bool {
+    if nal_type(nal) != 1 || nal.len() < 3 {
+        return false;
+    }
+    let mut r = Bits::new(&nal[1..]);
+    let Some(_first_mb) = r.ue() else {
+        return false;
+    };
+    // slice_type 2, 4, 7, 9: I or SI (the second range says every slice is).
+    r.ue().is_some_and(|t| matches!(t % 5, 2 | 4))
 }
 
 // ---- the sequence parameter set ------------------------------------------
@@ -384,6 +401,25 @@ mod tests {
         ];
         assert_eq!(picture_size(&sps), Some((1920, 1080)));
         assert_eq!(picture_size(&[0x68, 1, 2, 3, 4]), None);
+    }
+
+    #[test]
+    fn an_intra_slice_that_is_not_an_idr_is_found() {
+        // first_mb 0 ('1'), slice_type 7 = I ('0001000'), then padding.
+        let intra = [0x41, 0b1000_1000, 0x80];
+        assert!(is_intra_picture(&intra));
+        // slice_type 5 = P ('00110'): 1 + 00110 -> 0b1001_1000.
+        let predicted = [0x41, 0b1001_1000, 0x80];
+        assert!(!is_intra_picture(&predicted));
+        assert!(
+            !is_intra_picture(&[0x65, 0x88, 0x80]),
+            "an IDR has its own type"
+        );
+        let mut d = Depacketizer::new();
+        let mut p = vec![0x80, 0xE0, 0, 1, 0, 0, 0, 9, 0, 0, 0, 1];
+        p.extend_from_slice(&intra);
+        let frames = d.push(&p);
+        assert!(frames[0].keyframe);
     }
 
     #[test]

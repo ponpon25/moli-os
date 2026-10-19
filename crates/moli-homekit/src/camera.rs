@@ -601,6 +601,10 @@ pub struct PhoneReport {
     pub key_requests: u32,
     /// The report names our stream.
     pub ours: bool,
+    /// Report blocks found, and the packet types of the compound packet
+    /// (the first four).
+    pub blocks: u32,
+    pub kinds: [u8; 4],
 }
 
 /// Reads a clear RTCP compound packet: receiver reports (201, and the ones
@@ -609,6 +613,7 @@ pub struct PhoneReport {
 pub fn read_phone_report(clear: &[u8], our_ssrc: u32) -> PhoneReport {
     let mut report = PhoneReport::default();
     let mut rest = clear;
+    let mut seen = 0;
     while rest.len() >= 4 {
         let words = usize::from(u16::from_be_bytes([rest[2], rest[3]]));
         let size = 4 * (words + 1);
@@ -617,6 +622,10 @@ pub fn read_phone_report(clear: &[u8], our_ssrc: u32) -> PhoneReport {
         }
         let (packet, tail) = rest.split_at(size);
         let blocks = usize::from(packet[0] & 0x1F);
+        if seen < report.kinds.len() {
+            report.kinds[seen] = packet[1];
+            seen += 1;
+        }
         match packet[1] {
             // Receiver report: 8 bytes, then blocks of 24; a sender report
             // has 20 more bytes of sender information first.
@@ -629,6 +638,7 @@ pub fn read_phone_report(clear: &[u8], our_ssrc: u32) -> PhoneReport {
                     .take(blocks)
                 {
                     let ssrc = u32::from_be_bytes([block[0], block[1], block[2], block[3]]);
+                    report.blocks += 1;
                     report.ours |= ssrc == our_ssrc;
                     report.fraction_lost = block[4];
                     report.lost = u32::from_be_bytes([0, block[5], block[6], block[7]]);
@@ -728,6 +738,7 @@ async fn relay(
     let mut max_packet = 0usize;
     let mut last_report: Option<PhoneReport> = None;
     let mut unreadable = 0u32;
+    let mut decoded_logged = 0u32;
     let mut sps_seen: Option<Vec<u8>> = None;
     tracing::info!(
         %device,
@@ -857,6 +868,8 @@ async fn relay(
                         jitter = r.jitter,
                         key_requests = r.key_requests,
                         names_our_stream = r.ours,
+                        blocks = r.blocks,
+                        kinds = %crate::setup::hex(&r.kinds),
                         unreadable,
                         "homekit: phone_report"
                     );
@@ -877,9 +890,16 @@ async fn relay(
                     match srtp.open_rtcp(&inbound[..n]) {
                         Ok(clear) => {
                             let report = read_phone_report(&clear, ssrc);
-                            if report.highest_seq > 0 || report.key_requests > 0 {
-                                last_report = Some(report);
+                            if decoded_logged < 3 {
+                                decoded_logged += 1;
+                                tracing::info!(
+                                    %device,
+                                    bytes = n,
+                                    clear = %crate::setup::hex(&clear[..clear.len().min(64)]),
+                                    "homekit: the phone's RTCP, opened"
+                                );
                             }
+                            last_report = Some(report);
                         }
                         Err(why) => {
                             unreadable += 1;
@@ -1102,6 +1122,8 @@ mod tests {
                 jitter: 33,
                 key_requests: 1,
                 ours: true,
+                blocks: 1,
+                kinds: [201, 206, 0, 0],
             }
         );
         assert!(!read_phone_report(&rr, 9).ours);

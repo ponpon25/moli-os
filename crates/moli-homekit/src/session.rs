@@ -174,7 +174,19 @@ impl Conn {
                 Parsed::Bad => return false,
                 Parsed::Done(request, used) => {
                     source.drain(..used);
+                    let line = format!("{} {}?{}", request.method, request.path, request.query);
+                    let body_len = request.body.len();
                     let response = self.handle(request).await;
+                    // What the Home app asked and what it was told: the way to
+                    // see where it gives up on an accessory. No body is logged.
+                    tracing::info!(
+                        conn = self.id,
+                        request = %line,
+                        body = body_len,
+                        status = response.status,
+                        answer = response.body.len(),
+                        "homekit"
+                    );
                     let mut bytes = response.encode();
                     if let Some(channel) = self.channel.as_mut() {
                         bytes = channel.encrypt(&bytes);

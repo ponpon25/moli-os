@@ -919,9 +919,18 @@ fn accessory(aid: u64, view: &Entry, specs: Vec<ServiceSpec>) -> Accessory {
         next - 1
     };
     let name = view.name.clone();
+    // The maker is always Moli: the Home app treats a bridge that claims
+    // another brand's name (Signify, Philips Hue…) as an accessory out of
+    // compliance. The real maker and model go in the model.
+    let model = [device.manufacturer.as_deref(), device.model.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut services = vec![info_service(
-        device.manufacturer.as_deref().unwrap_or("Moli"),
-        device.model.as_deref().unwrap_or("Moli"),
+        "Moli",
+        if model.is_empty() { "Moli" } else { &model },
         device.id.as_str(),
         "1.0.0",
         &name,
@@ -1399,6 +1408,25 @@ mod tests {
         assert_eq!(to_hap(bounded, &Value::Float(220.0)), Some(json!(100.0)));
         assert_eq!(to_hap(bounded, &Value::Int(21)), Some(json!(21.0)));
         assert_eq!(to_hap(Conv::Int, &Value::Float(366.4)), Some(json!(366)));
+    }
+
+    #[test]
+    fn the_maker_is_moli_whatever_the_device_says() {
+        let mut lamp = view(
+            "lamp",
+            vec![point("on", Kind::Binary, true, Semantic::OnOff)],
+        );
+        let mut device = (*lamp.device).clone();
+        device.manufacturer = Some("Signify Netherlands B.V.".into());
+        device.model = Some("LCL001".into());
+        lamp.device = Arc::new(device);
+        let c = catalog(&[lamp]);
+        let info = &c.accessories[1].services[0].chars;
+        assert_eq!(info[1].bind, Bind::Static(json!("Moli")));
+        assert_eq!(
+            info[2].bind,
+            Bind::Static(json!("Signify Netherlands B.V. LCL001"))
+        );
     }
 
     #[test]

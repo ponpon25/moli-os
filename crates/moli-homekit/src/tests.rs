@@ -593,7 +593,7 @@ async fn a_paired_phone_reads_writes_and_is_stopped_by_the_guard() {
 
     // Reading: values come from the hub.
     let (aid, on) = find(&db, "fake:lamp", "25");
-    let (_, brightness) = find(&db, "fake:lamp", "08");
+    let (_, brightness) = find(&db, "fake:lamp", "8");
     let (status, read) = s
         .json(
             "GET",

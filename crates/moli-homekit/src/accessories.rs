@@ -54,7 +54,7 @@ const C_SERIAL: &str = "30";
 const C_FIRMWARE: &str = "52";
 const C_VERSION: &str = "37";
 const C_ON: &str = "25";
-const C_BRIGHTNESS: &str = "08";
+const C_BRIGHTNESS: &str = "8";
 const C_COLOR_TEMP: &str = "CE";
 const C_HUE: &str = "13";
 const C_SATURATION: &str = "2F";
@@ -1332,7 +1332,7 @@ mod tests {
         assert_eq!(types(&c, 2), ["3E", "43"]);
         let light = &c.accessories[1].services[1];
         let kinds: Vec<_> = light.chars.iter().map(|ch| ch.kind).collect();
-        assert_eq!(kinds, ["23", "25", "08", "CE", "13", "2F"]);
+        assert_eq!(kinds, ["23", "25", "8", "CE", "13", "2F"]);
         assert_eq!(kinds_of(&lamp.device), [Kinds::Light]);
     }
 

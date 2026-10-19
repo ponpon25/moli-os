@@ -1052,9 +1052,9 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
     let receiver = crate::srtp::Sender::new(&key, &salt);
     let mut depacketizer = moli_net::h264::Depacketizer::new();
     let mut frames = Vec::new();
-    let mut reports = 0;
+    let (mut reports, mut markers) = (0, 0);
     let mut buf = vec![0u8; 2048];
-    while frames.len() < 2 {
+    while frames.len() < 8 {
         let (n, _) = tokio::time::timeout(Duration::from_secs(5), udp.recv_from(&mut buf))
             .await
             .expect("the bridge sends video")
@@ -1068,12 +1068,22 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
         assert!(n <= 1378, "within the packet size the phone gave");
         assert_eq!(clear[1] & 0x7F, 99);
         assert_eq!(u32::from_be_bytes(clear[8..12].try_into().unwrap()), ssrc);
+        markers += usize::from(clear[1] & 0x80 != 0);
         frames.extend(depacketizer.push(&clear));
     }
     assert_eq!(reports, 1, "a sender report comes first");
     assert!(frames[0].keyframe, "starts on a key frame");
     assert_eq!(frames[0].nals, vec![SPS.to_vec(), PPS.to_vec(), idr()]);
     assert!(!frames[1].keyframe);
+    // A stream of several frames: the clock only moves forward and every
+    // frame is closed by a marker.
+    assert!(
+        frames
+            .windows(2)
+            .all(|w| w[1].timestamp.wrapping_sub(w[0].timestamp).cast_signed() > 0),
+        "timestamps are monotonic"
+    );
+    assert!(markers + 1 >= frames.len(), "a marker per frame");
 
     // It is in use for the phone, a picture is available, and ending it
     // stops the video.

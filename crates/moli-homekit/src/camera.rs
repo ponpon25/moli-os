@@ -28,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 use crate::Shared;
 use crate::accessories::{OK, ST_COMMUNICATION, ST_INVALID};
 use crate::http::Response;
-use crate::rtp::{Packetizer, ntp_now, sender_report};
+use crate::rtp::{Packetizer, Retimer, ntp_now, sender_report};
 use crate::srtp::{KEY_LEN, SALT_LEN, Sender};
 use crate::tlv::Tlv;
 
@@ -631,6 +631,8 @@ async fn relay(
         (!info.sps.is_empty()).then_some(info.sps),
         (!info.pps.is_empty()).then_some(info.pps),
     );
+    let first_out = random_u32();
+    let mut retimer = Retimer::new(first_out, Instant::now());
     let mut started = false;
     let (mut packets, mut octets, mut last_ts) = (0u32, 0u32, 0u32);
     let mut last_frame = Instant::now();
@@ -641,6 +643,7 @@ async fn relay(
     // Counters for the journal (never a key).
     let (mut frames_in, mut key_frames, mut skipped, mut send_errors, mut phone_packets) =
         (0u32, 0u32, 0u32, 0u32, 0u32);
+    let mut held_ms = 0u64;
     tracing::info!(
         %device,
         to = %destination,
@@ -684,7 +687,7 @@ async fn relay(
                         "homekit: first key frame, the video starts"
                     );
                     // The report first: it ties the stream's clock to the wall clock.
-                    let sr = sender_report(ssrc, ntp_now(), frame.timestamp, 0, 0);
+                    let sr = sender_report(ssrc, ntp_now(), first_out, 0, 0);
                     if socket.send_to(&srtp.protect_rtcp(&sr), destination).await.is_err() {
                         return;
                     }
@@ -695,10 +698,21 @@ async fn relay(
                     let sets: Vec<Vec<u8>> = [sps.clone(), pps.clone()].into_iter().flatten().collect();
                     nals.splice(0..0, sets);
                 }
-                last_ts = frame.timestamp;
+                let (hold, timestamp) = retimer.frame(frame.timestamp, Instant::now());
+                if !hold.is_zero() {
+                    held_ms = held_ms.max(u64::try_from(hold.as_millis()).unwrap_or(0));
+                    tokio::time::sleep(hold).await;
+                }
+                last_ts = timestamp;
                 last_frame = Instant::now();
-                for packet in packetizer.frame(frame.timestamp, &nals) {
-                    let sealed = srtp.protect_rtp(&packet);
+                let burst = packetizer.frame(timestamp, &nals);
+                for (n, packet) in burst.iter().enumerate() {
+                    // A key frame is dozens of packets: spread them a little
+                    // rather than hand the access point a wall of them.
+                    if n > 0 && n % 8 == 0 {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    let sealed = srtp.protect_rtp(packet);
                     packets = packets.wrapping_add(1);
                     octets = octets.wrapping_add((packet.len() - 12) as u32);
                     if let Err(e) = socket.send_to(&sealed, destination).await {
@@ -737,6 +751,8 @@ async fn relay(
                     octets,
                     send_errors,
                     phone_packets,
+                    reanchors = retimer.reanchors,
+                    max_hold_ms = held_ms,
                     "homekit: camera stream counters"
                 );
                 if started {

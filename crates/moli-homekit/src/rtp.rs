@@ -2,6 +2,8 @@
 //! SPS and PPS travel together in one STAP-A, big NAL units are cut in
 //! FU-A fragments, the marker bit closes each frame.
 
+use std::time::{Duration, Instant};
+
 use moli_net::h264::{NAL_PPS, NAL_SPS, nal_type};
 
 /// Builds the RTP packets of one stream.
@@ -102,6 +104,98 @@ impl Packetizer {
     }
 }
 
+/// Maps the camera's RTP clock to the one the phone sees, in real time.
+///
+/// The phone plays by RTP timestamps against its own arrival clock. A source
+/// that stalls and then bursts (a console serving a camera over RTSP) would
+/// make every frame of the burst look late, and the phone gives up. So frames
+/// that arrive early are held back until their time (never long), and when
+/// the stream falls behind the wall clock it is *re-anchored*: the timeline
+/// goes on from the last timestamp sent plus the real time elapsed, always
+/// moving forward.
+#[derive(Debug)]
+pub struct Retimer {
+    anchor_ts: u32,
+    anchor_at: Instant,
+    out_base: u32,
+    last_out: u32,
+    last_at: Instant,
+    started: bool,
+    /// Times the stream was put back in step with the clock.
+    pub reanchors: u32,
+}
+
+/// A frame earlier than this is held until its time; further ahead, the
+/// source's clock is not trusted and the stream is re-anchored.
+const MAX_HOLD: Duration = Duration::from_millis(300);
+/// A frame later than this behind its time puts the stream back in step.
+const MAX_LATE: Duration = Duration::from_millis(250);
+const CLOCK: f64 = 90_000.0;
+
+impl Retimer {
+    #[must_use]
+    pub fn new(first_out: u32, now: Instant) -> Self {
+        Self {
+            anchor_ts: 0,
+            anchor_at: now,
+            out_base: first_out,
+            last_out: first_out,
+            last_at: now,
+            started: false,
+            reanchors: 0,
+        }
+    }
+
+    /// For a frame of source timestamp `ts` arriving at `now`: how long to
+    /// hold it, and the timestamp to send it with.
+    pub fn frame(&mut self, ts: u32, now: Instant) -> (Duration, u32) {
+        if !self.started {
+            self.started = true;
+            self.anchor(ts, now, now);
+            return (Duration::ZERO, self.out_base);
+        }
+        let ticks = ts.wrapping_sub(self.anchor_ts).cast_signed();
+        let due = if ticks >= 0 {
+            Some(self.anchor_at + Duration::from_secs_f64(f64::from(ticks) / CLOCK))
+        } else {
+            None
+        };
+        let hold = match due {
+            Some(due) if due > now => due - now,
+            _ => Duration::ZERO,
+        };
+        let late = due.is_none_or(|due| now > due + MAX_LATE);
+        if late || hold > MAX_HOLD {
+            self.reanchors += 1;
+            let elapsed = now.saturating_duration_since(self.last_at).as_secs_f64();
+            let step = ((elapsed * CLOCK) as u32).max(1);
+            let base = self.last_out.wrapping_add(step);
+            self.anchor_ts = ts;
+            self.anchor_at = now;
+            self.out_base = base;
+            self.last_out = base;
+            self.last_at = now;
+            return (Duration::ZERO, base);
+        }
+        let out = self.out_base.wrapping_add(ticks.cast_unsigned());
+        // Never backwards, never equal.
+        let out = if out.wrapping_sub(self.last_out).cast_signed() > 0 {
+            out
+        } else {
+            self.last_out.wrapping_add(1)
+        };
+        self.last_out = out;
+        self.last_at = now + hold;
+        (hold, out)
+    }
+
+    fn anchor(&mut self, ts: u32, at: Instant, now: Instant) {
+        self.anchor_ts = ts;
+        self.anchor_at = at;
+        self.last_at = now;
+    }
+}
+
 /// An RTCP sender report (no report blocks).
 #[must_use]
 pub fn sender_report(
@@ -185,5 +279,63 @@ mod tests {
         assert_eq!(&sr[..4], &[0x80, 200, 0, 6]);
         assert_eq!(&sr[8..16], &0x0102_0304_0506_0708u64.to_be_bytes());
         assert_eq!(&sr[24..], &11u32.to_be_bytes());
+    }
+
+    #[test]
+    fn a_steady_source_keeps_its_own_clock() {
+        let t0 = Instant::now();
+        let mut r = Retimer::new(1000, t0);
+        assert_eq!(r.frame(500_000, t0), (Duration::ZERO, 1000));
+        // 30 fps, arriving on time: the source's step, no wait.
+        let (wait, out) = r.frame(503_000, t0 + Duration::from_millis(34));
+        assert_eq!(out, 4000);
+        assert!(wait.is_zero());
+        assert_eq!(r.reanchors, 0);
+    }
+
+    #[test]
+    fn a_burst_is_spread_over_its_timestamps() {
+        let t0 = Instant::now();
+        let mut r = Retimer::new(0, t0);
+        r.frame(0, t0);
+        // Ten frames of 33 ms arriving at once: each waits for its time.
+        let mut last = Duration::ZERO;
+        for i in 1..=5u32 {
+            let (wait, out) = r.frame(i * 3000, t0);
+            assert_eq!(out, i * 3000);
+            assert!(wait > last);
+            last = wait;
+        }
+        assert!(last < Duration::from_millis(200));
+    }
+
+    #[test]
+    fn after_a_stall_the_stream_goes_on_from_now_and_never_backwards() {
+        let t0 = Instant::now();
+        let mut r = Retimer::new(0, t0);
+        r.frame(0, t0);
+        r.frame(3000, t0 + Duration::from_millis(33));
+        // Two seconds without a frame, then a burst of old timestamps.
+        let later = t0 + Duration::from_millis(2033);
+        let (wait, out) = r.frame(6000, later);
+        assert!(wait.is_zero());
+        assert_eq!(r.reanchors, 1);
+        // About two seconds of the 90 kHz clock went by.
+        assert!((170_000..190_000).contains(&out), "{out}");
+        let (_, next) = r.frame(9000, later);
+        assert_eq!(next, out + 3000);
+        // A source clock that jumps back is re-anchored, still forward.
+        let (_, back) = r.frame(100, later);
+        assert!(back.wrapping_sub(next).cast_signed() > 0);
+    }
+
+    #[test]
+    fn timestamps_wrap_around_without_a_hitch() {
+        let t0 = Instant::now();
+        let mut r = Retimer::new(u32::MAX - 1000, t0);
+        r.frame(u32::MAX - 100, t0);
+        let (_, out) = r.frame(2900, t0 + Duration::from_millis(33));
+        // 2900 is 3001 ticks after u32::MAX - 100.
+        assert_eq!(out, (u32::MAX - 1000).wrapping_add(3001));
     }
 }

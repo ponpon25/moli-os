@@ -31,8 +31,6 @@ const TTL_SHORT: u32 = 120;
 pub struct Service {
     pub name: String,
     pub port: u16,
-    pub device_id: String,
-    pub setup_hash: String,
     pub address: Option<IpAddr>,
 }
 
@@ -78,7 +76,7 @@ fn label_safe(text: &str) -> String {
 
 impl Zone {
     pub fn new(service: &Service, address: Ipv4Addr, state: &Announcement) -> Self {
-        let tail: String = service
+        let tail: String = state
             .device_id
             .chars()
             .filter(char::is_ascii_hexdigit)
@@ -93,13 +91,13 @@ impl Zone {
         let txt = vec![
             format!("c#={}", state.config_number),
             "ff=0".to_owned(),
-            format!("id={}", service.device_id),
+            format!("id={}", state.device_id),
             "md=Moli".to_owned(),
             "pv=1.1".to_owned(),
             "s#=1".to_owned(),
             format!("sf={}", u8::from(!state.paired)),
             "ci=2".to_owned(),
-            format!("sh={}", service.setup_hash),
+            format!("sh={}", state.setup_hash),
         ];
         let records = vec![
             Record {
@@ -347,7 +345,12 @@ pub async fn run(
             }
             changed = state.changed() => {
                 if changed.is_err() { break; }
-                zone = Zone::new(&service, address, &state.borrow_and_update().clone());
+                let next = Zone::new(&service, address, &state.borrow_and_update().clone());
+                // A new identity: the old one is withdrawn first.
+                if next.hostname != zone.hostname {
+                    send(encode_response(0, zone.all(), true), group).await;
+                }
+                zone = next;
                 send(encode_response(0, zone.all(), false), group).await;
                 again = Some(tokio::time::Instant::now() + Duration::from_secs(1));
             }
@@ -385,8 +388,6 @@ mod tests {
         let service = Service {
             name: "Moli".into(),
             port: 51827,
-            device_id: "AA:BB:CC:DD:EE:FF".into(),
-            setup_hash: "rxqrlA==".into(),
             address: None,
         };
         Zone::new(
@@ -395,6 +396,8 @@ mod tests {
             &Announcement {
                 config_number: 7,
                 paired: false,
+                device_id: "AA:BB:CC:DD:EE:FF".into(),
+                setup_hash: "rxqrlA==".into(),
             },
         )
     }

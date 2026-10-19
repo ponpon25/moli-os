@@ -260,7 +260,7 @@ impl Conn {
                 _ => *owner = Some(self.id),
             }
         }
-        let challenge = srp::Server::new(self.shared.setup_code());
+        let challenge = srp::Server::new(&self.shared.setup_code());
         let reply = tlv_reply(2)
             .with(tlv::PUBLIC_KEY, challenge.public_key())
             .with(tlv::SALT, challenge.salt());
@@ -339,11 +339,12 @@ impl Conn {
             "Pair-Setup-Accessory-Sign-Info",
         );
         let device_id = self.shared.device_id();
-        let public = self.shared.identity.public_key().as_ref().to_vec();
+        let identity = self.shared.identity();
+        let public = identity.public_key().as_ref().to_vec();
         let mut signed = accessory_x.to_vec();
         signed.extend_from_slice(device_id.as_bytes());
         signed.extend_from_slice(&public);
-        let signature = self.shared.identity.sign(&signed);
+        let signature = identity.sign(&signed);
         let inner = Tlv::new()
             .with(tlv::IDENTIFIER, device_id.as_bytes())
             .with(tlv::PUBLIC_KEY, &public)
@@ -399,7 +400,7 @@ impl Conn {
         let mut signed = accessory_pub.clone();
         signed.extend_from_slice(device_id.as_bytes());
         signed.extend_from_slice(controller_pub);
-        let signature = self.shared.identity.sign(&signed);
+        let signature = self.shared.identity().sign(&signed);
         let inner = Tlv::new()
             .with(tlv::IDENTIFIER, device_id.as_bytes())
             .with(tlv::SIGNATURE, signature.as_ref());

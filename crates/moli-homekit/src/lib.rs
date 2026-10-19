@@ -115,6 +115,21 @@ impl Default for Config {
 pub(crate) struct Announcement {
     pub config_number: u32,
     pub paired: bool,
+    /// The bridge's pairing identifier (`AA:BB:CC:DD:EE:FF`).
+    pub device_id: String,
+    /// `sh` of the advertisement.
+    pub setup_hash: String,
+}
+
+impl Announcement {
+    fn of(saved: &Saved) -> Self {
+        Self {
+            config_number: saved.config_number,
+            paired: saved.paired(),
+            device_id: saved.device_id.clone(),
+            setup_hash: setup::setup_hash(&saved.setup_id, &saved.device_id),
+        }
+    }
 }
 
 /// Everything the connections and the maintenance task share.
@@ -125,8 +140,8 @@ pub(crate) struct Shared {
     saved: Mutex<Saved>,
     last_written: Mutex<Vec<u8>>,
     catalog: RwLock<Arc<Catalog>>,
-    pub identity: Ed25519KeyPair,
-    code: String,
+    identity: RwLock<Arc<Ed25519KeyPair>>,
+    code: RwLock<String>,
     /// A characteristic whose value (maybe) changed: `(aid, iid)`.
     pub updates: broadcast::Sender<(u64, u64)>,
     /// A controller was removed (its identifier), or everyone (`None`).
@@ -163,8 +178,12 @@ impl Shared {
         self.port
     }
 
-    pub fn setup_code(&self) -> &str {
-        &self.code
+    pub fn setup_code(&self) -> String {
+        self.code.read().expect("code lock").clone()
+    }
+
+    pub fn identity(&self) -> Arc<Ed25519KeyPair> {
+        self.identity.read().expect("identity lock").clone()
     }
 
     pub fn device_id(&self) -> String {
@@ -208,10 +227,7 @@ impl Shared {
     }
 
     fn announce_from(&self, saved: &Saved) {
-        let next = Announcement {
-            config_number: saved.config_number,
-            paired: saved.paired(),
-        };
+        let next = Announcement::of(saved);
         self.announce.send_if_modified(|current| {
             let changed = *current != next;
             *current = next;
@@ -434,9 +450,14 @@ impl HomeKit {
             controllers: saved.pairings.len(),
             exposed: catalog.accessories.len().saturating_sub(1),
             truncated: catalog.truncated,
-            setup_code: reveal.then(|| self.0.code.clone()),
-            setup_uri: reveal
-                .then(|| setup::uri(&self.0.code, &saved.setup_id, setup::CATEGORY_BRIDGE)),
+            setup_code: reveal.then(|| self.0.setup_code()),
+            setup_uri: reveal.then(|| {
+                setup::uri(
+                    &self.0.setup_code(),
+                    &saved.setup_id,
+                    setup::CATEGORY_BRIDGE,
+                )
+            }),
         }
     }
 
@@ -527,6 +548,44 @@ impl HomeKit {
         self.devices().iter().any(|d| d.id == id)
     }
 
+    /// A new bridge in the eyes of HomeKit: new identity key, pairing
+    /// identifier, setup code and setup id; every phone is unpaired and
+    /// the bridge can be added again, on any iPhone, as a new accessory. The
+    /// choice of devices is kept.
+    pub async fn reset(&self) -> Result<(), StartError> {
+        let shared = &self.0;
+        let instance = InstanceId::from(NAMESPACE);
+        let code = setup::new_code();
+        let seed = random_bytes::<32>();
+        let identity = Ed25519KeyPair::from_seed_unchecked(&seed)
+            .map_err(|_| StartError::Io("cannot make an identity key".to_owned()))?;
+        for (name, value) in [
+            (SECRET_CODE, code.clone()),
+            (SECRET_IDENTITY, setup::hex(&seed)),
+        ] {
+            shared
+                .hub
+                .store_secret(&instance, name, &value)
+                .await
+                .map_err(|e| StartError::Io(e.to_string()))?;
+        }
+        {
+            let mut saved = shared.saved.lock().expect("saved lock");
+            saved.device_id = setup::new_device_id();
+            saved.setup_id = setup::new_setup_id();
+            saved.pairings.clear();
+            saved.config_number = 1;
+            saved.structure.clear();
+            *shared.identity.write().expect("identity lock") = Arc::new(identity);
+            *shared.code.write().expect("code lock") = code;
+            shared.persist(&saved);
+            shared.announce_from(&saved);
+        }
+        let _ = shared.kick.send(None);
+        shared.rebuild.notify_one();
+        Ok(())
+    }
+
     /// Unpairs every phone: they must add the bridge again.
     pub fn forget_pairings(&self) {
         {
@@ -601,10 +660,7 @@ pub async fn start(
     // A new identity under old pairings would be refused by every phone.
     let (updates, _) = broadcast::channel(256);
     let (kick, _) = broadcast::channel(16);
-    let (announce, announcement) = watch::channel(Announcement {
-        config_number: saved.config_number,
-        paired: saved.paired(),
-    });
+    let (announce, announcement) = watch::channel(Announcement::of(&saved));
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await
         .map_err(|e| StartError::Io(format!("cannot listen on port {}: {e}", config.port)))?;
@@ -619,8 +675,8 @@ pub async fn start(
         last_written: Mutex::new(Vec::new()),
         saved: Mutex::new(saved),
         catalog: RwLock::new(Arc::new(Catalog::default())),
-        identity,
-        code,
+        identity: RwLock::new(Arc::new(identity)),
+        code: RwLock::new(code),
         updates,
         kick,
         announce,
@@ -647,13 +703,9 @@ async fn run(
         name = %shared.config.name,
         "homekit: bridge ready"
     );
-    let setup_id = shared.saved.lock().expect("saved lock").setup_id.clone();
-    let device_id = shared.device_id();
     let service = mdns::Service {
         name: shared.config.name.clone(),
         port: shared.port,
-        setup_hash: setup::setup_hash(&setup_id, &device_id),
-        device_id,
         address: shared.config.address,
     };
     let mdns = tokio::spawn({

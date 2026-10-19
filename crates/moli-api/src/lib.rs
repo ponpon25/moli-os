@@ -193,6 +193,7 @@ fn house_routes(humans: &Arc<session::Sessions>, options: &Options) -> Router<Hu
         .route("/api/homekit/policy", put(homekit::set_policy))
         .route("/api/homekit/devices/{id}", put(homekit::set_device))
         .route("/api/homekit/unpair", post(homekit::unpair))
+        .route("/api/homekit/reset", post(homekit::reset))
         .layer(Extension(homekit::HomeKitGate(options.homekit.clone())))
         .route("/api/session/pin", put(rest::set_pin))
         .route(

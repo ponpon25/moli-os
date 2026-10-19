@@ -7,8 +7,10 @@
 //! - `PUT /api/homekit/devices/{id}` `{ exposed: true | false | null }`
 //!   (`null`: back to the policy)
 //! - `POST /api/homekit/unpair`: forget every phone.
+//! - `POST /api/homekit/reset`: a new bridge (new identity and code), to add
+//!   again on any iPhone.
 //!
-//! The three writes are a human's (code): they decide what leaves the house.
+//! The writes are a human's (code): they decide what leaves the house.
 
 use std::sync::Arc;
 
@@ -130,4 +132,23 @@ pub(crate) async fn unpair(
     homekit.forget_pairings();
     tracing::info!("homekit: every controller was unpaired from the dashboard");
     Json(json!({ "unpaired": true })).into_response()
+}
+
+pub(crate) async fn reset(
+    Extension(HomeKitGate(gate)): Extension<HomeKitGate>,
+    Extension(humans): Extension<Arc<Sessions>>,
+    caller: Caller,
+    headers: HeaderMap,
+) -> Response {
+    let Some(homekit) = gate else { return absent() };
+    if let Some(refusal) = humans_only(&humans, &caller, &headers) {
+        return refusal;
+    }
+    match homekit.reset().await {
+        Ok(()) => {
+            tracing::info!("homekit: the bridge got a new identity and setup code");
+            Json(json!({ "reset": true })).into_response()
+        }
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
 }

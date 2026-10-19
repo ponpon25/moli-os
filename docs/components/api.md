@@ -359,6 +359,7 @@ Limites de `Turn` : 14 derniers messages renvoyés au modèle, 2 000 caractères
 | GET | `/api/homekit` | libre ; le code d'appairage et le QR seulement à une session **humaine** | aucune | `{enabled:false}`, ou `{enabled, human, status:{name, port, policy, controllers, exposed, truncated, setup_code?, setup_uri?}, devices:[{id, name, room?, kinds, exposed, exception, absent}]}` | aucune |
 | PUT | `/api/homekit/policy` | **humain** | `{policy:"all"\|"none"}` | `{policy}` | `403` ; `503` pas de pont |
 | PUT | `/api/homekit/devices/{id}` | **humain** | `{exposed: true\|false\|null}` (`null` : suivre la politique) | `{id, exposed}` | `403` ; `404` appareil que HomeKit ne sait pas montrer ; `503` |
+| POST | `/api/homekit/reset` | **humain** | aucune | `{reset:true}` : nouvelle identité, nouvel identifiant et nouveau code ; tous les téléphones sont désappairés ; le choix des appareils est gardé | `403` ; `500` coffre ; `503` |
 | POST | `/api/homekit/unpair` | **humain** | aucune | `{unpaired:true}` (tous les téléphones sont désappairés) | `403` ; `503` |
 
 **Flux et MCP**

@@ -739,3 +739,39 @@ async fn devices_are_shown_or_hidden_one_by_one() {
     b.homekit.set_device("fake:alarm", None);
     wait_for("the alarm is back", || b.homekit.status(false).exposed == 3).await;
 }
+
+#[tokio::test]
+async fn a_reset_makes_a_new_bridge() {
+    let b = bridge("reset").await;
+    let old_code = b.homekit.status(true).setup_code.unwrap();
+    let phone = Controller::new("phone-3");
+    let mut client = Client::connect(b.homekit.port()).await;
+    phone.pair(&mut client, &old_code).await.unwrap();
+    b.homekit.set_device("fake:alarm", Some(false));
+    b.homekit.reset().await.unwrap();
+
+    let status = b.homekit.status(true);
+    assert_eq!(status.controllers, 0);
+    assert_ne!(status.setup_code.unwrap(), old_code);
+    // The old code no longer opens it; the old phone is a stranger.
+    let mut again = Client::connect(b.homekit.port()).await;
+    assert_eq!(
+        phone.pair(&mut again, &old_code).await,
+        Err(tlv::ERR_AUTHENTICATION)
+    );
+    let mut again = Client::connect(b.homekit.port()).await;
+    assert_eq!(phone.verify(&mut again).await, Err(tlv::ERR_AUTHENTICATION));
+    // The new code pairs, and the choice of devices survived.
+    let new_code = b.homekit.status(true).setup_code.unwrap();
+    let mut fresh = Client::connect(b.homekit.port()).await;
+    Controller::new("phone-4")
+        .pair(&mut fresh, &new_code)
+        .await
+        .unwrap();
+    assert!(
+        b.homekit
+            .devices()
+            .iter()
+            .any(|d| d.id == "fake:alarm" && !d.exposed)
+    );
+}

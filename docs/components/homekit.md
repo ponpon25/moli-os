@@ -31,6 +31,14 @@ Une fois le pont appairé à un iPhone, les autres personnes de la maison s'invi
 Maison (*Inviter des personnes*) : le pont refuse un second appairage par code tant qu'un téléphone
 est appairé.
 
+## Réinitialiser le pont
+
+*Désappairer tous les téléphones* retire les iPhone mais garde l'identité du pont. *Nouveau pont*
+(carte HomeKit) fait repartir de zéro : nouvelle clé d'identité, nouvel identifiant, nouveau code et
+nouveau QR ; Moli se présente comme un accessoire neuf (l'ancien est retiré du réseau), qu'on peut
+ajouter sur n'importe quel iPhone, par exemple un autre foyer. Le choix des appareils est gardé ;
+penser à retirer l'ancien « Moli » de l'app Maison.
+
 ## Choisir ce que HomeKit voit
 
 La carte propose :

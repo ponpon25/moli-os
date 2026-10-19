@@ -380,5 +380,9 @@
   "systeme.homekit.type.light_level": "Light level",
   "systeme.homekit.type.leak": "Water leak",
   "systeme.homekit.type.smoke": "Smoke",
-  "systeme.homekit.type.alarm": "Alarm"
+  "systeme.homekit.type.alarm": "Alarm",
+  "systeme.homekit.nouveau": "New bridge (another iPhone)",
+  "systeme.homekit.nouveau_aide": "New identity and new code: Moli shows up as a brand-new accessory, to add on any iPhone",
+  "systeme.homekit.nouveau_confirme": "Reset the bridge? It gets a new identity and code, every phone is unpaired (remove \"Moli\" from the Home app before adding it again). Your device choices are kept.",
+  "systeme.homekit.nouveau_fait": "Bridge reset: a new code is shown."
 }

@@ -83,6 +83,12 @@
     if (done) note(t('systeme.homekit.reinitialise'), 'info');
   }
 
+  async function reset() {
+    if (!confirm(t('systeme.homekit.nouveau_confirme'))) return;
+    const done = await write('POST', '/api/homekit/reset', undefined, t('systeme.homekit.titre'), reset);
+    if (done) note(t('systeme.homekit.nouveau_fait'), 'info');
+  }
+
   /** Asks for the code, then reads the page again (the setup code comes
    *  with a person's session). */
   function reveal() {
@@ -120,9 +126,12 @@
             <button class="btn" onclick={reveal}>{t('systeme.homekit.afficher_code')}</button>
           </div>
         {/if}
-        {#if status.controllers}
-          <button class="btn danger" disabled={busy} onclick={unpair}>{t('systeme.homekit.reinitialiser')}</button>
-        {/if}
+        <div class="actions">
+          {#if status.controllers}
+            <button class="btn danger" disabled={busy} onclick={unpair}>{t('systeme.homekit.reinitialiser')}</button>
+          {/if}
+          <button class="btn danger" disabled={busy} onclick={reset} title={t('systeme.homekit.nouveau_aide')}>{t('systeme.homekit.nouveau')}</button>
+        </div>
       </div>
 
       <div class="policy" role="radiogroup" aria-label={t('systeme.homekit.par_defaut')}>
@@ -258,6 +267,11 @@
     font-size: 26px;
     font-weight: 700;
     letter-spacing: 0.08em;
+  }
+
+  .actions {
+    display: grid;
+    gap: 8px;
   }
 
   .policy {

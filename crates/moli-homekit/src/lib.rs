@@ -319,8 +319,14 @@ impl Shared {
                 if self.offline(point) {
                     return Err(ST_COMMUNICATION);
                 }
-                let sample = self.hub.state(point).ok_or(ST_COMMUNICATION)?;
-                to_hap(*conv, &sample.value).ok_or(ST_COMMUNICATION)
+                // A device that answers but has no value for this point (a
+                // lamp in colour mode has no colour temperature) is not
+                // unresponsive: the Home app would show the whole lamp so.
+                Ok(self
+                    .hub
+                    .state(point)
+                    .and_then(|sample| to_hap(*conv, &sample.value))
+                    .unwrap_or_else(|| accessories::placeholder(c)))
             }
             Bind::Color(point, part) => {
                 if self.offline(point) {

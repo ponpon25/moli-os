@@ -104,10 +104,17 @@ n'est pas appliqué (il faudrait recoder) : c'est le débit de la qualité lue. 
 lente, c'est la qualité basse de la caméra qu'on obtient, pas moins. Profil et niveau annoncés : High 4.0 ;
 le flux garde ce que la caméra encode (le décodeur lit le SPS).
 
-**Pas d'audio.** Les caméras envoient de l'AAC-LC, HomeKit n'accepte que l'AAC-ELD ou l'Opus : il
-faudrait un transcodage (une bibliothèque Opus et un décodeur AAC, ou un sidecar ffmpeg). Il n'y a donc ni
-micro ni haut-parleur (services `Microphone` / `Speaker` non annoncés) ; la caractéristique audio
-obligatoire est annoncée (Opus) mais aucun paquet audio ne part.
+**Le son.** Les caméras envoient de l'AAC-LC, HomeKit n'accepte que l'AAC-ELD ou l'Opus. Moli
+**transcode** donc le son, en Rust pur et sans ffmpeg : le pilote décode l'AAC (`moli-audio`, Symphonia),
+`audio.rs` ramène l'échantillonnage à 16 kHz (filtre sinc fenêtré, sans clic entre deux morceaux), cut en
+paquets de 20 ms et les encode en **Opus** (crate `opus-rs`, port de libopus en Rust, BSD-3-Clause, sans
+dépendance) à 24 kbit/s ; les paquets partent en SRTP avec les clés audio, le SSRC audio annoncé et le type de
+charge choisi par l'iPhone, avec ses propres rapports d'émetteur. Seul l'Opus mono 16 kHz est annoncé
+(pas d'AAC-ELD). Le son ne démarre qu'avec l'image. Pas de piste audio sur la caméra : pas de son, et le
+service Microphone reste (l'app Maison l'exige) mais Volume et Mute sont acceptés sans effet. Le coût :
+rien au repos ; en usage, environ 2 % d'un cœur par flux pour le son (mesuré : 30 s de son 48 kHz → 0,6 s de
+calcul sur un Xeon E5-2680 v3, compilation `cargo test --release`, c'est-à-dire sans l'`opt-level = "s"` de
+l'image, qui sera un peu plus lente).
 
 **Limites.** Deux flux par caméra, six au total. Un flux s'arrête sur `End`, quand l'iPhone ferme sa
 connexion, ou quand il se tait plus de 30 s après avoir parlé. Pas de HomeKit Secure Video (pas

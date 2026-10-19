@@ -131,6 +131,64 @@ pub fn parse_sdp(sdp: &str) -> Option<VideoTrack> {
     track
 }
 
+/// The audio track of an SDP, when it is AAC as RFC 3640 carries it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AudioTrack {
+    pub payload_type: u8,
+    pub control: String,
+    /// The `a=fmtp:` parameters (`config=…;sizelength=…`).
+    pub fmtp: String,
+}
+
+/// The first `MPEG4-GENERIC` audio section of an SDP that the server sends
+/// (not a `sendonly` one, which is for talking back).
+#[must_use]
+pub fn parse_audio(sdp: &str) -> Option<AudioTrack> {
+    let mut track: Option<AudioTrack> = None;
+    let mut in_audio = false;
+    let mut generic = false;
+    let mut found: Option<AudioTrack> = None;
+    let mut send_only = false;
+    let mut finish = |track: &mut Option<AudioTrack>, generic: bool, send_only: bool| {
+        if found.is_none()
+            && generic
+            && !send_only
+            && let Some(t) = track.take()
+        {
+            found = Some(t);
+        }
+        *track = None;
+    };
+    for line in sdp.lines().map(str::trim) {
+        if let Some(media) = line.strip_prefix("m=") {
+            finish(&mut track, generic, send_only);
+            in_audio = media.starts_with("audio ");
+            (generic, send_only) = (false, false);
+            if in_audio {
+                let pt = media.split_whitespace().nth(3).and_then(|p| p.parse().ok());
+                track = pt.map(|payload_type| AudioTrack {
+                    payload_type,
+                    ..AudioTrack::default()
+                });
+            }
+        } else if in_audio && let Some(t) = track.as_mut() {
+            if let Some(control) = line.strip_prefix("a=control:") {
+                control.clone_into(&mut t.control);
+            } else if let Some(map) = line.strip_prefix("a=rtpmap:") {
+                generic = map.to_ascii_uppercase().contains("MPEG4-GENERIC");
+            } else if let Some(fmtp) = line.strip_prefix("a=fmtp:") {
+                fmtp.split_once(' ')
+                    .map_or(fmtp, |(_, p)| p)
+                    .clone_into(&mut t.fmtp);
+            } else if line == "a=sendonly" {
+                send_only = true;
+            }
+        }
+    }
+    finish(&mut track, generic, send_only);
+    found
+}
+
 fn base64_decode(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let (mut acc, mut bits) = (0u32, 0);
@@ -152,6 +210,13 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+/// RTP of a stream, as it comes out of the connection.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Media {
+    Video(Vec<u8>),
+    Audio(Vec<u8>),
 }
 
 enum Message {
@@ -212,8 +277,9 @@ impl Client {
         }
     }
 
-    /// OPTIONS, DESCRIBE, SETUP of the video track, PLAY.
-    pub async fn play_video(&mut self) -> anyhow::Result<VideoTrack> {
+    /// OPTIONS, DESCRIBE, SETUP of the video track (and of the audio track
+    /// when asked for and there is one), PLAY.
+    pub async fn play(&mut self, audio: bool) -> anyhow::Result<(VideoTrack, Option<AudioTrack>)> {
         let url = self.base.clone();
         self.request("OPTIONS", &url, &[]).await?;
         let (_, headers, body) = self
@@ -232,19 +298,44 @@ impl Client {
             .await?;
         self.session = header(&headers, "session")
             .map(|s| s.split(';').next().unwrap_or_default().trim().to_owned());
+        let audio = if audio { parse_audio(&sdp) } else { None };
+        if let Some(track) = &audio {
+            self.request(
+                "SETUP",
+                &join(&base, &track.control),
+                &[("Transport", "RTP/AVP/TCP;unicast;interleaved=2-3")],
+            )
+            .await?;
+        }
         self.request("PLAY", &url, &[("Range", "npt=0.000-")])
             .await?;
         self.keepalive.reset();
-        Ok(track)
+        Ok((track, audio))
     }
 
-    /// The next RTP packet of the video (interleaved channel 0). Keeps the
-    /// session alive meanwhile.
+    /// OPTIONS, DESCRIBE, SETUP, PLAY of the video alone.
+    pub async fn play_video(&mut self) -> anyhow::Result<VideoTrack> {
+        self.play(false).await.map(|(video, _)| video)
+    }
+
+    /// The next RTP packet of the video (interleaved channel 0).
     pub async fn next_packet(&mut self) -> anyhow::Result<Vec<u8>> {
         loop {
+            if let Media::Video(packet) = self.next_media().await? {
+                return Ok(packet);
+            }
+        }
+    }
+
+    /// The next RTP packet of the video (channel 0) or of the audio
+    /// (channel 2). Keeps the session alive meanwhile.
+    pub async fn next_media(&mut self) -> anyhow::Result<Media> {
+        loop {
             while let Some(message) = self.parse()? {
-                if let Message::Frame(0, packet) = message {
-                    return Ok(packet);
+                match message {
+                    Message::Frame(0, packet) => return Ok(Media::Video(packet)),
+                    Message::Frame(2, packet) => return Ok(Media::Audio(packet)),
+                    _ => {}
                 }
             }
             let mut chunk = [0u8; 8192];
@@ -479,5 +570,19 @@ a=control:trackID=0\r\nm=audio 0 RTP/AVP 97\r\na=rtpmap:97 MPEG4-GENERIC/48000/1
         assert!(seen[2].starts_with("SETUP rtsp://cam/stream/trackID=0 RTSP/1.0"));
         assert!(seen[2].contains("interleaved=0-1"));
         assert!(seen[3].contains("Session: 1234\r\n"));
+    }
+
+    #[test]
+    fn the_aac_track_is_found_and_the_talkback_one_is_not() {
+        let sdp = "v=0\r\nm=video 0 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\na=control:track1\r\n\
+m=audio 0 RTP/AVP 97\r\na=rtpmap:97 MPEG4-GENERIC/16000\r\n\
+a=fmtp:97 profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1408\r\n\
+a=recvonly\r\na=control:track2\r\nm=audio 0 RTP/AVP 0\r\na=control:track3\r\na=rtpmap:0 PCMU/8000\r\na=sendonly\r\n";
+        let audio = parse_audio(sdp).unwrap();
+        assert_eq!((audio.payload_type, audio.control.as_str()), (97, "track2"));
+        assert!(audio.fmtp.ends_with("config=1408"), "{}", audio.fmtp);
+        assert!(parse_audio(SDP.split("m=audio").next().unwrap()).is_none());
+        // The only audio is G.711 for talking back: no track.
+        assert!(parse_audio("m=audio 0 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n").is_none());
     }
 }

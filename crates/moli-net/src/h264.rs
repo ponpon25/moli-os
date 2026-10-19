@@ -128,6 +128,13 @@ impl Depacketizer {
     }
 }
 
+/// The payload of an RTP packet (past the header, its CSRCs and extension,
+/// before any padding).
+#[must_use]
+pub fn rtp_payload(packet: &[u8]) -> Option<&[u8]> {
+    Rtp::parse(packet).map(|r| r.payload)
+}
+
 /// The fixed and variable parts of an RTP packet that matter here.
 struct Rtp<'a> {
     marker: bool,

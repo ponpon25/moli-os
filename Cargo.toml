@@ -72,6 +72,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 mime_guess = { version = "2", default-features = false }
 rmcp = { version = "3.5", features = ["server", "macros", "transport-streamable-http-server"] }
+opus-rs = "0.1"
 rumqttc = { version = "0.25", default-features = false }
 rust-embed = "8"
 schemars = "1"

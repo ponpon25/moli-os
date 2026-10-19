@@ -121,6 +121,8 @@ pub struct Retimer {
     last_out: u32,
     last_at: Instant,
     started: bool,
+    /// Ticks per second of the timestamps.
+    hz: f64,
     /// Times the stream was put back in step with the clock.
     pub reanchors: u32,
 }
@@ -130,11 +132,10 @@ pub struct Retimer {
 const MAX_HOLD: Duration = Duration::from_millis(300);
 /// A frame later than this behind its time puts the stream back in step.
 const MAX_LATE: Duration = Duration::from_millis(250);
-const CLOCK: f64 = 90_000.0;
 
 impl Retimer {
     #[must_use]
-    pub fn new(first_out: u32, now: Instant) -> Self {
+    pub fn new(first_out: u32, now: Instant, hz: f64) -> Self {
         Self {
             anchor_ts: 0,
             anchor_at: now,
@@ -142,6 +143,7 @@ impl Retimer {
             last_out: first_out,
             last_at: now,
             started: false,
+            hz,
             reanchors: 0,
         }
     }
@@ -156,7 +158,7 @@ impl Retimer {
         }
         let ticks = ts.wrapping_sub(self.anchor_ts).cast_signed();
         let due = if ticks >= 0 {
-            Some(self.anchor_at + Duration::from_secs_f64(f64::from(ticks) / CLOCK))
+            Some(self.anchor_at + Duration::from_secs_f64(f64::from(ticks) / self.hz))
         } else {
             None
         };
@@ -168,7 +170,7 @@ impl Retimer {
         if late || hold > MAX_HOLD {
             self.reanchors += 1;
             let elapsed = now.saturating_duration_since(self.last_at).as_secs_f64();
-            let step = ((elapsed * CLOCK) as u32).max(1);
+            let step = ((elapsed * self.hz) as u32).max(1);
             let base = self.last_out.wrapping_add(step);
             self.anchor_ts = ts;
             self.anchor_at = now;
@@ -284,7 +286,7 @@ mod tests {
     #[test]
     fn a_steady_source_keeps_its_own_clock() {
         let t0 = Instant::now();
-        let mut r = Retimer::new(1000, t0);
+        let mut r = Retimer::new(1000, t0, 90_000.0);
         assert_eq!(r.frame(500_000, t0), (Duration::ZERO, 1000));
         // 30 fps, arriving on time: the source's step, no wait.
         let (wait, out) = r.frame(503_000, t0 + Duration::from_millis(34));
@@ -296,7 +298,7 @@ mod tests {
     #[test]
     fn a_burst_is_spread_over_its_timestamps() {
         let t0 = Instant::now();
-        let mut r = Retimer::new(0, t0);
+        let mut r = Retimer::new(0, t0, 90_000.0);
         r.frame(0, t0);
         // Ten frames of 33 ms arriving at once: each waits for its time.
         let mut last = Duration::ZERO;
@@ -312,7 +314,7 @@ mod tests {
     #[test]
     fn after_a_stall_the_stream_goes_on_from_now_and_never_backwards() {
         let t0 = Instant::now();
-        let mut r = Retimer::new(0, t0);
+        let mut r = Retimer::new(0, t0, 90_000.0);
         r.frame(0, t0);
         r.frame(3000, t0 + Duration::from_millis(33));
         // Two seconds without a frame, then a burst of old timestamps.
@@ -332,7 +334,7 @@ mod tests {
     #[test]
     fn timestamps_wrap_around_without_a_hitch() {
         let t0 = Instant::now();
-        let mut r = Retimer::new(u32::MAX - 1000, t0);
+        let mut r = Retimer::new(u32::MAX - 1000, t0, 90_000.0);
         r.frame(u32::MAX - 100, t0);
         let (_, out) = r.frame(2900, t0 + Duration::from_millis(33));
         // 2900 is 3001 ticks after u32::MAX - 100.

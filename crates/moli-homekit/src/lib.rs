@@ -31,6 +31,7 @@
 )]
 
 mod accessories;
+mod audio;
 mod bigint;
 mod camera;
 mod crypto;

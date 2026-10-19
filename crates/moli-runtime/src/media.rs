@@ -93,6 +93,8 @@ pub enum SnapshotError {
 pub struct LiveWant {
     pub width: u32,
     pub height: u32,
+    /// Sound too, when the camera has some.
+    pub audio: bool,
 }
 
 /// One video frame, as the camera encoded it (H.264, no start codes).
@@ -116,6 +118,29 @@ impl std::fmt::Debug for VideoFrame {
     }
 }
 
+/// A little sound, decoded: 16-bit mono samples at the camera's rate.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AudioChunk {
+    pub rate: u32,
+    pub samples: Vec<i16>,
+}
+
+impl std::fmt::Debug for AudioChunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AudioChunk")
+            .field("rate", &self.rate)
+            .field("samples", &self.samples.len())
+            .finish()
+    }
+}
+
+/// What a live stream brings, in the order it comes.
+#[derive(Debug)]
+pub enum LiveItem {
+    Video(VideoFrame),
+    Audio(AudioChunk),
+}
+
 /// What an opened stream says of itself.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LiveInfo {
@@ -124,13 +149,15 @@ pub struct LiveInfo {
     /// Parameter sets known at the start (the SDP's), NAL units.
     pub sps: Vec<u8>,
     pub pps: Vec<u8>,
+    /// The sample rate of the sound it brings, if it does.
+    pub audio_rate: Option<u32>,
 }
 
 /// A live H.264 stream being read. Dropping it closes it.
 pub trait LiveStream: Send {
     fn info(&self) -> &LiveInfo;
-    /// The next frame; an error ends the stream.
-    fn next_frame(&mut self) -> BoxFuture<'_, anyhow::Result<VideoFrame>>;
+    /// The next frame or bit of sound; an error ends the stream.
+    fn next(&mut self) -> BoxFuture<'_, anyhow::Result<LiveItem>>;
 }
 
 /// Opens live streams of a camera on demand. Nothing runs while nobody

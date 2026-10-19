@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use moli_core::DeviceId;
-use moli_runtime::media::LiveWant;
+use moli_runtime::media::{LiveItem, LiveWant};
 use ring::rand::{SecureRandom as _, SystemRandom};
 use serde_json::Value as Json;
 use tokio::net::UdpSocket;
@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::Shared;
 use crate::accessories::{OK, ST_COMMUNICATION, ST_INVALID};
+use crate::audio::OpusPipe;
 use crate::http::Response;
 use crate::rtp::{Packetizer, Retimer, ntp_now, sender_report};
 use crate::srtp::{KEY_LEN, SALT_LEN, Sender};
@@ -131,21 +132,16 @@ pub fn supported_video() -> Vec<u8> {
     Tlv::new().with(1, config.encode()).encode()
 }
 
-/// `SupportedAudioStreamConfiguration`: required by the Home app though no
-/// audio is sent. As HAP-python's: Opus 24 kHz and AAC-ELD 16 kHz.
+/// `SupportedAudioStreamConfiguration`: Opus, mono, 16 kHz, the one codec
+/// Moli can make without a C library (the Home app also knows AAC-ELD,
+/// which is not offered).
 pub fn supported_audio() -> Vec<u8> {
-    let codec = |kind: u8, rate: u8| {
-        let params = Tlv::new()
-            .with(1, [1]) // one channel
-            .with(2, [0]) // variable bit rate
-            .with(3, [rate]);
-        Tlv::new().with(1, [kind]).with(2, params.encode()).encode()
-    };
-    Tlv::new()
-        .with(1, codec(3, 2))
-        .with(1, codec(2, 1))
-        .with(2, [0])
-        .encode()
+    let params = Tlv::new()
+        .with(1, [1]) // one channel
+        .with(2, [0]) // variable bit rate
+        .with(3, [1]); // 16 kHz
+    let codec = Tlv::new().with(1, [3]).with(2, params.encode());
+    Tlv::new().with(1, codec.encode()).with(2, [0]).encode()
 }
 
 /// `SupportedRTPConfiguration`: SRTP with AES-CM-128 and HMAC-SHA1-80.
@@ -272,11 +268,20 @@ pub struct VideoChoice {
     pub mtu: usize,
 }
 
+/// The audio the phone chose (Opus is the only codec offered).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioChoice {
+    pub payload_type: u8,
+    pub ssrc: Option<u32>,
+    pub max_bitrate: u16,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Selected {
     pub session: [u8; 16],
     pub command: Command,
     pub video: Option<VideoChoice>,
+    pub audio: Option<AudioChoice>,
 }
 
 pub fn parse_selected(bytes: &[u8]) -> Option<Selected> {
@@ -310,10 +315,27 @@ pub fn parse_selected(bytes: &[u8]) -> Option<Selected> {
             mtu: le16(&rtp, 5).map_or(DEFAULT_MTU, usize::from),
         })
     });
+    let audio = t.get(3).and_then(|a| {
+        let a = Tlv::parse(a)?;
+        // 3 is Opus; anything else (AAC-ELD) is not made here.
+        (a.byte(1)? == 3).then_some(())?;
+        let rtp = Tlv::parse(a.get(3)?)?;
+        Some(AudioChoice {
+            payload_type: rtp.byte(1).unwrap_or(110),
+            ssrc: rtp
+                .get(2)
+                .and_then(|b| Some(u32::from_le_bytes(b.try_into().ok()?))),
+            max_bitrate: rtp
+                .get(3)
+                .and_then(|b| Some(u16::from_le_bytes(b.try_into().ok()?)))
+                .unwrap_or(0),
+        })
+    });
     Some(Selected {
         session: control.get(1)?.try_into().ok()?,
         command,
         video,
+        audio,
     })
 }
 
@@ -324,8 +346,9 @@ struct Pending {
     owner: u64,
     request: SetupRequest,
     video_socket: UdpSocket,
-    _audio_socket: UdpSocket,
+    audio_socket: Arc<UdpSocket>,
     ssrc: u32,
+    audio_ssrc: u32,
     created: Instant,
 }
 
@@ -485,8 +508,8 @@ impl Shared {
         ) else {
             return refuse(false);
         };
-        let ssrc = random_u32();
-        let reply = setup_response(&request, local, video_port, audio_port, ssrc, random_u32());
+        let (ssrc, audio_ssrc) = (random_u32(), random_u32());
+        let reply = setup_response(&request, local, video_port, audio_port, ssrc, audio_ssrc);
         self.streams.lock().pending.insert(
             request.session,
             Pending {
@@ -494,8 +517,9 @@ impl Shared {
                 owner,
                 request,
                 video_socket,
-                _audio_socket: audio_socket,
+                audio_socket: Arc::new(audio_socket),
                 ssrc,
+                audio_ssrc,
                 created: Instant::now(),
             },
         );
@@ -561,7 +585,7 @@ impl Shared {
         let shared = Arc::clone(self);
         let watched = device.clone();
         tokio::spawn(async move {
-            relay(&shared, &watched, pending, video, &cancel).await;
+            relay(&shared, &watched, pending, video, selected.audio, &cancel).await;
             shared.streams.lock().active.remove(&selected.session);
             shared.camera_changed(&watched);
         });
@@ -717,18 +741,111 @@ fn log_stream_parameters(device: &DeviceId, sps: &[u8], asked: &VideoChoice, cha
     }
 }
 
+/// The sound of a stream: camera samples to Opus packets to SRTP, on the
+/// audio socket and keys the phone gave.
+struct AudioOut {
+    pipe: OpusPipe,
+    srtp: Sender,
+    socket: Arc<UdpSocket>,
+    destination: SocketAddr,
+    ssrc: u32,
+    payload_type: u8,
+    seq: u16,
+    /// The packets' own clock (48 kHz, 960 ticks for 20 ms), as received.
+    source_ticks: u32,
+    retimer: Retimer,
+    last_ts: u32,
+    last_at: Instant,
+    packets: u32,
+    octets: u32,
+}
+
+impl AudioOut {
+    fn new(pending: &Pending, choice: AudioChoice, rate: u32) -> Option<Self> {
+        let pipe = OpusPipe::new(rate).ok()?;
+        let socket = Arc::clone(&pending.audio_socket);
+        let first = random_u32();
+        Some(Self {
+            pipe,
+            srtp: Sender::new(&pending.request.audio.key, &pending.request.audio.salt),
+            socket,
+            destination: SocketAddr::new(pending.request.address, pending.request.audio_port),
+            ssrc: pending.audio_ssrc,
+            payload_type: choice.payload_type,
+            seq: random_u32() as u16,
+            source_ticks: 0,
+            retimer: Retimer::new(first, Instant::now(), 48_000.0),
+            last_ts: first,
+            last_at: Instant::now(),
+            packets: 0,
+            octets: 0,
+        })
+    }
+
+    async fn send(&mut self, chunk: &moli_runtime::media::AudioChunk, errors: &mut u32) {
+        for opus in self.pipe.push(chunk) {
+            // 20 ms of 16 kHz speech is 960 ticks of Opus's 48 kHz clock.
+            let (hold, ts) = self.retimer.frame(self.source_ticks, Instant::now());
+            self.source_ticks = self.source_ticks.wrapping_add(960);
+            if !hold.is_zero() {
+                tokio::time::sleep(hold.min(Duration::from_millis(100))).await;
+            }
+            let mut packet = vec![0x80, self.payload_type];
+            packet.extend_from_slice(&self.seq.to_be_bytes());
+            packet.extend_from_slice(&ts.to_be_bytes());
+            packet.extend_from_slice(&self.ssrc.to_be_bytes());
+            packet.extend_from_slice(&opus);
+            self.seq = self.seq.wrapping_add(1);
+            self.last_ts = ts;
+            self.last_at = Instant::now();
+            self.packets = self.packets.wrapping_add(1);
+            self.octets = self.octets.wrapping_add(opus.len() as u32);
+            let sealed = self.srtp.protect_rtp(&packet);
+            if self
+                .socket
+                .send_to(&sealed, self.destination)
+                .await
+                .is_err()
+            {
+                *errors += 1;
+            }
+        }
+    }
+
+    /// The sender report that ties the sound's clock to the wall clock.
+    async fn report(&mut self) {
+        if self.packets == 0 {
+            return;
+        }
+        let ticks = (self.last_at.elapsed().as_secs_f64() * 48_000.0) as u32;
+        let sr = sender_report(
+            self.ssrc,
+            ntp_now(),
+            self.last_ts.wrapping_add(ticks),
+            self.packets,
+            self.octets,
+        );
+        let _ = self
+            .socket
+            .send_to(&self.srtp.protect_rtcp(&sr), self.destination)
+            .await;
+    }
+}
+
 #[allow(clippy::too_many_lines)] // one select loop, counters included
 async fn relay(
     shared: &Arc<Shared>,
     device: &DeviceId,
     pending: Pending,
     video: VideoChoice,
+    audio: Option<AudioChoice>,
     cancel: &CancellationToken,
 ) {
     let begun = Instant::now();
     let want = LiveWant {
         width: u32::from(video.width),
         height: u32::from(video.height),
+        audio: audio.is_some(),
     };
     let mut live = match shared.hub.camera_live(device, want).await {
         Ok(live) => live,
@@ -748,6 +865,16 @@ async fn relay(
         open_ms = u64::try_from(begun.elapsed().as_millis()).unwrap_or(u64::MAX),
         "homekit: relaying the camera"
     );
+    let mut sound = audio
+        .zip(info.audio_rate)
+        .and_then(|(choice, rate)| AudioOut::new(&pending, choice, rate));
+    tracing::info!(
+        %device,
+        asked = audio.is_some(),
+        camera_rate = ?info.audio_rate,
+        relayed = sound.is_some(),
+        "homekit: the camera's sound"
+    );
     let destination = SocketAddr::new(pending.request.address, pending.request.video_port);
     let socket = pending.video_socket;
     let mut srtp = Sender::new(&pending.request.video.key, &pending.request.video.salt);
@@ -761,7 +888,7 @@ async fn relay(
         (!info.pps.is_empty()).then_some(info.pps),
     );
     let first_out = random_u32();
-    let mut retimer = Retimer::new(first_out, Instant::now());
+    let mut retimer = Retimer::new(first_out, Instant::now(), 90_000.0);
     let mut started = false;
     let (mut packets, mut octets, mut last_ts) = (0u32, 0u32, 0u32);
     let mut last_frame = Instant::now();
@@ -794,9 +921,16 @@ async fn relay(
     loop {
         tokio::select! {
             () = cancel.cancelled() => break,
-            frame = live.next_frame() => {
-                let frame = match frame {
-                    Ok(frame) => frame,
+            item = live.next() => {
+                let frame = match item {
+                    Ok(LiveItem::Video(frame)) => frame,
+                    Ok(LiveItem::Audio(chunk)) => {
+                        // Sound follows the picture: nothing before it starts.
+                        if started && let Some(out) = sound.as_mut() {
+                            out.send(&chunk, &mut send_errors).await;
+                        }
+                        continue;
+                    }
                     Err(e) => {
                         tracing::info!(%device, error = %format!("{e:#}"), "homekit: the camera stream ended");
                         break;
@@ -940,6 +1074,16 @@ async fn relay(
                         unreadable,
                         "homekit: phone_report"
                     );
+                }
+                if let Some(out) = sound.as_mut() {
+                    tracing::info!(
+                        %device,
+                        audio_packets = out.packets,
+                        audio_octets = out.octets,
+                        audio_reanchors = out.retimer.reanchors,
+                        "homekit: camera sound counters"
+                    );
+                    out.report().await;
                 }
                 if started {
                     let ticks = (last_frame.elapsed().as_secs_f64() * 90_000.0) as u32;
@@ -1146,10 +1290,9 @@ mod tests {
     /// configuration (everything before the sizes), byte for byte.
     #[test]
     fn the_values_equal_hap_pythons() {
-        assert_eq!(
-            b64(&supported_audio()),
-            "AQ4BAQMCCQEBAQIBAAMBAgEOAQECAgkBAQECAQADAQECAQA="
-        );
+        // The audio is Opus alone (HAP-python also lists AAC-ELD): the
+        // first codec entry is its own, byte for byte.
+        assert_eq!(b64(&supported_audio()), "AQ4BAQMCCQEBAQIBAAMBAQIBAA==");
         assert_eq!(b64(&supported_rtp()), "AgEA");
         assert_eq!(b64(&streaming_status(0)), "AQEA");
         let reference = unb64("AUQBAQACFQMBAAEBAAEBAQEBAgIBAAIBAQIBAgMMAQJAAQIC8AADAg8A").unwrap();

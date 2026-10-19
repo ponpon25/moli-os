@@ -806,14 +806,30 @@ impl moli_runtime::media::LiveStream for FakeStream {
         &self.info
     }
 
-    fn next_frame(&mut self) -> BoxFuture<'_, anyhow::Result<moli_runtime::media::VideoFrame>> {
+    fn next(&mut self) -> BoxFuture<'_, anyhow::Result<moli_runtime::media::LiveItem>> {
+        use moli_runtime::media::{AudioChunk, LiveItem, VideoFrame};
         Box::pin(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
             let n = self.n;
             self.n += 1;
-            let key = n.is_multiple_of(30);
-            Ok(moli_runtime::media::VideoFrame {
-                timestamp: 90_000 + n * 3000,
+            // Every other item is 20 ms of a 1 kHz tone at 48 kHz.
+            if n % 2 == 1 {
+                let start = (n / 2) * 960;
+                let samples = (0..960u32)
+                    .map(|i| {
+                        let t = f64::from(start + i) / 48_000.0;
+                        (10_000.0 * (2.0 * std::f64::consts::PI * 1000.0 * t).sin()) as i16
+                    })
+                    .collect();
+                return Ok(LiveItem::Audio(AudioChunk {
+                    rate: 48_000,
+                    samples,
+                }));
+            }
+            let frame = n / 2;
+            let key = frame.is_multiple_of(30);
+            Ok(LiveItem::Video(VideoFrame {
+                timestamp: 90_000 + frame * 3000,
                 nals: if key {
                     vec![SPS.to_vec(), PPS.to_vec(), idr()]
                 } else {
@@ -825,7 +841,7 @@ impl moli_runtime::media::LiveStream for FakeStream {
                     ]
                 },
                 keyframe: key,
-            })
+            }))
         })
     }
 }
@@ -842,6 +858,7 @@ impl moli_runtime::media::LiveSource for FakeLive {
                     height: 720,
                     sps: SPS.to_vec(),
                     pps: PPS.to_vec(),
+                    audio_rate: Some(48_000),
                 },
                 n: 0,
             }) as Box<dyn moli_runtime::media::LiveStream>)
@@ -974,6 +991,12 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
     let session: [u8; 16] = random();
     let (key, salt): ([u8; 16], [u8; 14]) = (random(), random());
     let srtp = Tlv::new().with(1, [0]).with(2, key).with(3, salt);
+    let audio_udp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let (audio_key, audio_salt): ([u8; 16], [u8; 14]) = (random(), random());
+    let audio_srtp = Tlv::new()
+        .with(1, [0])
+        .with(2, audio_key)
+        .with(3, audio_salt);
     let setup = Tlv::new()
         .with(1, session)
         .with(
@@ -982,11 +1005,11 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
                 .with(1, [0])
                 .with(2, "127.0.0.1")
                 .with(3, le16(port))
-                .with(4, le16(port + 1))
+                .with(4, le16(audio_udp.local_addr().unwrap().port()))
                 .encode(),
         )
         .with(4, srtp.encode())
-        .with(5, srtp.encode());
+        .with(5, audio_srtp.encode());
     let (status, _) = s
         .json(
             "PUT",
@@ -1043,6 +1066,31 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
                         .encode(),
                 )
                 .encode(),
+        )
+        .with(
+            3,
+            Tlv::new()
+                .with(1, [3])
+                .with(
+                    2,
+                    Tlv::new()
+                        .with(1, [1])
+                        .with(2, [0])
+                        .with(3, [1])
+                        .with(4, [20])
+                        .encode(),
+                )
+                .with(
+                    3,
+                    Tlv::new()
+                        .with(1, [110])
+                        .with(2, 0x0BAD_F00Du32.to_le_bytes())
+                        .with(3, le16(24))
+                        .with(4, 0.5f32.to_le_bytes())
+                        .encode(),
+                )
+                .with(4, [0])
+                .encode(),
         );
     let (status, _) = s
         .json(
@@ -1078,6 +1126,40 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
         frames.extend(depacketizer.push(&clear));
     }
     assert_eq!(reports, 1, "a sender report comes first");
+
+    // The sound: Opus in SRTP with the audio keys, on the audio port, under
+    // the audio SSRC the bridge announced; it decodes to the tone.
+    let audio_ssrc = u32::from_le_bytes(answer.get(7).unwrap().try_into().unwrap());
+    let audio_receiver = crate::srtp::Sender::new(&audio_key, &audio_salt);
+    let mut decoder = opus_rs::OpusDecoder::new(16_000, 1).unwrap();
+    let mut samples_out: Vec<f32> = Vec::new();
+    let mut heard = 0;
+    while heard < 20 {
+        let (n, _) = tokio::time::timeout(Duration::from_secs(5), audio_udp.recv_from(&mut buf))
+            .await
+            .expect("the bridge sends sound")
+            .unwrap();
+        if buf[1] == 200 {
+            continue; // a sender report
+        }
+        let clear = audio_receiver
+            .open_rtp(&buf[..n], 0)
+            .expect("the audio tag is valid");
+        assert_eq!(clear[1] & 0x7F, 110);
+        assert_eq!(
+            u32::from_be_bytes(clear[8..12].try_into().unwrap()),
+            audio_ssrc
+        );
+        let mut pcm = vec![0f32; 320];
+        let got = decoder.decode(&clear[12..], 320, &mut pcm).unwrap();
+        samples_out.extend_from_slice(&pcm[..got]);
+        heard += 1;
+    }
+    let peak = samples_out.iter().fold(0f32, |m, v| m.max(v.abs()));
+    assert!(
+        peak > 0.05 || peak > 1_500.0,
+        "the tone is there: peak {peak}"
+    );
     assert!(frames[0].keyframe, "starts on a key frame");
     assert_eq!(frames[0].nals, vec![SPS.to_vec(), PPS.to_vec(), idr()]);
     assert!(!frames[1].keyframe);

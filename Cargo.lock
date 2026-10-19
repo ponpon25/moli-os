@@ -1323,6 +1323,7 @@ dependencies = [
  "moli-core",
  "moli-net",
  "moli-runtime",
+ "opus-rs",
  "ring",
  "serde",
  "serde_json",
@@ -1699,6 +1700,7 @@ dependencies = [
  "anyhow",
  "http",
  "http-body-util",
+ "moli-audio",
  "moli-core",
  "moli-i18n",
  "moli-net",
@@ -1797,6 +1799,12 @@ name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
+name = "opus-rs"
+version = "0.1.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1880f411a21320dcb546c8f38f05ffb75643362ee0235437487999ed543e26ae"
 
 [[package]]
 name = "pastey"

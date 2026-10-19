@@ -14,13 +14,15 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
+use moli_audio::aac;
 use moli_core::{Access, Device, Kind, PointSpec, Semantic, Value};
 use moli_net::h264::{self, Depacketizer};
-use moli_net::rtsp;
+use moli_net::rtsp::{self, Media};
 use moli_net::ws::WebSocket;
 use moli_net::{Method, PIN_MISMATCH, PinnedHttps, PinnedTls};
 use moli_runtime::media::{
-    Image, LiveInfo, LiveSource, LiveStream, LiveWant, SnapshotSource, VideoFrame,
+    AudioChunk, Image, LiveInfo, LiveItem, LiveSource, LiveStream, LiveWant, SnapshotSource,
+    VideoFrame,
 };
 use moli_runtime::{BoxFuture, Driver, DriverCtx};
 use serde::Deserialize;
@@ -457,13 +459,23 @@ impl Live {
             stream_url(&urls[quality], &self.shared.host).context("unusable stream address")?;
         let tls = self.shared.tls(url.port).await?;
         let mut client = rtsp::Client::connect(&url, Some(&tls)).await?;
-        let track = client.play_video().await?;
+        let (track, audio) = client.play(want.audio).await?;
         let (width, height) = track
             .sps
             .as_deref()
             .and_then(h264::picture_size)
             .unwrap_or_default();
-        tracing::debug!(camera = %self.camera, quality, width, height, "unifi live stream opened");
+        // Sound is a bonus: a track the decoder cannot read is left unread.
+        let audio = audio.and_then(|a| {
+            let decoder = aac::Format::parse(&a.fmtp)
+                .and_then(|f| f.rate().map(|rate| (f, rate)))
+                .and_then(|(f, rate)| aac::Decoder::new(f).ok().map(|d| (d, rate)));
+            if decoder.is_none() {
+                tracing::debug!(camera = %self.camera, "unifi live stream: audio not readable");
+            }
+            decoder
+        });
+        tracing::debug!(camera = %self.camera, quality, width, height, audio = audio.is_some(), "unifi live stream opened");
         Ok(UnifiStream {
             client,
             depacketizer: Depacketizer::new(),
@@ -473,7 +485,9 @@ impl Live {
                 height,
                 sps: track.sps.unwrap_or_default(),
                 pps: track.pps.unwrap_or_default(),
+                audio_rate: audio.as_ref().map(|(_, rate)| *rate),
             },
+            audio,
         })
     }
 }
@@ -499,8 +513,9 @@ impl LiveSource for Live {
 struct UnifiStream {
     client: rtsp::Client,
     depacketizer: Depacketizer,
-    pending: VecDeque<VideoFrame>,
+    pending: VecDeque<LiveItem>,
     info: LiveInfo,
+    audio: Option<(aac::Decoder, u32)>,
 }
 
 impl LiveStream for UnifiStream {
@@ -508,24 +523,37 @@ impl LiveStream for UnifiStream {
         &self.info
     }
 
-    fn next_frame(&mut self) -> BoxFuture<'_, anyhow::Result<VideoFrame>> {
+    fn next(&mut self) -> BoxFuture<'_, anyhow::Result<LiveItem>> {
         Box::pin(async move {
             loop {
-                if let Some(frame) = self.pending.pop_front() {
-                    return Ok(frame);
+                if let Some(item) = self.pending.pop_front() {
+                    return Ok(item);
                 }
-                let packet = self.client.next_packet().await?;
-                self.pending
-                    .extend(
-                        self.depacketizer
-                            .push(&packet)
-                            .into_iter()
-                            .map(|unit| VideoFrame {
-                                timestamp: unit.timestamp,
-                                nals: unit.nals,
-                                keyframe: unit.keyframe,
-                            }),
-                    );
+                match self.client.next_media().await? {
+                    Media::Video(packet) => {
+                        self.pending
+                            .extend(self.depacketizer.push(&packet).into_iter().map(|unit| {
+                                LiveItem::Video(VideoFrame {
+                                    timestamp: unit.timestamp,
+                                    nals: unit.nals,
+                                    keyframe: unit.keyframe,
+                                })
+                            }));
+                    }
+                    Media::Audio(packet) => {
+                        if let (Some((decoder, rate)), Some(payload)) =
+                            (self.audio.as_mut(), h264::rtp_payload(&packet))
+                        {
+                            let samples = decoder.push(payload);
+                            if !samples.is_empty() {
+                                self.pending.push_back(LiveItem::Audio(AudioChunk {
+                                    rate: *rate,
+                                    samples,
+                                }));
+                            }
+                        }
+                    }
+                }
             }
         })
     }

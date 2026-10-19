@@ -589,8 +589,89 @@ impl Shared {
     }
 }
 
+/// What a phone's RTCP says about our stream.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PhoneReport {
+    /// Extended highest sequence number received (0: nothing).
+    pub highest_seq: u32,
+    pub lost: u32,
+    pub fraction_lost: u8,
+    pub jitter: u32,
+    /// Picture loss or full intra requests: the phone wants a key frame.
+    pub key_requests: u32,
+    /// The report names our stream.
+    pub ours: bool,
+}
+
+/// Reads a clear RTCP compound packet: receiver reports (201, and the ones
+/// that ride in sender reports, 200) and key frame requests (206).
+#[allow(clippy::chunks_exact_to_as_chunks)]
+pub fn read_phone_report(clear: &[u8], our_ssrc: u32) -> PhoneReport {
+    let mut report = PhoneReport::default();
+    let mut rest = clear;
+    while rest.len() >= 4 {
+        let words = usize::from(u16::from_be_bytes([rest[2], rest[3]]));
+        let size = 4 * (words + 1);
+        if size > rest.len() {
+            break;
+        }
+        let (packet, tail) = rest.split_at(size);
+        let blocks = usize::from(packet[0] & 0x1F);
+        match packet[1] {
+            // Receiver report: 8 bytes, then blocks of 24; a sender report
+            // has 20 more bytes of sender information first.
+            kind @ (200 | 201) => {
+                let first = if kind == 200 { 28 } else { 8 };
+                for block in packet
+                    .get(first..)
+                    .unwrap_or_default()
+                    .chunks_exact(24)
+                    .take(blocks)
+                {
+                    let ssrc = u32::from_be_bytes([block[0], block[1], block[2], block[3]]);
+                    report.ours |= ssrc == our_ssrc;
+                    report.fraction_lost = block[4];
+                    report.lost = u32::from_be_bytes([0, block[5], block[6], block[7]]);
+                    report.highest_seq =
+                        u32::from_be_bytes([block[8], block[9], block[10], block[11]]);
+                    report.jitter =
+                        u32::from_be_bytes([block[12], block[13], block[14], block[15]]);
+                }
+            }
+            206 => report.key_requests += 1,
+            _ => {}
+        }
+        rest = tail;
+    }
+    report
+}
+
 /// Sends the camera's frames to the phone until `cancel`, the camera or the
 /// phone gives up.
+/// Writes down what the stream is (once, and when it changes) so a phone
+/// that will not show it can be compared with what it asked for.
+#[allow(clippy::single_match_else)]
+fn log_stream_parameters(device: &DeviceId, sps: &[u8], asked: &VideoChoice, changed: bool) {
+    match moli_net::h264::sps_info(sps) {
+        Some(i) => tracing::info!(
+            %device,
+            changed,
+            profile_idc = i.profile_idc,
+            constraint_flags = i.constraint_flags,
+            level_idc = i.level_idc,
+            width = i.width,
+            height = i.height,
+            poc_type = i.poc_type,
+            ref_frames = i.ref_frames,
+            frame_mbs_only = i.frame_mbs_only,
+            asked_width = asked.width,
+            asked_height = asked.height,
+            "homekit: stream parameters (SPS); poc_type 2 means no B-frames"
+        ),
+        None => tracing::warn!(%device, bytes = sps.len(), "homekit: an SPS that cannot be read"),
+    }
+}
+
 #[allow(clippy::too_many_lines)] // one select loop, counters included
 async fn relay(
     shared: &Arc<Shared>,
@@ -644,6 +725,10 @@ async fn relay(
     let (mut frames_in, mut key_frames, mut skipped, mut send_errors, mut phone_packets) =
         (0u32, 0u32, 0u32, 0u32, 0u32);
     let mut held_ms = 0u64;
+    let mut max_packet = 0usize;
+    let mut last_report: Option<PhoneReport> = None;
+    let mut unreadable = 0u32;
+    let mut sps_seen: Option<Vec<u8>> = None;
     tracing::info!(
         %device,
         to = %destination,
@@ -669,7 +754,13 @@ async fn relay(
                 key_frames += u32::from(frame.keyframe);
                 for nal in &frame.nals {
                     match moli_net::h264::nal_type(nal) {
-                        moli_net::h264::NAL_SPS => sps = Some(nal.clone()),
+                        moli_net::h264::NAL_SPS => {
+                            if sps_seen.as_ref() != Some(nal) {
+                                log_stream_parameters(device, nal, &video, sps_seen.is_some());
+                                sps_seen = Some(nal.clone());
+                            }
+                            sps = Some(nal.clone());
+                        }
                         moli_net::h264::NAL_PPS => pps = Some(nal.clone()),
                         _ => {}
                     }
@@ -714,6 +805,7 @@ async fn relay(
                     }
                     let sealed = srtp.protect_rtp(packet);
                     packets = packets.wrapping_add(1);
+                    max_packet = max_packet.max(sealed.len());
                     octets = octets.wrapping_add((packet.len() - 12) as u32);
                     if let Err(e) = socket.send_to(&sealed, destination).await {
                         send_errors += 1;
@@ -752,9 +844,23 @@ async fn relay(
                     send_errors,
                     phone_packets,
                     reanchors = retimer.reanchors,
+                    max_packet,
                     max_hold_ms = held_ms,
                     "homekit: camera stream counters"
                 );
+                if let Some(r) = last_report {
+                    tracing::info!(
+                        %device,
+                        highest_seq = r.highest_seq,
+                        lost = r.lost,
+                        fraction_lost = r.fraction_lost,
+                        jitter = r.jitter,
+                        key_requests = r.key_requests,
+                        names_our_stream = r.ours,
+                        unreadable,
+                        "homekit: phone_report"
+                    );
+                }
                 if started {
                     let ticks = (last_frame.elapsed().as_secs_f64() * 90_000.0) as u32;
                     let sr = sender_report(ssrc, ntp_now(), last_ts.wrapping_add(ticks), packets, octets);
@@ -768,6 +874,20 @@ async fn relay(
                 if let Ok((n, from)) = received {
                     heard = Some(Instant::now());
                     phone_packets += 1;
+                    match srtp.open_rtcp(&inbound[..n]) {
+                        Ok(clear) => {
+                            let report = read_phone_report(&clear, ssrc);
+                            if report.highest_seq > 0 || report.key_requests > 0 {
+                                last_report = Some(report);
+                            }
+                        }
+                        Err(why) => {
+                            unreadable += 1;
+                            if unreadable <= 3 {
+                                tracing::warn!(%device, why, bytes = n, "homekit: the phone's RTCP cannot be opened");
+                            }
+                        }
+                    }
                     if phone_packets <= 3 {
                         tracing::info!(%device, bytes = n, %from, "homekit: the phone sent a packet (RTCP)");
                     }
@@ -957,5 +1077,48 @@ mod tests {
                 first
             }[..]
         );
+    }
+
+    #[test]
+    fn a_phones_receiver_report_is_read() {
+        // RR from 0xAAAA with one block about stream 0x1234.
+        let mut rr = vec![0x81, 201, 0, 7];
+        rr.extend_from_slice(&0xAAAAu32.to_be_bytes());
+        rr.extend_from_slice(&0x1234u32.to_be_bytes());
+        rr.extend_from_slice(&[12, 0, 0, 5]); // fraction, lost = 5
+        rr.extend_from_slice(&70_000u32.to_be_bytes());
+        rr.extend_from_slice(&33u32.to_be_bytes());
+        rr.extend_from_slice(&[0u8; 8]);
+        // And a picture loss indication.
+        rr.extend_from_slice(&[0x81, 206, 0, 2]);
+        rr.extend_from_slice(&[0u8; 8]);
+        let report = read_phone_report(&rr, 0x1234);
+        assert_eq!(
+            report,
+            PhoneReport {
+                highest_seq: 70_000,
+                lost: 5,
+                fraction_lost: 12,
+                jitter: 33,
+                key_requests: 1,
+                ours: true,
+            }
+        );
+        assert!(!read_phone_report(&rr, 9).ours);
+        assert_eq!(read_phone_report(&[1, 2], 1), PhoneReport::default());
+    }
+
+    #[test]
+    fn rtcp_sent_with_the_keys_is_opened_with_the_keys() {
+        let phone = Sender::new(&[3; 16], &[4; 14]);
+        let mut theirs = Sender::new(&[3; 16], &[4; 14]);
+        let mut rr = vec![0x80, 201, 0, 1];
+        rr.extend_from_slice(&0xBEEFu32.to_be_bytes());
+        let sealed = theirs.protect_rtcp(&rr);
+        assert_eq!(phone.open_rtcp(&sealed).unwrap(), rr);
+        let mut forged = sealed.clone();
+        forged[9] ^= 1;
+        assert_eq!(phone.open_rtcp(&forged), Err("tag does not match"));
+        assert!(Sender::new(&[5; 16], &[4; 14]).open_rtcp(&sealed).is_err());
     }
 }

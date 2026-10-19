@@ -227,9 +227,28 @@ impl Bits {
     }
 }
 
+/// What a sequence parameter set says of the stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpsInfo {
+    pub profile_idc: u8,
+    pub constraint_flags: u8,
+    pub level_idc: u8,
+    pub width: u32,
+    pub height: u32,
+    /// 2 means output order is decoding order: no B-frames.
+    pub poc_type: u32,
+    pub ref_frames: u32,
+    pub frame_mbs_only: bool,
+}
+
 /// `(width, height)` of the pictures a sequence parameter set describes.
 #[must_use]
 pub fn picture_size(sps: &[u8]) -> Option<(u32, u32)> {
+    sps_info(sps).map(|i| (i.width, i.height))
+}
+
+#[must_use]
+pub fn sps_info(sps: &[u8]) -> Option<SpsInfo> {
     if nal_type(sps) != NAL_SPS || sps.len() < 4 {
         return None;
     }
@@ -257,7 +276,8 @@ pub fn picture_size(sps: &[u8]) -> Option<(u32, u32)> {
         }
     }
     r.ue()?; // log2_max_frame_num_minus4
-    match r.ue()? {
+    let poc_type = r.ue()?;
+    match poc_type {
         0 => {
             r.ue()?;
         }
@@ -271,7 +291,7 @@ pub fn picture_size(sps: &[u8]) -> Option<(u32, u32)> {
         }
         _ => {}
     }
-    r.ue()?; // max_num_ref_frames
+    let ref_frames = r.ue()?;
     r.bit()?;
     let width_mbs = r.ue()? + 1;
     let height_units = r.ue()? + 1;
@@ -288,7 +308,16 @@ pub fn picture_size(sps: &[u8]) -> Option<(u32, u32)> {
         width = width.checked_sub(unit_x * (left + right))?;
         height = height.checked_sub(unit_y * (top + bottom))?;
     }
-    Some((width, height))
+    Some(SpsInfo {
+        profile_idc: profile,
+        constraint_flags: sps[2],
+        level_idc: sps[3],
+        width,
+        height,
+        poc_type,
+        ref_frames,
+        frame_mbs_only: frame_mbs_only == 1,
+    })
 }
 
 #[cfg(test)]
@@ -355,5 +384,17 @@ mod tests {
         ];
         assert_eq!(picture_size(&sps), Some((1920, 1080)));
         assert_eq!(picture_size(&[0x68, 1, 2, 3, 4]), None);
+    }
+
+    #[test]
+    fn the_profile_level_and_ordering_of_a_stream_are_read() {
+        let sps = [
+            0x67, 0x64, 0x00, 0x28, 0xAC, 0xD9, 0x40, 0x78, 0x02, 0x27, 0xE5, 0xC0, 0x44, 0x00,
+            0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xF0, 0x3C, 0x60, 0xC6, 0x58,
+        ];
+        let info = sps_info(&sps).unwrap();
+        assert_eq!((info.profile_idc, info.level_idc), (100, 40));
+        assert!(info.frame_mbs_only);
+        assert_eq!(info.poc_type, 0);
     }
 }

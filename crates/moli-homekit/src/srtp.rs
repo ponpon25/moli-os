@@ -159,6 +159,31 @@ impl Sender {
         Some(out)
     }
 
+    /// Opens an SRTCP packet received from the other side with the same
+    /// keys: checks the tag, decrypts, returns the clear compound packet.
+    /// The error says what failed (for the journal).
+    pub fn open_rtcp(&self, packet: &[u8]) -> Result<Vec<u8>, &'static str> {
+        if packet.len() < 8 + 4 + TAG_LEN {
+            return Err("too short");
+        }
+        let (body, tag) = packet.split_at(packet.len() - TAG_LEN);
+        if tag != self.rtcp.tag(body, &[]) {
+            return Err("tag does not match");
+        }
+        let (payload, word) = body.split_at(body.len() - 4);
+        let word = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        let mut out = payload.to_vec();
+        if word >> 31 == 1 {
+            let ssrc = u32::from_be_bytes([out[4], out[5], out[6], out[7]]);
+            apply(
+                &self.rtcp.cipher,
+                &self.rtcp.iv(ssrc, u64::from(word & 0x7FFF_FFFF)),
+                &mut out[8..],
+            );
+        }
+        Ok(out)
+    }
+
     /// An RTCP compound packet encrypted, numbered and tagged (§3.4).
     pub fn protect_rtcp(&mut self, packet: &[u8]) -> Vec<u8> {
         let ssrc = u32::from_be_bytes([packet[4], packet[5], packet[6], packet[7]]);

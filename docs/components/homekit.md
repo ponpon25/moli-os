@@ -108,7 +108,7 @@ le flux garde ce que la caméra encode (le décodeur lit le SPS).
 **transcode** donc le son, en Rust pur et sans ffmpeg : le pilote décode l'AAC (`moli-audio`, Symphonia),
 `audio.rs` ramène l'échantillonnage à 16 kHz (filtre sinc fenêtré, sans clic entre deux morceaux), le découpe en
 paquets de 20 ms et les encode en **Opus** (crate `opus-rs`, port de libopus en Rust, BSD-3-Clause, sans
-dépendance) à 24 kbit/s ; les paquets partent en SRTP avec les clés audio, le SSRC audio annoncé et le type de
+dépendance) à débit constant (24 kbit/s, ou le plus bas que l'iPhone accepte) ; les paquets partent en SRTP avec les clés audio, le SSRC audio annoncé et le type de
 charge choisi par l'iPhone, avec ses propres rapports d'émetteur. Seul l'Opus mono 16 kHz est annoncé
 (pas d'AAC-ELD). Le son ne démarre qu'avec l'image. Pas de piste audio sur la caméra : pas de son, et le
 service Microphone reste (l'app Maison l'exige) mais Volume et Mute sont acceptés sans effet. Le coût :

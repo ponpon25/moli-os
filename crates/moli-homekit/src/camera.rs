@@ -777,18 +777,20 @@ struct AudioOut {
     ssrc: u32,
     payload_type: u8,
     seq: u16,
-    /// The packets' own clock (48 kHz, 960 ticks for 20 ms), as received.
+    /// The packets' own clock (16 kHz, 320 ticks for 20 ms), as received.
     source_ticks: u32,
     retimer: Retimer,
     last_ts: u32,
     last_at: Instant,
     packets: u32,
     octets: u32,
+    /// What the phone last said of the sound (its RTCP).
+    phone: Option<PhoneReport>,
 }
 
 impl AudioOut {
     fn new(pending: &Pending, choice: AudioChoice, rate: u32) -> Option<Self> {
-        let pipe = OpusPipe::new(rate).ok()?;
+        let pipe = OpusPipe::new(rate, choice.max_bitrate).ok()?;
         let socket = Arc::clone(&pending.audio_socket);
         let first = random_u32();
         Some(Self {
@@ -800,19 +802,20 @@ impl AudioOut {
             payload_type: choice.payload_type,
             seq: random_u32() as u16,
             source_ticks: 0,
-            retimer: Retimer::new(first, Instant::now(), 48_000.0),
+            retimer: Retimer::new(first, Instant::now(), 16_000.0),
             last_ts: first,
             last_at: Instant::now(),
             packets: 0,
             octets: 0,
+            phone: None,
         })
     }
 
     async fn send(&mut self, chunk: &moli_runtime::media::AudioChunk, errors: &mut u32) {
         for opus in self.pipe.push(chunk) {
-            // 20 ms of 16 kHz speech is 960 ticks of Opus's 48 kHz clock.
+            // The clock is the sample rate asked for (16 kHz): 320 ticks for 20 ms.
             let (hold, ts) = self.retimer.frame(self.source_ticks, Instant::now());
-            self.source_ticks = self.source_ticks.wrapping_add(960);
+            self.source_ticks = self.source_ticks.wrapping_add(320);
             if !hold.is_zero() {
                 tokio::time::sleep(hold.min(Duration::from_millis(100))).await;
             }
@@ -838,12 +841,19 @@ impl AudioOut {
         }
     }
 
+    /// What the phone sent on the audio port: its report on our sound.
+    fn heard(&mut self, packet: &[u8]) -> Result<(), &'static str> {
+        let clear = self.srtp.open_rtcp(packet)?;
+        self.phone = Some(read_phone_report(&clear, self.ssrc));
+        Ok(())
+    }
+
     /// The sender report that ties the sound's clock to the wall clock.
     async fn report(&mut self) {
         if self.packets == 0 {
             return;
         }
-        let ticks = (self.last_at.elapsed().as_secs_f64() * 48_000.0) as u32;
+        let ticks = (self.last_at.elapsed().as_secs_f64() * 16_000.0) as u32;
         let sr = sender_report(
             self.ssrc,
             ntp_now(),
@@ -922,6 +932,7 @@ async fn relay(
     let mut report = tokio::time::interval(REPORT_EVERY);
     report.tick().await;
     let mut inbound = [0u8; 2048];
+    let mut audio_inbound = [0u8; 2048];
     // Counters for the journal (never a key).
     let (mut frames_in, mut key_frames, mut skipped, mut send_errors, mut phone_packets) =
         (0u32, 0u32, 0u32, 0u32, 0u32);
@@ -1122,6 +1133,17 @@ async fn relay(
                         audio_reanchors = out.retimer.reanchors,
                         "homekit: camera sound counters"
                     );
+                    if let Some(r) = out.phone {
+                        tracing::info!(
+                            %device,
+                            highest_seq = r.highest_seq,
+                            lost = r.lost,
+                            fraction_lost = r.fraction_lost,
+                            jitter = r.jitter,
+                            names_our_sound = r.ours,
+                            "homekit: audio phone_report"
+                        );
+                    }
                     out.report().await;
                 }
                 if started {
@@ -1130,6 +1152,20 @@ async fn relay(
                     if socket.send_to(&srtp.protect_rtcp(&sr), destination).await.is_err() {
                         return;
                     }
+                }
+            }
+            // The phone's reports on the sound.
+            received = async {
+                match sound.as_ref() {
+                    Some(out) => out.socket.recv_from(&mut audio_inbound).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Ok((n, _)) = received
+                    && let Some(out) = sound.as_mut()
+                    && let Err(why) = out.heard(&audio_inbound[..n])
+                {
+                    tracing::warn!(%device, why, bytes = n, "homekit: the phone's audio RTCP cannot be opened");
                 }
             }
             // What the phone sends back (reports): proof it is still there.

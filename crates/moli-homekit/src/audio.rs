@@ -13,7 +13,7 @@ use opus_rs::{Application, OpusEncoder};
 pub const RATE: u32 = 16_000;
 /// Samples in a 20 ms packet at `RATE`.
 pub const FRAME: usize = 320;
-/// Bit rate of the Opus stream (speech, mono).
+/// Bit rate of the Opus stream when the phone does not say (speech, mono).
 const BITRATE: i32 = 24_000;
 /// Taps on each side of the interpolation point.
 const HALF: usize = 24;
@@ -113,10 +113,18 @@ impl std::fmt::Debug for OpusPipe {
 }
 
 impl OpusPipe {
-    pub fn new(from: u32) -> Result<Self, String> {
+    /// `kbps`: the most the phone accepted (0: not said).
+    pub fn new(from: u32, kbps: u16) -> Result<Self, String> {
         let mut encoder =
             OpusEncoder::new(RATE as i32, 1, Application::Voip).map_err(|e| format!("{e:?}"))?;
-        encoder.bitrate_bps = BITRATE;
+        // Constant: left variable the encoder ignores its target (three times
+        // the bits on noisy speech), and the phone drops what it did not ask for.
+        encoder.bitrate_bps = if kbps == 0 {
+            BITRATE
+        } else {
+            i32::from(kbps).clamp(12, 32) * 1000
+        };
+        encoder.use_cbr = true;
         Ok(Self {
             from,
             resampler: (from != RATE).then(|| Resampler::new(from, RATE)),
@@ -191,7 +199,7 @@ mod tests {
 
     #[test]
     fn a_tone_goes_through_opus_and_comes_back() {
-        let mut pipe = OpusPipe::new(48_000).unwrap();
+        let mut pipe = OpusPipe::new(48_000, 24).unwrap();
         let mut packets = Vec::new();
         for chunk in sine(48_000, 1000.0, 1.0).chunks(480) {
             packets.extend(pipe.push(&AudioChunk {
@@ -225,5 +233,29 @@ mod tests {
             })
             .is_empty()
         );
+    }
+
+    #[test]
+    fn the_stream_keeps_to_the_bit_rate_asked_even_on_noise() {
+        let mut seed = 12345u32;
+        let noise: Vec<i16> = (0..16_000 * 3)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((seed >> 16) as i16) / 4
+            })
+            .collect();
+        for (kbps, bytes) in [(24u16, 60usize), (16, 40)] {
+            let mut pipe = OpusPipe::new(16_000, kbps).unwrap();
+            let packets = pipe.push(&AudioChunk {
+                rate: 16_000,
+                samples: noise.clone(),
+            });
+            assert!(packets.len() >= 140);
+            assert!(
+                packets.iter().all(|p| p.len() <= bytes + 2),
+                "{kbps}: {:?}",
+                packets.iter().map(Vec::len).max()
+            );
+        }
     }
 }

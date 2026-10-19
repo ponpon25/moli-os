@@ -1030,7 +1030,8 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
                     4,
                     Tlv::new()
                         .with(1, [99])
-                        .with(2, ssrc.to_le_bytes())
+                        // The phone proposes another SSRC: the one this bridge announced wins.
+                        .with(2, (ssrc ^ 0x00FF_00FF).to_le_bytes())
                         .with(3, le16(2000))
                         .with(4, 0.5f32.to_le_bytes())
                         .with(5, le16(1378))

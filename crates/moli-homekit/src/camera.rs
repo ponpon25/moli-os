@@ -605,6 +605,10 @@ pub struct PhoneReport {
     /// (the first four).
     pub blocks: u32,
     pub kinds: [u8; 4],
+    /// The stream the last report block is about.
+    pub block_ssrc: u32,
+    /// Feedback packets (205, 206): format and media stream of the first.
+    pub feedback: Option<(u8, u32)>,
 }
 
 /// Reads a clear RTCP compound packet: receiver reports (201, and the ones
@@ -639,6 +643,7 @@ pub fn read_phone_report(clear: &[u8], our_ssrc: u32) -> PhoneReport {
                 {
                     let ssrc = u32::from_be_bytes([block[0], block[1], block[2], block[3]]);
                     report.blocks += 1;
+                    report.block_ssrc = ssrc;
                     report.ours |= ssrc == our_ssrc;
                     report.fraction_lost = block[4];
                     report.lost = u32::from_be_bytes([0, block[5], block[6], block[7]]);
@@ -648,7 +653,15 @@ pub fn read_phone_report(clear: &[u8], our_ssrc: u32) -> PhoneReport {
                         u32::from_be_bytes([block[12], block[13], block[14], block[15]]);
                 }
             }
-            206 => report.key_requests += 1,
+            kind @ (205 | 206) => {
+                report.key_requests += u32::from(kind == 206);
+                if report.feedback.is_none() && packet.len() >= 12 {
+                    report.feedback = Some((
+                        packet[0] & 0x1F,
+                        u32::from_be_bytes([packet[8], packet[9], packet[10], packet[11]]),
+                    ));
+                }
+            }
             _ => {}
         }
         rest = tail;
@@ -658,6 +671,15 @@ pub fn read_phone_report(clear: &[u8], our_ssrc: u32) -> PhoneReport {
 
 /// Sends the camera's frames to the phone until `cancel`, the camera or the
 /// phone gives up.
+/// The address this machine reaches `to` from (what the phone sees as the
+/// source of the video).
+fn source_ip(to: SocketAddr) -> Option<IpAddr> {
+    let any = if to.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+    let probe = std::net::UdpSocket::bind(any).ok()?;
+    probe.connect(to).ok()?;
+    probe.local_addr().ok().map(|a| a.ip())
+}
+
 /// Writes down what the stream is (once, and when it changes) so a phone
 /// that will not show it can be compared with what it asked for.
 #[allow(clippy::single_match_else)]
@@ -716,7 +738,10 @@ async fn relay(
     let destination = SocketAddr::new(pending.request.address, pending.request.video_port);
     let socket = pending.video_socket;
     let mut srtp = Sender::new(&pending.request.video.key, &pending.request.video.salt);
-    let ssrc = video.ssrc.unwrap_or(pending.ssrc);
+    // The stream's SSRC is the one this bridge proposed in `SetupEndpoints`
+    // (HAP-python does the same: the session's overrides the Selected's);
+    // the phone listens for that one.
+    let ssrc = pending.ssrc;
     let mut packetizer = Packetizer::new(video.payload_type, ssrc, random_u32() as u16, video.mtu);
     let (mut sps, mut pps) = (
         (!info.sps.is_empty()).then_some(info.sps),
@@ -744,7 +769,9 @@ async fn relay(
         %device,
         to = %destination,
         from_port = socket.local_addr().map_or(0, |a| a.port()),
-        ssrc,
+        ssrc = %format!("{ssrc:08x}"),
+        selected_ssrc = ?video.ssrc.map(|s| format!("{s:08x}")),
+        source_ip = ?source_ip(destination),
         payload_type = video.payload_type,
         mtu = video.mtu,
         max_kbps = video.max_bitrate,
@@ -870,6 +897,9 @@ async fn relay(
                         names_our_stream = r.ours,
                         blocks = r.blocks,
                         kinds = %crate::setup::hex(&r.kinds),
+                        block_ssrc = %format!("{:08x}", r.block_ssrc),
+                        our_ssrc = %format!("{ssrc:08x}"),
+                        feedback = ?r.feedback.map(|(f, s)| (f, format!("{s:08x}"))),
                         unreadable,
                         "homekit: phone_report"
                     );
@@ -1124,6 +1154,8 @@ mod tests {
                 ours: true,
                 blocks: 1,
                 kinds: [201, 206, 0, 0],
+                block_ssrc: 0x1234,
+                feedback: Some((1, 0)),
             }
         );
         assert!(!read_phone_report(&rr, 9).ours);

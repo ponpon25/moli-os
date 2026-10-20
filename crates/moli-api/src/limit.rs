@@ -37,7 +37,8 @@ fn budget(method: &Method, path: &str, from_dashboard: bool) -> Option<(&'static
     if !writes {
         return None;
     }
-    if path == "/api/command" || path.starts_with("/api/labels/") {
+    if path == "/api/command" || path.starts_with("/api/labels/") || path.starts_with("/api/prefs/")
+    {
         return Some(if from_dashboard {
             ("dashboard", 100)
         } else {

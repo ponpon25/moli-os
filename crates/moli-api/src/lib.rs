@@ -32,6 +32,7 @@ mod whereabouts;
 pub use whereabouts::INSTANCE as PEOPLE_INSTANCE;
 mod phones;
 mod plan;
+mod prefs;
 mod rest;
 mod session;
 pub mod settings;
@@ -213,6 +214,13 @@ fn house_routes(humans: &Arc<session::Sessions>, options: &Options) -> Router<Hu
         .route("/api/machines/{id}/report", post(machines::report))
         .route("/api/machines/{id}/remote", post(machines::remote))
         .layer(Extension(machines::MachinesGate(options.machines.clone())))
+        .layer(Extension(prefs::PrefsFile(
+            options
+                .home_path
+                .as_deref()
+                .and_then(std::path::Path::parent)
+                .map(|dir| dir.join("prefs.json")),
+        )))
         .layer(Extension(rest::SettingsFile(
             options
                 .home_path
@@ -307,6 +315,8 @@ pub fn router(hub: Hub, shutdown: CancellationToken, options: &Options) -> Route
         .route("/api/history", get(rest::history))
         .route("/api/bench", get(rest::bench))
         .route("/api/home", get(rest::home))
+        .route("/api/prefs", get(prefs::get))
+        .route("/api/prefs/{key}", put(prefs::put))
         .merge(house_routes(&humans, options))
         .route("/api/system", get(system::system))
         .route("/api/energy", get(rest::energy))

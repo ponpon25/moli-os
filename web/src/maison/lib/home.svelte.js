@@ -28,12 +28,66 @@ function readPref(key, fallback) {
   }
 }
 
+/** The dashboard's own choices: the house keeps them, so every device sees
+ *  the same (the rest stays on the device). */
+const SHARED = [
+  'maison-dashboard',
+  'maison-dashboard-off',
+  'maison-dashboard-on',
+  'maison-rooms-hidden',
+  'maison-rooms-extra',
+];
+
+const prefListeners = [];
+
+/** `fn(kept)` runs once the house's choices are known (`kept`: key -> value). */
+export function onPrefs(fn) {
+  prefListeners.push(fn);
+}
+
+function share(key, json) {
+  fetch(`/api/prefs/${key}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', 'x-moli-origin': 'ui' },
+    body: json,
+  }).catch(() => {
+    /* offline: still kept on this device */
+  });
+}
+
 export function savePref(key, value) {
   try {
     localStorage.setItem(key, value);
   } catch {
     /* private mode: keep it for this visit */
   }
+  if (SHARED.includes(key)) share(key, value);
+}
+
+/** Takes the house's choices; a key it does not know yet gets this device's,
+ *  once, so nothing set here before is lost. */
+async function pullPrefs() {
+  let kept;
+  try {
+    const res = await fetch('/api/prefs');
+    if (!res.ok) return;
+    kept = await res.json();
+  } catch {
+    return;
+  }
+  for (const key of SHARED) {
+    if (key in kept) {
+      try {
+        localStorage.setItem(key, JSON.stringify(kept[key]));
+      } catch {
+        /* private mode */
+      }
+    } else {
+      const mine = readPref(key, null);
+      if (mine) share(key, mine);
+    }
+  }
+  for (const fn of prefListeners) fn(kept);
 }
 
 let started = false;
@@ -50,6 +104,7 @@ export async function start() {
   } catch {
     home.config = {};
   }
+  await pullPrefs();
 }
 
 export function note(text, tone = 'info') {

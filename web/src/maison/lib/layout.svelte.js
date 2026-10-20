@@ -1,8 +1,9 @@
 // What this screen remembers of the way the family arranged it: which
 // rooms show, the rooms made here, the dashboard's tiles. Kept on this
-// device (localStorage); a device's room itself is the hub's (its label).
+// device (localStorage) and by the house (`prefs.json`), so every device sees
+// the same; a device's room itself is the hub's (its label).
 
-import { home, note, roomList, savePref } from './home.svelte.js';
+import { home, note, onPrefs, roomList, savePref } from './home.svelte.js';
 import { t } from '../../lib/i18n.svelte.js';
 
 function read(key, fallback) {
@@ -80,7 +81,7 @@ export async function removeRoom(name, devices) {
 // ---- which devices the dashboard shows -------------------------------------------
 
 /** Devices the family took off the dashboard / put on it, against the default
- *  (a clim shows unless it was taken off). Kept on this device, like the tiles. */
+ *  (a clim shows unless it was taken off). Kept like the tiles. */
 export const shown = $state({ off: read('maison-dashboard-off', []), on: read('maison-dashboard-on', []) });
 
 /** Whether a device is on the dashboard: its own choice, else `byDefault`. */
@@ -129,3 +130,17 @@ export function resetDashboard() {
   dash.tiles = {};
   keep('maison-dashboard', dash.tiles);
 }
+
+// ---- what the house kept ---------------------------------------------------------
+
+const list = (v) => (Array.isArray(v) ? v : null);
+
+// Once the house's choices arrive (they win over what this device had).
+onPrefs((kept) => {
+  layout.hiddenRooms = list(kept['maison-rooms-hidden']) ?? layout.hiddenRooms;
+  layout.extraRooms = list(kept['maison-rooms-extra']) ?? layout.extraRooms;
+  shown.off = list(kept['maison-dashboard-off']) ?? shown.off;
+  shown.on = list(kept['maison-dashboard-on']) ?? shown.on;
+  const tiles = kept['maison-dashboard'];
+  if (tiles && typeof tiles === 'object' && !Array.isArray(tiles)) dash.tiles = tiles;
+});

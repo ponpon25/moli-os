@@ -224,5 +224,17 @@
   "commun.code.saisis_other": "{count} chiffres saisis",
   "commun.code.effacer": "Effacer",
   "commun.code.nouveau_choisir": "Choisir un nouveau code",
-  "commun.nav.historique": "Historique"
+  "commun.nav.historique": "Historique",
+  "commun.clim.ventilation_titre": "Ventilation",
+  "commun.clim.ventilation_courte": "Ventilation {speed}",
+  "commun.clim.vitesse_auto": "auto",
+  "commun.clim.vitesse_nom": "vitesse {speed}",
+  "commun.clim.defaut": "Défaut",
+  "commun.clim.hors_ligne": "Hors ligne",
+  "commun.clim.pas_de_consigne": "Pas de consigne en ventilation",
+  "commun.clim.mode_court.froid": "Froid",
+  "commun.clim.mode_court.chaud": "Chaud",
+  "commun.clim.mode_court.auto": "Auto",
+  "commun.clim.mode_court.deshumidification": "Sec",
+  "commun.clim.mode_court.ventilation": "Ventil."
 }

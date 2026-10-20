@@ -1,6 +1,6 @@
 <script>
   import { hub, roomList, roomOf, nameOf, deviceKind, hidden, reachable, roomNamed, home } from '../lib/home.svelte.js';
-  import { layout, addRoom, setDeviceRoom } from '../lib/layout.svelte.js';
+  import { layout, addRoom, setDeviceRoom, onDashboard, showOnDashboard } from '../lib/layout.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
 
@@ -123,6 +123,12 @@
                 {#if hidden(x.d.id)} · {t('maison.equipements.masque')}{/if}
               </small>
             </span>
+            {#if x.kind === 'climate'}
+              <label class="show" title={t('maison.equipements.afficher_dashboard', { name: x.name })}>
+                <input type="checkbox" checked={onDashboard(x.d.id)} onchange={(e) => showOnDashboard(x.d.id, e.currentTarget.checked)} aria-label={t('maison.equipements.afficher_dashboard', { name: x.name })} />
+                <span>{t('maison.equipements.dashboard')}</span>
+              </label>
+            {/if}
             {#if creating === x.d.id}
               <form onsubmit={create}>
                 <!-- svelte-ignore a11y_autofocus -->
@@ -355,5 +361,22 @@
     form {
       flex: 1 0 100%;
     }
+  }
+
+  .show {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
+  .show input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--good);
+    cursor: pointer;
   }
 </style>

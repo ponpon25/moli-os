@@ -77,6 +77,26 @@ export async function removeRoom(name, devices) {
   }
 }
 
+// ---- which devices the dashboard shows -------------------------------------------
+
+/** Devices the family took off the dashboard / put on it, against the default
+ *  (a clim shows unless it was taken off). Kept on this device, like the tiles. */
+export const shown = $state({ off: read('maison-dashboard-off', []), on: read('maison-dashboard-on', []) });
+
+/** Whether a device is on the dashboard: its own choice, else `byDefault`. */
+export function onDashboard(id, byDefault = true) {
+  if (shown.off.includes(id)) return false;
+  if (shown.on.includes(id)) return true;
+  return byDefault;
+}
+
+export function showOnDashboard(id, yes) {
+  shown.off = yes ? shown.off.filter((i) => i !== id) : [...new Set([...shown.off, id])];
+  shown.on = yes ? [...new Set([...shown.on, id])] : shown.on.filter((i) => i !== id);
+  keep('maison-dashboard-off', shown.off);
+  keep('maison-dashboard-on', shown.on);
+}
+
 // ---- the dashboard's tiles -------------------------------------------------------
 
 /** Width in columns (of 12), height in rows of `ROW` px (0: its own). */

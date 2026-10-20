@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { energy } from '../lib/energy-live.svelte.js';
-  import { home, hub, value, device, isOn, clock, num, relative, lastSeen, roomList, lampsOf, nameOf, doorOpen, leak, lowBattery, act, pending } from '../lib/home.svelte.js';
+  import { home, hub, value, device, isOn, deviceKind, clock, num, relative, lastSeen, roomList, lampsOf, nameOf, doorOpen, leak, lowBattery, act, pending } from '../lib/home.svelte.js';
   import { isPrinter, phase } from '../lib/printers.js';
   import { t, locale } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
@@ -13,7 +13,7 @@
   import AmbiancePicker from '../ui/AmbiancePicker.svelte';
   import Routines from '../ui/Routines.svelte';
   import SkyHero from '../ui/SkyHero.svelte';
-  import { ROW, tileOf, setTile, reorder, saveDashboard, resetDashboard } from '../lib/layout.svelte.js';
+  import { ROW, tileOf, setTile, reorder, saveDashboard, resetDashboard, onDashboard } from '../lib/layout.svelte.js';
 
   const cfg = $derived(home.config ?? {});
 
@@ -36,11 +36,22 @@
     { id: 'lights', w: 8 },
     { id: 'energy', w: 4 },
     { id: 'routines', w: 4 },
-    { id: 'climate', w: 7 },
+    { id: 'climate', w: 12 },
     { id: 'doorbell', w: 5 },
     { id: 'remote', w: 3 },
     { id: 'outside', w: 4 },
   ];
+  /** The clims on the dashboard: those the layout file names, and every other
+   *  clim Moli knows unless the family took it off (Équipements). */
+  const clims = $derived.by(() => {
+    const listed = (cfg.favorites?.climate ?? []).filter((c) => onDashboard(c.id));
+    const ids = new Set(listed.map((c) => c.id));
+    const others = Object.values(hub.devices)
+      .filter((d) => deviceKind(d) === 'climate' && !ids.has(d.id) && onDashboard(d.id) && !(cfg.hidden ?? []).includes(d.id))
+      .map((d) => ({ id: d.id, name: nameOf(d.id) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return [...listed, ...others];
+  });
   /** A tile shows only if the house has what it is about. */
   const avail = $derived({
     sky: true,
@@ -50,7 +61,7 @@
     lights: true,
     energy: !energy.missing,
     routines: true,
-    climate: (cfg.favorites?.climate ?? []).length > 0,
+    climate: clims.length > 0,
     doorbell: !!bell,
     remote: !!tv,
     outside: !!(out.air || out.weather || out.pool),
@@ -328,7 +339,7 @@
       <section class="card climate">
         <div class="card-head"><h2><Icon name="air-conditioner" size={18} />{t('maison.accueil.clim')}</h2></div>
         <div class="clims">
-          {#each cfg.favorites?.climate ?? [] as c (c.id)}
+          {#each clims as c (c.id)}
             <ClimateCard id={c.id} name={c.name} />
           {/each}
         </div>
@@ -702,7 +713,7 @@
 
   .clims {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
     gap: 12px;
   }
 

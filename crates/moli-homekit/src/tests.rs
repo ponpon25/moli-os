@@ -725,6 +725,26 @@ async fn the_alarm_obeys_the_phone_when_the_household_chose_so() {
         .await;
     assert_eq!(status, 204);
     assert!(b.hub.approvals().is_empty(), "nothing is held");
+
+    // The Home app writes the alarm as a timed write: prepare, then the write.
+    let write = json!({"characteristics": [{"aid": alarm_aid, "iid": target, "value": 3}], "pid": 77});
+    let (status, _) = s.json("PUT", "/characteristics", &write).await;
+    assert_eq!(status, 470, "no prepare, no write");
+    let (status, _) = s.json("PUT", "/prepare", &json!({"ttl": 2000, "pid": 77})).await;
+    assert_eq!(status, 200);
+    let (status, _) = s.json("PUT", "/characteristics", &write).await;
+    assert_eq!(status, 204);
+    let (status, _) = s.json("PUT", "/characteristics", &write).await;
+    assert_eq!(status, 470, "a prepare serves once");
+    // Until the panel answers, the switch shows the asked mode.
+    let (_, read) = s
+        .json(
+            "GET",
+            &format!("/characteristics?id={alarm_aid}.{target}"),
+            &Json::Null,
+        )
+        .await;
+    assert_eq!(read["characteristics"][0]["value"], 3);
 }
 
 #[tokio::test]

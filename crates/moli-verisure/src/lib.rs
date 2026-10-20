@@ -427,11 +427,14 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
             command = ctx.next_command() => {
                 let Some(command) = command else { return Ok(()) };
                 if &*command.key == "refresh" {
-                    // Answered at once: the reading follows (a few seconds).
-                    command.reply(Ok(()));
+                    // Answered at once: the reading follows. `refresh` stays
+                    // true until it is over, so an automation can wait for
+                    // the panel's real state (a reading may take a while).
                     if refresh_due(last_read.map(|t| t.elapsed()), failures) {
+                        ctx.set_state(&id, "refresh", Value::Bool(true));
                         next = tokio::time::Instant::now();
                     }
+                    command.reply(Ok(()));
                     continue;
                 }
                 match order(&mut client, ctx, &installation, &id, &mut current, command).await {
@@ -446,6 +449,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
                         failures = 0;
                         last_read = Some(tokio::time::Instant::now());
                         publish(ctx, &id, &code);
+                        ctx.set_state(&id, "refresh", Value::Bool(false));
                         ctx.set_availability(&id, true);
                         current = code;
                         next = tokio::time::Instant::now() + poll;
@@ -453,6 +457,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
                     Err(Stop::Park(reason)) => return park(ctx, reason).await,
                     Err(Stop::Fail(e)) => {
                         failures += 1;
+                        ctx.set_state(&id, "refresh", Value::Bool(false));
                         let wait = backoff_for(&e);
                         tracing::warn!(instance = %ctx.instance(), error = %format!("{e:#}"), wait_s = wait.as_secs(), "verisure reading failed");
                         if failures >= 3 {

@@ -66,6 +66,8 @@ struct Conn {
     local: Option<IpAddr>,
     /// The last `SetupEndpoints` answer, per camera accessory, for the phone to read.
     camera_replies: HashMap<u64, Vec<u8>>,
+    /// A timed write announced by `PUT /prepare`: its `pid` and its end.
+    timed: Option<(u64, std::time::Instant)>,
 }
 
 impl Drop for Conn {
@@ -96,6 +98,7 @@ pub(crate) async fn serve(shared: Arc<Shared>, stream: TcpStream, cancel: Cancel
         subscribed: HashSet::new(),
         local,
         camera_replies: HashMap::new(),
+        timed: None,
     };
     conn.run(stream, cancel).await;
     tracing::info!(
@@ -272,6 +275,7 @@ impl Conn {
             _ if self.channel.is_none() => status_json(-70401),
             ("GET", "/accessories") => self.accessories(),
             ("GET", "/characteristics") => self.read_characteristics(&request.query),
+            ("PUT", "/prepare") => self.prepare(&request.body),
             ("PUT", "/characteristics") => self.write_characteristics(&request.body).await,
             ("POST", "/pairings") => self.pairings(&request.body),
             ("POST", "/resource") => self.resource(&request.body).await,
@@ -670,10 +674,31 @@ impl Conn {
         }
     }
 
+    /// A timed write (the Home app asks for one on the alarm): `ttl` ms to
+    /// send the write that carries this `pid`.
+    fn prepare(&mut self, body: &[u8]) -> Response {
+        let Ok(parsed) = serde_json::from_slice::<Json>(body) else {
+            return Response::empty(400);
+        };
+        let (Some(pid), Some(ttl)) = (parsed["pid"].as_u64(), parsed["ttl"].as_u64()) else {
+            return Response::empty(400);
+        };
+        let ttl = ttl.min(10_000);
+        self.timed = Some((pid, std::time::Instant::now() + Duration::from_millis(ttl)));
+        Response::json(200, &json!({ "status": 0 }))
+    }
+
     async fn write_characteristics(&mut self, body: &[u8]) -> Response {
         let Ok(parsed) = serde_json::from_slice::<Json>(body) else {
             return Response::empty(400);
         };
+        // A write that names a `pid` must follow its `prepare`, in time.
+        if let Some(pid) = parsed["pid"].as_u64() {
+            let timed = self.timed.take();
+            if !timed.is_some_and(|(p, end)| p == pid && std::time::Instant::now() <= end) {
+                return status_json(-70410);
+            }
+        }
         let Some(entries) = parsed["characteristics"].as_array() else {
             return Response::empty(400);
         };
@@ -772,8 +797,15 @@ impl Conn {
                     } else {
                         Origin::Api
                     };
-                    self.command_as(point, Value::Text(mode.into()), origin)
-                        .await
+                    let (status, held) = self
+                        .command_as(point, Value::Text(mode.into()), origin)
+                        .await;
+                    if status == OK && !held {
+                        // The panel takes a while: until it says so, the
+                        // switch keeps the asked mode.
+                        self.shared.arm_asked(point, value.as_i64().unwrap_or(0));
+                    }
+                    status
                 }
                 None => ST_INVALID,
             },
@@ -796,27 +828,28 @@ impl Conn {
     /// order is accepted (it waits for a human in the dashboard) and the
     /// controllers are shown the unchanged value again.
     async fn command(&self, point: &PointId, value: Value) -> i32 {
-        self.command_as(point, value, Origin::Api).await
+        self.command_as(point, value, Origin::Api).await.0
     }
 
-    async fn command_as(&self, point: &PointId, value: Value, origin: Origin) -> i32 {
+    /// The status to answer, and whether the guard held the order.
+    async fn command_as(&self, point: &PointId, value: Value, origin: Origin) -> (i32, bool) {
         let result = self
             .shared
             .hub
             .command(point, value, origin, Some(ACTOR.to_owned()))
             .await;
         match result {
-            Ok(()) => OK,
+            Ok(()) => (OK, false),
             Err(CommandError::NeedsApproval { .. }) => {
                 self.shared.refresh(point);
-                OK
+                (OK, true)
             }
-            Err(CommandError::Invalid(_)) => ST_INVALID,
-            Err(CommandError::ReadOnly) => ST_READ_ONLY,
-            Err(CommandError::UnknownPoint) => ST_NOT_FOUND,
+            Err(CommandError::Invalid(_)) => (ST_INVALID, false),
+            Err(CommandError::ReadOnly) => (ST_READ_ONLY, false),
+            Err(CommandError::UnknownPoint) => (ST_NOT_FOUND, false),
             Err(e) => {
                 tracing::debug!(error = %e, "homekit: an order failed");
-                accessories::ST_COMMUNICATION
+                (accessories::ST_COMMUNICATION, false)
             }
         }
     }

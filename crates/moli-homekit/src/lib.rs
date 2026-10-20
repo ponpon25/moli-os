@@ -48,6 +48,7 @@ mod tlv;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -163,6 +164,9 @@ pub(crate) struct Shared {
     pub(crate) streams: camera::Streams,
     /// The connection currently pairing, if any.
     pub setup_owner: Mutex<Option<u64>>,
+    /// The alarm mode just asked for, shown as the target until the panel
+    /// answers (arming takes a while): `(HomeKit target, asked at)`.
+    pending_arm: Mutex<HashMap<PointId, (i64, std::time::Instant)>>,
     pub failures: AtomicU32,
     next_conn: AtomicU64,
     /// The port the listener got (the configured one, or the system's for 0).
@@ -176,6 +180,9 @@ impl std::fmt::Debug for Shared {
 }
 
 /// Pair-setup attempts allowed before the bridge refuses (HAP says 100).
+/// How long an asked alarm mode is shown before the panel's word returns.
+const ARM_PENDING: Duration = Duration::from_secs(90);
+
 pub(crate) const MAX_FAILURES: u32 = 100;
 
 impl Shared {
@@ -269,6 +276,36 @@ impl Shared {
     }
 
     // ---- values -------------------------------------------------------------
+
+    /// The alarm took an order: its target stays the asked one for a while,
+    /// then the panel's word is shown again.
+    pub(crate) fn arm_asked(self: &Arc<Self>, point: &PointId, target: i64) {
+        self.pending_arm
+            .lock()
+            .expect("pending lock")
+            .insert(point.clone(), (target, std::time::Instant::now()));
+        self.refresh(point);
+        let (shared, point) = (Arc::clone(self), point.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(ARM_PENDING + Duration::from_secs(1)).await;
+            shared.refresh(&point);
+        });
+    }
+
+    /// The asked target, while it is still waiting for the panel.
+    fn arm_pending(&self, point: &PointId) -> Option<i64> {
+        let mut pending = self.pending_arm.lock().expect("pending lock");
+        let (target, at) = *pending.get(point)?;
+        let reached = self
+            .state_text(point)
+            .and_then(|m| accessories::arm_target_of(&m))
+            .is_some_and(|n| n == target);
+        if reached || at.elapsed() > ARM_PENDING {
+            pending.remove(point);
+            return None;
+        }
+        Some(target)
+    }
 
     fn state_text(&self, point: &PointId) -> Option<String> {
         match self.hub.state(point)?.value {
@@ -374,8 +411,8 @@ impl Shared {
                 if self.offline(point) {
                     return Err(ST_COMMUNICATION);
                 }
-                self.state_text(point)
-                    .and_then(|m| arm_target_of(&m))
+                self.arm_pending(point)
+                    .or_else(|| self.state_text(point).and_then(|m| arm_target_of(&m)))
                     .map(|n| serde_json::json!(n))
                     .ok_or(ST_COMMUNICATION)
             }
@@ -778,6 +815,7 @@ pub async fn start(
         rebuild: Notify::new(),
         streams: camera::Streams::new(cancel.clone()),
         setup_owner: Mutex::new(None),
+        pending_arm: Mutex::new(HashMap::new()),
         failures: AtomicU32::new(0),
         next_conn: AtomicU64::new(1),
         port,

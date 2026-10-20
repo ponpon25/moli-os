@@ -15,9 +15,12 @@
 
 mod api;
 mod model;
+mod orders;
 mod stomp;
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use moli_core::{Access, Device, DeviceId, Kind, PointSpec, Semantic, Unit as Measure, Value};
@@ -25,8 +28,9 @@ use moli_runtime::{BoxFuture, CommandRequest, Driver, DriverCtx};
 use serde::Deserialize;
 use tokio::time::Instant;
 
-use api::{Account, ApiError, Client, Event, Feed};
+use api::{ApiError, Client, Event, Feed};
 use model::{Capabilities, Change, Mode, Unit};
+use orders::Orders;
 
 const USERNAME: &str = "username";
 const PASSWORD: &str = "password";
@@ -43,9 +47,6 @@ const MAX_WAIT: Duration = Duration::from_secs(5 * 60);
 /// A unit asked again soon after an order is read again twice: it takes a
 /// few seconds to follow.
 const AFTER_ORDER: [Duration; 2] = [Duration::from_secs(3), Duration::from_secs(10)];
-/// An order starts from the state it left, not from a picture the cloud
-/// has not yet caught up with, for this long.
-const OVERLAY: Duration = Duration::from_secs(20);
 
 /// Driver configuration (`[driver.options]` in `moli.toml`). The identifier
 /// and the password are not here: they live in the secret store.
@@ -205,6 +206,22 @@ fn device_of(ctx: &DriverCtx, unit: &Unit, range: (f64, f64)) -> Device {
                 None,
             ),
             spec(
+                "last_order",
+                moli_i18n::tr!("pilotes.hitachi.dernier_ordre"),
+                Kind::Text,
+                false,
+                Semantic::Other,
+                None,
+            ),
+            spec(
+                "order_failed",
+                moli_i18n::tr!("pilotes.hitachi.ordre_en_echec"),
+                Kind::Binary,
+                false,
+                Semantic::Other,
+                None,
+            ),
+            spec(
                 "fault",
                 moli_i18n::tr!("pilotes.hitachi.defaut"),
                 Kind::Binary,
@@ -240,19 +257,11 @@ fn publish(ctx: &DriverCtx, id: &DeviceId, unit: &Unit) {
 struct Fleet {
     /// The last state the cloud reported, by the unit's native identifier.
     units: HashMap<String, Unit>,
-    /// The state an order left, for a short while.
-    overlay: HashMap<String, (Instant, Unit)>,
+    orders: Orders,
     caps: Capabilities,
 }
 
 impl Fleet {
-    fn base(&self, native: &str) -> Option<Unit> {
-        match self.overlay.get(native) {
-            Some((at, unit)) if at.elapsed() < OVERLAY => Some(unit.clone()),
-            _ => self.units.get(native).cloned(),
-        }
-    }
-
     /// Takes a message of the notification service in, and publishes it.
     fn absorb(&mut self, ctx: &DriverCtx, message: &serde_json::Value) {
         let units = model::units_of(message);
@@ -261,6 +270,7 @@ impl Fleet {
             Some("ON_CONNECT" | "REFRESH_ALL")
         );
         let range = self.caps.overall();
+        let now = Instant::now();
         for unit in units.iter().filter(|u| !u.thing.is_empty()) {
             let native = unit.native_id();
             let id = ctx.device_id(&native);
@@ -269,7 +279,7 @@ impl Fleet {
                 tracing::info!(instance = %ctx.instance(), model = unit.model(), "hitachi unit found");
             }
             publish(ctx, &id, unit);
-            self.overlay.remove(&native);
+            self.orders.observe(&native, unit, now);
             self.units.insert(native, unit.clone());
         }
         if whole && !units.is_empty() {
@@ -283,7 +293,7 @@ impl Fleet {
             for native in gone {
                 ctx.remove_device(&ctx.device_id(&native));
                 self.units.remove(&native);
-                self.overlay.remove(&native);
+                self.orders.forget(&native);
             }
         }
     }
@@ -333,7 +343,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
     let mut client = Client::new(&username, &password);
     let mut fleet = Fleet {
         units: HashMap::new(),
-        overlay: HashMap::new(),
+        orders: Orders::default(),
         caps: Capabilities::default(),
     };
     let mut failures = 0u32;
@@ -360,8 +370,12 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
     }
 }
 
+/// An order on its way: what it was for and how it ended.
+type Flight = Pin<Box<dyn Future<Output = (String, Unit, Result<(), ApiError>)> + Send>>;
+
 /// One session: sign in, find the home, follow the feed and take orders,
 /// until the token is about to end or something breaks.
+#[allow(clippy::too_many_lines)]
 async fn session(
     config: &Config,
     client: &mut Client,
@@ -383,7 +397,7 @@ async fn session(
             tracing::warn!(instance = %ctx.instance(), error = %e, "hitachi: model limits unknown");
         }
     }
-    let Some(token) = client.token().map(str::to_owned) else {
+    let Some(token) = client.bearer() else {
         return Stop::Renew;
     };
     let mut feed = match Feed::open(&token, account).await {
@@ -398,9 +412,13 @@ async fn session(
     let mut next_poll = Instant::now() + poll;
     let mut quick: Vec<Instant> = Vec::new();
     let mut heard = Instant::now();
+    // At most one order on its way: the cloud takes them one by one.
+    let mut flight: Option<Flight> = None;
+    // An order that met an ended session goes once more.
+    let mut retried = false;
     loop {
         let now = Instant::now();
-        if now >= client.renew_at().into() {
+        if flight.is_none() && fleet.orders.is_empty() && now >= client.renew_at().into() {
             return Stop::Renew;
         }
         if heard.elapsed() > SILENCE {
@@ -416,16 +434,62 @@ async fn session(
                 return Stop::Fail(e);
             }
         }
+        // The order that is due goes, when none is on its way.
+        if flight.is_none()
+            && let Some((native, unit)) = fleet.orders.take_due(now)
+        {
+            if let Err(stop) = sign_in(client, ctx).await {
+                return stop;
+            }
+            let Some(token) = client.bearer() else {
+                return Stop::Renew;
+            };
+            note_order(ctx, &native, None);
+            let sent = unit.clone();
+            flight = Some(Box::pin(async move {
+                let result = api::send_order(token, sent, account.family).await;
+                (native, unit, result)
+            }));
+        }
+        // While an order is on its way the next one waits: no wake-up for it.
+        let wake = match (&flight, fleet.orders.next_due()) {
+            (None, Some(due)) => due,
+            _ => now + Duration::from_secs(5),
+        };
         tokio::select! {
             command = ctx.next_command() => {
                 let Some(command) = command else { return Stop::Done };
-                match order(client, ctx, fleet, account, command).await {
-                    Ok(true) => {
-                        let at = Instant::now();
+                accept(ctx, fleet, command);
+            }
+            (native, unit, result) = async {
+                match flight.as_mut() {
+                    Some(f) => f.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                flight = None;
+                let at = Instant::now();
+                match result {
+                    Ok(()) => {
+                        retried = false;
+                        tracing::info!(instance = %ctx.instance(), "hitachi order taken");
+                        fleet.orders.sent(&native, &unit, at);
+                        note_order(ctx, &native, Some(Ok(())));
                         quick.extend(AFTER_ORDER.iter().map(|d| at + *d));
                     }
-                    Ok(false) => {}
-                    Err(stop) => return stop,
+                    Err(ApiError::SessionExpired) if !retried => {
+                        // The token ended early: sign in again, send once more.
+                        retried = true;
+                        client.forget_session();
+                        fleet.orders.requeue(&native, unit, at);
+                    }
+                    Err(e) => {
+                        retried = false;
+                        tracing::warn!(instance = %ctx.instance(), error = %e, "hitachi order failed");
+                        note_order(ctx, &native, Some(Err(e.to_string())));
+                        // What the unit really does is read again.
+                        quick.extend(AFTER_ORDER.iter().map(|d| at + *d));
+                    }
                 }
             }
             event = feed.next(Duration::from_secs(5)) => match event {
@@ -437,8 +501,24 @@ async fn session(
                 }
                 Err(e) => return Stop::Fail(e),
             },
+            () = tokio::time::sleep_until(wake) => {}
         }
     }
+}
+
+/// Says on the unit what became of its last order.
+fn note_order(ctx: &DriverCtx, native: &str, outcome: Option<Result<(), String>>) {
+    let id = ctx.device_id(native);
+    let (text, failed) = match outcome {
+        None => (moli_i18n::tr!("pilotes.hitachi.ordre_envoye"), false),
+        Some(Ok(())) => (moli_i18n::tr!("pilotes.hitachi.ordre_pris"), false),
+        Some(Err(why)) => (
+            moli_i18n::tr!("pilotes.hitachi.ordre_refuse", why = why),
+            true,
+        ),
+    };
+    ctx.set_state(&id, "last_order", Value::Text(text.into()));
+    ctx.set_state(&id, "order_failed", Value::Bool(failed));
 }
 
 /// What an order asks, or why it is not an order.
@@ -476,22 +556,14 @@ fn change_of(command: &CommandRequest) -> Result<Change, String> {
     }
 }
 
-/// One order. `Ok(true)`: the cloud took it, the unit will follow. The
-/// caller of the order hears a refusal in words; a person's problem (the
-/// account refusing the sign-in) comes back as `Stop::Park`.
-async fn order(
-    client: &mut Client,
-    ctx: &DriverCtx,
-    fleet: &mut Fleet,
-    account: Account,
-    command: CommandRequest,
-) -> Result<bool, Stop> {
+/// Takes an order in: checked now against what the unit will be, answered at
+/// once (the hub waits only a few seconds, the cloud takes longer), queued to
+/// go once the person stops tapping. What becomes of it shows on the unit
+/// (`last_order`, `order_failed`).
+fn accept(ctx: &DriverCtx, fleet: &mut Fleet, command: CommandRequest) {
     let change = match change_of(&command) {
         Ok(change) => change,
-        Err(why) => {
-            command.reply(Err(why));
-            return Ok(false);
-        }
+        Err(why) => return command.reply(Err(why)),
     };
     let found = fleet
         .units
@@ -499,80 +571,27 @@ async fn order(
         .find(|native| ctx.device_id(native) == command.device.id)
         .cloned();
     let Some(native) = found else {
-        command.reply(Err(moli_i18n::tr!("pilotes.hitachi.appareil_inconnu")));
-        return Ok(false);
+        return command.reply(Err(moli_i18n::tr!("pilotes.hitachi.appareil_inconnu")));
     };
-    let Some(base) = fleet.base(&native) else {
-        command.reply(Err(moli_i18n::tr!("pilotes.hitachi.appareil_inconnu")));
-        return Ok(false);
-    };
-    if !base.online {
-        command.reply(Err(moli_i18n::tr!("pilotes.hitachi.hors_ligne")));
-        return Ok(false);
+    let now = Instant::now();
+    let cloud = &fleet.units[&native];
+    if !cloud.online {
+        return command.reply(Err(moli_i18n::tr!("pilotes.hitachi.hors_ligne")));
     }
+    let base = fleet.orders.projected(&native, cloud, now);
     let next = match model::apply(&base, &fleet.caps, &change) {
         Ok(next) => next,
         Err(why) => {
-            command.reply(Err(moli_i18n::tr!(
+            return command.reply(Err(moli_i18n::tr!(
                 "pilotes.hitachi.ordre_refuse",
                 why = why
             )));
-            return Ok(false);
         }
     };
-    if next == base {
-        command.reply(Ok(()));
-        return Ok(false);
+    if next != base {
+        fleet.orders.enqueue(&native, next, &change, now);
     }
-    // A warm session: the hub's answer cannot wait for a slow sign-in more
-    // than a moment, but an expired token is renewed once.
-    if let Err(stop) = sign_in(client, ctx).await {
-        return match stop {
-            Stop::Park(reason) => {
-                command.reply(Err(reason.clone()));
-                Err(Stop::Park(reason))
-            }
-            Stop::Fail(e) => {
-                command.reply(Err(format!("{e:#}")));
-                Ok(false)
-            }
-            other => Err(other),
-        };
-    }
-    let mut result = client.order(&next, account.family).await;
-    if matches!(result, Err(ApiError::SessionExpired)) {
-        // The token ended early: one new sign-in, one new try.
-        client.forget_session();
-        if let Err(stop) = sign_in(client, ctx).await {
-            return match stop {
-                Stop::Park(reason) => {
-                    command.reply(Err(reason.clone()));
-                    Err(Stop::Park(reason))
-                }
-                Stop::Fail(e) => {
-                    command.reply(Err(format!("{e:#}")));
-                    Ok(false)
-                }
-                other => Err(other),
-            };
-        }
-        result = client.order(&next, account.family).await;
-    }
-    match result {
-        Ok(()) => {
-            tracing::info!(instance = %ctx.instance(), "hitachi order taken");
-            fleet.overlay.insert(native, (Instant::now(), next));
-            command.reply(Ok(()));
-            Ok(true)
-        }
-        Err(e) => {
-            command.reply(Err(moli_i18n::tr!(
-                "pilotes.hitachi.ordre_refuse",
-                why = e.to_string()
-            )));
-            Ok(false)
-        }
-    }
+    command.reply(Ok(()));
 }
 
 #[cfg(test)]

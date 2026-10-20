@@ -512,5 +512,9 @@
   "pilotes.hitachi.point_non_ecrivable": "{point} is read-only",
   "pilotes.hitachi.appareil_inconnu": "this unit is not (or no longer) in the account",
   "pilotes.hitachi.hors_ligne": "the unit is offline for the Hitachi cloud",
-  "pilotes.hitachi.ordre_refuse": "order refused: {why}"
+  "pilotes.hitachi.ordre_refuse": "order refused: {why}",
+  "pilotes.hitachi.dernier_ordre": "Last order",
+  "pilotes.hitachi.ordre_en_echec": "Last order failed",
+  "pilotes.hitachi.ordre_envoye": "sending to Hitachi…",
+  "pilotes.hitachi.ordre_pris": "accepted by Hitachi"
 }

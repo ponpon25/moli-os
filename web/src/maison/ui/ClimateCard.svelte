@@ -22,6 +22,8 @@
   const fan = $derived(asked('fan_speed', value(id, 'fan_speed')));
   const outdoor = $derived(value(id, 'outdoor_temperature'));
   const fault = $derived(value(id, 'fault') === true);
+  /** Hitachi's cloud refused the last order, or did not answer: said on the card. */
+  const orderFailed = $derived(value(id, 'order_failed') === true ? value(id, 'last_order') : null);
   const canMode = $derived(!!point('mode')?.access?.write);
   const fans = $derived(point('fan_speed')?.access?.write ? (point('fan_speed')?.kind?.values ?? []) : []);
   /** The modes this unit takes, in the order the card shows them. */
@@ -270,6 +272,10 @@
         {/each}
       </div>
     </div>
+  {/if}
+
+  {#if orderFailed}
+    <p class="failed" role="status"><Icon name="alert" size={14} />{orderFailed}</p>
   {/if}
 
   {#if energy.summary}
@@ -720,6 +726,18 @@
 
   .costs small {
     color: var(--ink-3);
+  }
+
+  .failed {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    background: var(--alert-soft);
+    color: var(--alert);
+    font-size: 12.5px;
+    font-weight: 600;
   }
 
   .unreachable {

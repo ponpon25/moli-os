@@ -512,5 +512,9 @@
   "pilotes.hitachi.point_non_ecrivable": "{point} ne s'écrit pas",
   "pilotes.hitachi.appareil_inconnu": "cette clim n'est pas (ou plus) dans le compte",
   "pilotes.hitachi.hors_ligne": "la clim est hors ligne pour le cloud Hitachi",
-  "pilotes.hitachi.ordre_refuse": "ordre refusé : {why}"
+  "pilotes.hitachi.ordre_refuse": "ordre refusé : {why}",
+  "pilotes.hitachi.dernier_ordre": "Dernier ordre",
+  "pilotes.hitachi.ordre_en_echec": "Dernier ordre en échec",
+  "pilotes.hitachi.ordre_envoye": "envoi à Hitachi…",
+  "pilotes.hitachi.ordre_pris": "pris en compte par Hitachi"
 }

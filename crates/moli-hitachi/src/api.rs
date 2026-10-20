@@ -23,6 +23,8 @@ pub const NOTIFICATION_HOST: &str = "notification-global-prod.aircloudhome.com";
 const SOCKET_PATH: &str = "/rac-notifications/websocket";
 const USER_AGENT: &str = "airCloud%20Home/30 CFNetwork/3896.100.1.2.1 Darwin/27.0.0";
 const REQUEST_LIMIT: Duration = Duration::from_secs(15);
+/// An order waits for the unit's answer, which Hitachi's cloud takes its time over.
+const ORDER_LIMIT: Duration = Duration::from_secs(40);
 const MAX_ANSWER: usize = 1024 * 1024;
 /// Two requests are never closer than this.
 const MIN_GAP: Duration = Duration::from_millis(500);
@@ -233,26 +235,49 @@ impl Client {
         Ok(Capabilities::from_json(&config))
     }
 
-    /// One order: the unit's whole state. `Ok` once the cloud has taken it
-    /// (the unit follows a few seconds later).
-    pub async fn order(&mut self, unit: &Unit, family: i64) -> Result<(), ApiError> {
-        let path = format!(
-            "/rac/basic-idu-control/general-control-command-status/{}?familyId={family}",
-            unit.id
-        );
-        let (status, answer) = self
-            .call(Method::PUT, &path, Some(&order_body(unit)), true)
-            .await?;
-        if !status.is_success() {
-            let why = answer["message"]
-                .as_str()
-                .map_or_else(|| format!("HTTP {status}"), str::to_owned);
-            return Err(ApiError::Refused(why));
-        }
-        match answer["status"].as_str() {
-            Some("DONE") | None => Ok(()),
-            Some(other) => Err(ApiError::Refused(format!("status {other}"))),
-        }
+    /// The token, for an order that goes on its own (see [`send_order`]).
+    #[must_use]
+    pub fn bearer(&self) -> Option<String> {
+        self.token().map(str::to_owned)
+    }
+}
+
+/// One order: the unit's whole state. `Ok` once the cloud has taken it (the
+/// unit follows a few seconds later). Independent of the client so that it can
+/// run while the driver goes on reading and taking orders.
+pub async fn send_order(token: String, unit: Unit, family: i64) -> Result<(), ApiError> {
+    let path = format!(
+        "/rac/basic-idu-control/general-control-command-status/{}?familyId={family}",
+        unit.id
+    );
+    let payload = order_body(&unit).to_string().into_bytes();
+    let request = http::Request::builder()
+        .method(Method::PUT)
+        .uri(path)
+        .header("user-agent", USER_AGENT)
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header(
+            HeaderName::from_static("authorization"),
+            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| anyhow!("{e}"))?,
+        )
+        .body(Full::new(Body::from(payload)))
+        .map_err(|e| anyhow!("{e}"))?;
+    let (status, _, bytes) =
+        moli_net::web_with_headers(API_HOST, 443, true, request, ORDER_LIMIT, MAX_ANSWER).await?;
+    if status == http::StatusCode::UNAUTHORIZED {
+        return Err(ApiError::SessionExpired);
+    }
+    let answer: Json = serde_json::from_slice(&bytes).unwrap_or(Json::Null);
+    if !status.is_success() {
+        let why = answer["message"]
+            .as_str()
+            .map_or_else(|| format!("HTTP {status}"), str::to_owned);
+        return Err(ApiError::Refused(why));
+    }
+    match answer["status"].as_str() {
+        Some("DONE") | None => Ok(()),
+        Some(other) => Err(ApiError::Refused(format!("status {other}"))),
     }
 }
 

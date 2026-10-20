@@ -99,4 +99,5 @@ base_topic = "zigbee2mqtt"
 # [homekit]
 # name = "Moli"
 # port = 51827
+# alarm_direct = true       # armer/désarmer depuis Maison sans approbation (défaut : retenu)
 # address = "192.168.0.x"   # seulement si la route par défaut n'est pas la bonne

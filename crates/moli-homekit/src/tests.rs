@@ -144,6 +144,10 @@ async fn bridge(name: &str) -> Bridge {
 }
 
 async fn bridge_with(name: &str, house: Arc<dyn Driver>) -> Bridge {
+    bridge_configured(name, house, false).await
+}
+
+async fn bridge_configured(name: &str, house: Arc<dyn Driver>, alarm_direct: bool) -> Bridge {
     let dir = std::env::temp_dir().join(format!("moli-homekit-it-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -172,6 +176,7 @@ async fn bridge_with(name: &str, house: Arc<dyn Driver>) -> Bridge {
         Config {
             port: 0,
             announce: false,
+            alarm_direct,
             ..Config::default()
         },
         cancel.clone(),
@@ -698,6 +703,28 @@ async fn a_paired_phone_reads_writes_and_is_stopped_by_the_guard() {
         )
         .await;
     assert_eq!(status, 207);
+}
+
+#[tokio::test]
+async fn the_alarm_obeys_the_phone_when_the_household_chose_so() {
+    let b = bridge_configured("alarm-direct", Arc::new(FakeHouse), true).await;
+    let code = b.homekit.status(true).setup_code.unwrap();
+    let phone = Controller::new("phone-direct");
+    let mut client = Client::connect(b.homekit.port()).await;
+    phone.pair(&mut client, &code).await.unwrap();
+    let mut s = Client::connect(b.homekit.port()).await;
+    phone.verify(&mut s).await.unwrap();
+    let db = s.json("GET", "/accessories", &Json::Null).await.1;
+    let (alarm_aid, target) = find(&db, "fake:alarm", "67");
+    let (status, _) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": alarm_aid, "iid": target, "value": 1}]}),
+        )
+        .await;
+    assert_eq!(status, 204);
+    assert!(b.hub.approvals().is_empty(), "nothing is held");
 }
 
 #[tokio::test]

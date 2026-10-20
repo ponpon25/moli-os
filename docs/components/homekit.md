@@ -170,8 +170,11 @@ Un ordre venu d'HomeKit part au hub avec l'origine **`api`** (acteur « homekit 
   devient une **demande d'approbation** à valider dans le tableau de bord. HomeKit accepte l'ordre
   (sinon l'app afficherait une erreur) puis **remontre l'état inchangé** ; s'il est approuvé, le
   changement revient par les notifications.
-- Il n'y a donc **pas de contournement** : armer ou désarmer l'alarme depuis l'iPhone ou Siri demande
+- Il n'y a donc **pas de contournement** (sauf `alarm_direct`, ci-dessous) : armer ou désarmer l'alarme depuis l'iPhone ou Siri demande
   toujours un humain devant le tableau de bord de Moli. C'est voulu.
+- **Exception choisie** : `alarm_direct = true` dans `[homekit]` fait passer l'armement et le
+  désarmement de l'alarme **sans approbation** (le téléphone appairé fait foi). Cela ne concerne que
+  l'alarme ; le reste reste soumis à la garde. Désactivé par défaut.
 - Un appareil hors ligne répond « ne répond pas » dans l'app Maison.
 
 ## Où vivent les secrets et l'état

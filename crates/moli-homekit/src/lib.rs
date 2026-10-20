@@ -90,6 +90,11 @@ pub struct Config {
     /// `false`: do not announce on the network (tests).
     #[serde(default = "yes")]
     pub announce: bool,
+    /// `true`: arming or disarming the alarm from the Home app goes through
+    /// at once, as from the dashboard (the paired phone is the proof).
+    /// Default `false`: the guard holds it for a human.
+    #[serde(default)]
+    pub alarm_direct: bool,
 }
 
 fn yes() -> bool {
@@ -111,6 +116,7 @@ impl Default for Config {
             name: default_name(),
             address: None,
             announce: true,
+            alarm_direct: false,
         }
     }
 }

@@ -766,7 +766,15 @@ impl Conn {
                 None => ST_INVALID,
             },
             Bind::ArmTarget(point) => match value.as_i64().and_then(mode_of_arm_target) {
-                Some(mode) => self.command(point, Value::Text(mode.into())).await,
+                Some(mode) => {
+                    let origin = if self.shared.config.alarm_direct {
+                        Origin::Ui
+                    } else {
+                        Origin::Api
+                    };
+                    self.command_as(point, Value::Text(mode.into()), origin)
+                        .await
+                }
                 None => ST_INVALID,
             },
             Bind::Color(point, part) => {
@@ -788,10 +796,14 @@ impl Conn {
     /// order is accepted (it waits for a human in the dashboard) and the
     /// controllers are shown the unchanged value again.
     async fn command(&self, point: &PointId, value: Value) -> i32 {
+        self.command_as(point, value, Origin::Api).await
+    }
+
+    async fn command_as(&self, point: &PointId, value: Value, origin: Origin) -> i32 {
         let result = self
             .shared
             .hub
-            .command(point, value, Origin::Api, Some(ACTOR.to_owned()))
+            .command(point, value, origin, Some(ACTOR.to_owned()))
             .await;
         match result {
             Ok(()) => OK,

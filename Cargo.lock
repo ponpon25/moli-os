@@ -1341,6 +1341,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-hitachi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "http",
+ "http-body-util",
+ "moli-core",
+ "moli-i18n",
+ "moli-net",
+ "moli-runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "moli-homekit"
 version = "0.1.0"
 dependencies = [
@@ -1520,6 +1537,7 @@ dependencies = [
  "moli-frigate",
  "moli-helpers",
  "moli-history",
+ "moli-hitachi",
  "moli-homekit",
  "moli-host",
  "moli-hue",

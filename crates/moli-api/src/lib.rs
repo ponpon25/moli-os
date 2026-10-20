@@ -213,6 +213,8 @@ fn house_routes(humans: &Arc<session::Sessions>, options: &Options) -> Router<Hu
         .route("/api/machines/{id}", get(machines::view))
         .route("/api/machines/{id}/report", post(machines::report))
         .route("/api/machines/{id}/remote", post(machines::remote))
+        .route("/api/prefs", get(prefs::get))
+        .route("/api/prefs/{key}", put(prefs::put))
         .layer(Extension(machines::MachinesGate(options.machines.clone())))
         .layer(Extension(prefs::PrefsFile(
             options
@@ -315,8 +317,6 @@ pub fn router(hub: Hub, shutdown: CancellationToken, options: &Options) -> Route
         .route("/api/history", get(rest::history))
         .route("/api/bench", get(rest::bench))
         .route("/api/home", get(rest::home))
-        .route("/api/prefs", get(prefs::get))
-        .route("/api/prefs/{key}", put(prefs::put))
         .merge(house_routes(&humans, options))
         .route("/api/system", get(system::system))
         .route("/api/energy", get(rest::energy))

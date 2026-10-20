@@ -1209,3 +1209,61 @@ async fn homekit_routes_say_so_when_there_is_no_bridge() {
     let (status, _) = request(&addr, "POST", "/api/homekit/unpair", None).await;
     assert_eq!(status, 503);
 }
+
+/// The family's dashboard choices are kept by the house, for the household.
+#[tokio::test]
+async fn the_dashboard_choices_are_kept_by_the_house() {
+    let dir = std::env::temp_dir().join(format!("moli-http-prefs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let hub = Hub::new(HubOptions::default()).unwrap();
+    let options = moli_api::Options {
+        home_path: Some(dir.join("home.json")),
+        ..moli_api::Options::default()
+    };
+    let addr = serve(&hub, &options).await;
+
+    let (status, body) = request(&addr, "GET", "/api/prefs", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(serde_json::from_str::<Json>(&body).unwrap(), json!({}));
+
+    let hidden = json!(["Garage"]);
+    let (status, _) = request(
+        &addr,
+        "PUT",
+        "/api/prefs/maison-rooms-hidden",
+        Some(&hidden),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (_, body) = request(&addr, "GET", "/api/prefs", None).await;
+    assert_eq!(
+        serde_json::from_str::<Json>(&body).unwrap()["maison-rooms-hidden"],
+        hidden
+    );
+    assert!(dir.join("prefs.json").exists(), "kept next to home.json");
+
+    let (status, _) = request(
+        &addr,
+        "PUT",
+        "/api/prefs/maison-theme",
+        Some(&json!("dark")),
+    )
+    .await;
+    assert_eq!(status, 404, "only the dashboard's own keys");
+
+    // From the Internet, nothing is read or changed.
+    let outside = "X-Forwarded-For: 203.0.113.9\r\n";
+    let (status, _) = request_with(&addr, "GET", "/api/prefs", None, outside).await;
+    assert_eq!(status, 403);
+    let (status, _) = request_with(
+        &addr,
+        "PUT",
+        "/api/prefs/maison-rooms-hidden",
+        Some(&json!([])),
+        outside,
+    )
+    .await;
+    assert_eq!(status, 403);
+    let _ = std::fs::remove_dir_all(dir);
+}

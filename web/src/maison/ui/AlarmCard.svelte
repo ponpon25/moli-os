@@ -187,6 +187,32 @@
     cursor: progress;
   }
 
+  /* In a dashboard tile: by the tile's own width, not the screen's. */
+  @container (max-width: 760px) {
+    .alarm {
+      grid-template-columns: 1fr;
+    }
+
+    .buttons {
+      justify-content: space-between;
+    }
+
+    .big {
+      flex: 1;
+      width: auto;
+    }
+  }
+
+  @container (max-width: 380px) {
+    .buttons {
+      flex-wrap: wrap;
+    }
+
+    .big {
+      flex: 1 1 40%;
+    }
+  }
+
   @media (max-width: 900px) {
     .alarm {
       grid-template-columns: 1fr;

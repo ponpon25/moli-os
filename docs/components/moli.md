@@ -168,10 +168,32 @@ masqué raccroche.
 | Écoute cloud KO | Whisper local ; les deux KO → « je n'ai pas compris », réécoute ; 2× → fin |
 | 429 / Moli injoignable | Moli raccroche |
 
-### Réglages depuis le tableau de bord (page Système → « Moli, l'assistant »)
+### Réglages depuis le tableau de bord (Réglages › Assistant)
 
-- **Clé OpenAI** : `PUT /api/assistant/key` `{api_key}` (**humain**, code demandé) → vérifiée
-  par `GET /v1/models` (refusée = 400 avec la raison ; refusée d'emblée, sans rien envoyer,
+- **Fournisseur d'IA** : OpenAI (défaut), **Mistral**, Gemini, Claude, ou le modèle propre de
+  `moli.toml` (« custom », un Ollama local par exemple). `GET /api/assistant/settings` liste
+  `providers` (id, nom, clé rangée ou non, modèle, ce qu'il sait faire : écoute, voix en ligne,
+  recherche web) ; `PUT /api/assistant/settings` `{provider}` (**humain**, code demandé : c'est lui qui
+  reçoit ce que la maison dit à Moli) change de fournisseur tout de suite ; le choix est gardé dans
+  `data/assistant-provider.json`. Chacun a sa clé dans le coffre (`assistant/api_key` pour celui
+  que `moli.toml` désigne, `assistant/api_key_<id>` pour les autres).
+  Tous parlent le protocole OpenAI (`/chat/completions`, `/models`) :
+
+  | | modèle (conversation / brouillons d'automatismes) | écoute | voix en ligne | recherche web |
+  |---|---|---|---|---|
+  | OpenAI | `gpt-4.1-mini` / `gpt-4.1` | `gpt-4o-mini-transcribe` | oui | oui |
+  | Mistral | `mistral-medium-latest` / `mistral-large-latest` | `voxtral-mini-latest` | non | non |
+  | Gemini | `gemini-2.5-flash` / `gemini-2.5-pro` | non | non | non |
+  | Claude | `claude-sonnet-5-5` / `claude-opus-5-5` | non | non | non |
+
+  Sans voix en ligne, Moli parle avec la voix locale (Piper) si elle est configurée ; sans
+  recherche, il ne propose pas la question « sur le web ». Les coûts affichés ne sont connus que
+  pour OpenAI (0 ailleurs : estimation absente, pas gratuité). **Vérifié** : Mistral, Gemini et
+  Claude refusent bien une fausse clé sur `/models` (réponses relevées) ; non essayés avec une
+  vraie clé : l'appel d'outils, le brouillon d'automatismes (`response_format` strict : ignoré par
+  l'API de compatibilité de Claude) et la transcription Voxtral.
+- **Clé du fournisseur** : `PUT /api/assistant/key` `{api_key, provider?}` (**humain**, code demandé) → vérifiée
+  par `GET /models` (refusée = 400 avec la raison ; refusée d'emblée, sans rien envoyer,
   si `base_url` est en `http://`), puis rangée chiffrée dans le coffre
   (`assistant/api_key`), jamais renvoyée. Tuto pas à pas dans la carte (compte, crédit,
   limite de dépense, création de la clé). Prise en compte immédiatement.

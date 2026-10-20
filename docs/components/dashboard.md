@@ -27,8 +27,18 @@ Le flux SSE `/api/events` est ouvert **une seule fois** et partagé (`web/src/li
 | Automatismes | `#/automatismes`, `#/automatismes/<id>` | liste, idées, éditeur à canevas (voir [automatismes.md](automatismes.md)) |
 | Système | `#/systeme` | **carte vivante** du système et comparaison avec HA (voir plus bas) |
 
-Navigation : rail à gauche (bas de l'écran sur téléphone, défilable) ; pied de rail : thème,
-Système, Atelier. Bulle « Demander à Moli » sur toutes les pages sauf Moli.
+Navigation : rail à gauche (bas de l'écran sur téléphone, défilable) : Dashboard, Pièces,
+Équipements, Caméras, Historique, Automatisation ; en pied de rail : Réglages. Réglages a une liste de sections
+(`#/reglages/<section>`) : Apparence (thème), Personnes, Accès (code du foyer), Sécurité (présence
+« je suis là », demandes retenues par la garde à valider, pièces protégées, heures calmes),
+Assistant, Énergie, Intégrations, Comment ça marche. Historique : le journal des ordres (500 derniers) par jour, filtrable (commandes, automatisations, demandes, réglages, problèmes). L'ancien
+« Atelier » (console technique) n'existe plus : `#/atelier` ouvre Sécurité, `#/energie` ouvre Énergie.
+Plan, Carte, Salon, Dehors, Impression, Parler et Infra restent joignables par lien (bas d'Équipements).
+Dashboard : bouton « Personnaliser » (tuiles masquées, déplacées par glisser-déposer, redimensionnées
+par le coin). Pièces : « Gérer les pièces » (masquer, ajouter, supprimer). Équipements : chaque
+appareil se rattache à une pièce (`PUT /api/labels/{id}`). La disposition du Dashboard et les pièces
+masquées ou ajoutées sont gardées **sur l'appareil** (localStorage), pas dans `home.json`.
+Bulle « Demander à Moli » sur toutes les pages sauf Moli.
 
 ## La mise en page de la maison : `data/home.json`
 

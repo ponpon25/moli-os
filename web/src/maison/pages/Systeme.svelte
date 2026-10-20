@@ -7,9 +7,37 @@
   import AssistantExchanges from '../ui/AssistantExchanges.svelte';
   import AlexaAccount from '../ui/AlexaAccount.svelte';
   import DashboardCode from '../ui/DashboardCode.svelte';
+  import OlvidCard from '../ui/OlvidCard.svelte';
+  import SecurityDesk from '../ui/SecurityDesk.svelte';
+  import Energie from './Energie.svelte';
+  import { formatBytes, formatDuration } from '../../lib/format.js';
   import PeopleCard from '../ui/PeopleCard.svelte';
-  import { hub, home } from '../lib/home.svelte.js';
+  import { hub, home, savePref } from '../lib/home.svelte.js';
   import { t, locale } from '../../lib/i18n.svelte.js';
+
+  let { route = 'reglages' } = $props();
+
+  const SECTIONS = [
+    { id: 'apparence', icon: 'sun' },
+    { id: 'personnes', icon: 'account' },
+    { id: 'acces', icon: 'lock' },
+    { id: 'securite', icon: 'shield' },
+    { id: 'assistant', icon: 'sparkles' },
+    { id: 'energie', icon: 'bolt' },
+    { id: 'integrations', icon: 'branch' },
+    { id: 'fonctionnement', icon: 'server' },
+  ];
+  const section = $derived(SECTIONS.find((x) => x.id === route.split('/')[1])?.id ?? 'apparence');
+
+  const THEMES = [
+    { id: 'auto', icon: 'sun', label: 'commun.theme.auto' },
+    { id: 'light', icon: 'sun', label: 'commun.theme.jour' },
+    { id: 'dark', icon: 'moon', label: 'commun.theme.nuit' },
+  ];
+  function setTheme(id) {
+    home.theme = id;
+    savePref('maison-theme', id);
+  }
 
   // « Comment ça marche » : the system as it runs, drawn from /api/system and
   // the live event stream. Nothing here is written by hand: a new driver or
@@ -153,25 +181,70 @@
 
 <div class="systeme">
   <header>
-    <h1 class="page-title">{t('systeme.page.titre')}</h1>
-    <p class="page-sub">{t('systeme.page.sous_titre')}</p>
+    <h1 class="page-title">{t('systeme.reglages.titre')}</h1>
   </header>
 
-  {#if error}<p class="muted">{error}</p>{/if}
+  <div class="layout">
+    <nav class="tabs" aria-label={t('systeme.reglages.titre')}>
+      {#each SECTIONS as x (x.id)}
+        <a href="#/reglages/{x.id}" class:active={section === x.id} aria-current={section === x.id ? 'page' : undefined}>
+          <span class="tab-icon"><Icon name={x.icon} size={20} /></span>
+          <span class="tab-text">
+            <b>{t(`systeme.reglages.${x.id}`)}</b>
+            <small>{t(`systeme.reglages.${x.id}_aide`)}</small>
+          </span>
+          {#if x.id === 'securite' && hub.approvals.length}<span class="badge" aria-label={t('systeme.securite.demandes')}>{hub.approvals.length}</span>{/if}
+        </a>
+      {/each}
+    </nav>
 
-  <PeopleCard />
-
-  <DashboardCode />
-
-  <AssistantSettings />
-
-  <AssistantExchanges />
-
-  <AlexaAccount />
-
-  <TuyaCloudKeys />
-
-  <HomeKitCard />
+    <div class="panel">
+      {#if section === 'apparence'}
+        <section class="card theme">
+          <h2>{t('systeme.reglages.theme')}</h2>
+          <p class="muted">{t('systeme.reglages.theme_aide')}</p>
+          <div class="choices" role="radiogroup" aria-label={t('systeme.reglages.theme')}>
+            {#each THEMES as th (th.id)}
+              <button role="radio" aria-checked={home.theme === th.id} class:on={home.theme === th.id} onclick={() => setTheme(th.id)}>
+                <span class="swatch {th.id}" aria-hidden="true"></span>
+                <b>{t(th.label)}</b>
+                <small>{t(`systeme.reglages.theme_${th.id}`)}</small>
+              </button>
+            {/each}
+          </div>
+        </section>
+      {:else if section === 'personnes'}
+        <PeopleCard />
+      {:else if section === 'acces'}
+        <DashboardCode />
+      {:else if section === 'securite'}
+        <SecurityDesk />
+      {:else if section === 'energie'}
+        <Energie embedded />
+      {:else if section === 'assistant'}
+        <AssistantSettings />
+        <AssistantExchanges />
+      {:else if section === 'integrations'}
+        <OlvidCard />
+        <AlexaAccount />
+        <TuyaCloudKeys />
+        <HomeKitCard />
+      {:else}
+        <p class="page-sub">{t('systeme.page.sous_titre')}</p>
+        <section class="card health">
+          <dl>
+            <div><dt>{t('systeme.entete.memoire')}</dt><dd class="num">{formatBytes(hub.stats?.rss_bytes)}</dd></div>
+            <div><dt>{t('systeme.entete.appareils')}</dt><dd class="num">{hub.stats?.devices ?? '—'}</dd></div>
+            <div><dt>{t('systeme.entete.points')}</dt><dd class="num">{hub.stats?.points ?? '—'}</dd></div>
+            <div><dt>{t('systeme.entete.en_ligne_depuis')}</dt><dd class="num">{formatDuration(hub.stats?.uptime_ms)}</dd></div>
+          </dl>
+          <ul class="drivers" aria-label={t('systeme.entete.pilotes')}>
+            {#each hub.drivers as d (d.instance)}
+              <li class={d.status.state} title={d.status.error ?? d.status.state}><i class="dot"></i>{d.instance}</li>
+            {/each}
+          </ul>
+        </section>
+        {#if error}<p class="muted">{error}</p>{/if}
 
   <!-- Only where a host script measures Moli against a Home Assistant. -->
   {#if sys && last?.ha}
@@ -307,9 +380,240 @@
   {:else if !error}
     <p class="muted">{t('systeme.chargement')}</p>
   {/if}
+      {/if}
+    </div>
+  </div>
 </div>
 
 <style>
+  .layout {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+  }
+
+  .panel {
+    display: grid;
+    gap: 20px;
+    min-width: 0;
+  }
+
+  .panel > :global(*) {
+    min-width: 0;
+  }
+
+  .tabs {
+    position: sticky;
+    top: 16px;
+    display: grid;
+    gap: 4px;
+  }
+
+  .tabs a {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 16px;
+    color: var(--ink-2);
+    text-decoration: none;
+    transition: background 0.2s var(--ease);
+  }
+
+  .tabs a:hover {
+    background: var(--surface-2);
+  }
+
+  .tabs a.active {
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    color: var(--ink);
+  }
+
+  .tab-icon {
+    flex: none;
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    border-radius: 12px;
+    background: var(--surface-2);
+    color: var(--ink-3);
+  }
+
+  .tabs a.active .tab-icon {
+    background: var(--warm-soft);
+    color: var(--warm-ink);
+  }
+
+  .tab-text {
+    display: grid;
+    min-width: 0;
+  }
+
+  .tab-text b {
+    font-size: 14.5px;
+  }
+
+  .tab-text small {
+    font-size: 12px;
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .badge {
+    margin-left: auto;
+    min-width: 22px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 750;
+    text-align: center;
+    background: var(--alert);
+    color: #fff;
+  }
+
+  .health dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px;
+    margin: 0 0 14px;
+  }
+
+  .health dt {
+    font-size: 12px;
+    font-weight: 650;
+    color: var(--ink-3);
+  }
+
+  .health dd {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .drivers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .drivers li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--surface-2);
+    color: var(--ink-2);
+  }
+
+  .drivers .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ink-3);
+  }
+
+  .drivers .running .dot {
+    background: #2f9e55;
+  }
+
+  .drivers .waiting .dot,
+  .drivers .starting .dot {
+    background: var(--warm, #e08a00);
+  }
+
+  .theme h2 {
+    margin: 0 0 4px;
+  }
+
+  .theme > p {
+    margin: 0 0 16px;
+  }
+
+  .choices {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+  }
+
+  .choices button {
+    display: grid;
+    justify-items: start;
+    gap: 4px;
+    padding: 12px;
+    border: 2px solid transparent;
+    border-radius: 18px;
+    font: inherit;
+    text-align: left;
+    background: var(--surface-2);
+    color: var(--ink);
+    cursor: pointer;
+  }
+
+  .choices button.on {
+    border-color: var(--warm-ink);
+    background: var(--warm-soft);
+  }
+
+  .choices small {
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+
+  .swatch {
+    width: 100%;
+    height: 54px;
+    margin-bottom: 6px;
+    border-radius: 12px;
+    box-shadow: inset 0 0 0 1px rgb(128 128 128 / 25%);
+  }
+
+  .swatch.light {
+    background: linear-gradient(135deg, #f6f8fb 50%, #dfe4ec 50%);
+  }
+
+  .swatch.dark {
+    background: linear-gradient(135deg, #1a1f2a 50%, #0d1016 50%);
+  }
+
+  .swatch.auto {
+    background: linear-gradient(135deg, #f6f8fb 50%, #0d1016 50%);
+  }
+
+  @media (max-width: 900px) {
+    .layout {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .tabs {
+      position: static;
+      display: flex;
+      overflow-x: auto;
+      scrollbar-width: none;
+      gap: 6px;
+    }
+
+    .tabs a {
+      flex: none;
+      padding: 8px 14px 8px 8px;
+    }
+
+    .tab-text small {
+      display: none;
+    }
+  }
+
   .systeme {
     display: grid;
     grid-template-columns: minmax(0, 1fr);

@@ -29,7 +29,7 @@
   "moteur.verif.delai": "The maximum delay must be between 1 second and 24 hours.",
   "moteur.verif.message_vide": "The message is empty.",
   "moteur.verif.canal_manquant": "Choose where to notify.",
-  "moteur.verif.telegram": "Telegram isn’t connected (telegram driver and its bot): only the house will be notified.",
+  "moteur.verif.telegram": "No messenger is connected (Olvid or Telegram driver): only the house will be notified.",
   "moteur.verif.telephone": "No paired phone can receive notifications: install the Moli app.",
   "moteur.verif.voix": "No speaker can make announcements yet: nothing will be said out loud.",
   "moteur.verif.ecrit_vide": "Tell Moli what to write.",
@@ -184,5 +184,7 @@
   "moteur.notice.boucle_titre": "Automation turned off",
   "moteur.notice.boucle": "“{nom}” kept starting in a loop, so I stopped it. Check it in Automations.",
 
-  "moteur.refus.nom_note": "Only a person (house code) can rename an approved automation or change its note."
+  "moteur.refus.nom_note": "Only a person (house code) can rename an approved automation or change its note.",
+  "moteur.canal.messagerie": "the messenger",
+  "moteur.lieu.messagerie": "the messenger"
 }

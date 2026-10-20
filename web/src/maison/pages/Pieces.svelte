@@ -5,7 +5,8 @@
 
 <script>
   import { onMount } from 'svelte';
-  import { roomList, roomNamed, savePref } from '../lib/home.svelte.js';
+  import { hub, roomList, roomNamed, roomOf, savePref, protectedRoom } from '../lib/home.svelte.js';
+  import { layout, hideRoom, addRoom, removeRoom } from '../lib/layout.svelte.js';
   import Icon from '../ui/Icon.svelte';
   import RoomCard from '../ui/RoomCard.svelte';
   import FilterChips from '../ui/FilterChips.svelte';
@@ -38,7 +39,28 @@
     savePref('pieces-look', v);
   }
 
-  const all = $derived(roomList());
+  /** Arranging: hidden rooms show (dimmed), rooms can be added and removed. */
+  let editing = $state(false);
+  let draft = $state('');
+  let asking = $state(null);
+
+  const empty = (name) => ({ name, icon: 'home', group: null, lights: [], plugs: [], covers: [], climates: [], media: [], sensors: [], lit: 0 });
+  const full = $derived.by(() => {
+    const list = roomList();
+    return [...list, ...layout.extraRooms.filter((n) => !list.some((r) => r.name === n)).map(empty)];
+  });
+  const all = $derived(full.filter((r) => editing || !layout.hiddenRooms.includes(r.name)));
+  const count = (r) => r.lights.length + r.plugs.length + r.covers.length + r.climates.length + r.media.length + r.sensors.length + (r.group ? 1 : 0);
+  const labelled = (name) => Object.values(hub.devices).filter((d) => roomOf(d) === name && d.label?.room);
+
+  function add(e) {
+    e.preventDefault();
+    if (addRoom(draft)) draft = '';
+  }
+  async function remove(name) {
+    asking = null;
+    await removeRoom(name, labelled(name));
+  }
   const devices = $derived(
     all.flatMap((r) => [r.group, ...r.lights, ...r.plugs, ...r.covers, ...r.climates, ...r.media, ...r.sensors].filter(Boolean)),
   );
@@ -57,6 +79,7 @@
       media: on('medias') ? r.media : [],
       sensors: r.sensors.filter((d) => on(categoryOf(d))),
     };
+    if (!count(r)) return f;
     const any = f.group || f.lights.length || f.plugs.length || f.covers.length || f.climates.length || f.media.length || f.sensors.length;
     return any ? f : null;
   }
@@ -77,7 +100,18 @@
   <header>
     <h1 class="page-title">{t('maison.pieces.titre')}</h1>
     <p class="page-sub">{t('maison.pieces.sous_titre')}</p>
+    <button class="edit" class:active={editing} onclick={() => (editing = !editing)}>
+      <Icon name={editing ? 'check' : 'pencil'} size={16} />{editing ? t('maison.pieces.terminer') : t('maison.pieces.gerer')}
+    </button>
   </header>
+
+  {#if editing}
+    <form class="add" onsubmit={add}>
+      <input bind:value={draft} maxlength="40" placeholder={t('maison.pieces.nom_nouvelle')} aria-label={t('maison.pieces.nom_nouvelle')} />
+      <button type="submit" disabled={!draft.trim()}><Icon name="plus" size={16} />{t('maison.pieces.ajouter')}</button>
+      <a href="#/equipements">{t('maison.pieces.rattacher')}</a>
+    </form>
+  {/if}
 
   <div class="bar">
     <FilterChips {devices} bind:filter key="pieces-filter" />
@@ -98,7 +132,29 @@
       {/if}
       <div class="rooms">
         {#each floor.rooms as room (room.name)}
-          <div class="slot"><RoomCard {room} every={filter.includes('capteurs')} icons={look === 'icons'} /></div>
+          {@const off = layout.hiddenRooms.includes(room.name)}
+          <div class="slot" class:off>
+            {#if editing}
+              <div class="manage">
+                <span class="sp"></span>
+                {#if protectedRoom(room.name)}<Icon name="lock" size={14} />{/if}
+                <button onclick={() => hideRoom(room.name, !off)} title={off ? t('maison.pieces.afficher') : t('maison.pieces.masquer')} aria-label={off ? t('maison.pieces.afficher') : t('maison.pieces.masquer')}>
+                  <Icon name={off ? 'eye' : 'eye-off'} size={16} />
+                </button>
+                {#if asking === room.name}
+                  <button class="danger" onclick={() => remove(room.name)}>{t('maison.pieces.confirmer')}</button>
+                  <button onclick={() => (asking = null)}>{t('commun.annuler')}</button>
+                {:else}
+                  <button onclick={() => (asking = room.name)} title={t('maison.pieces.supprimer')} aria-label={t('maison.pieces.supprimer')}><Icon name="trash" size={16} /></button>
+                {/if}
+              </div>
+            {/if}
+            {#if count(room)}
+              <RoomCard {room} every={filter.includes('capteurs')} icons={look === 'icons'} />
+            {:else}
+              <p class="vide"><b>{room.name}</b><br />{t('maison.pieces.vide')} <a href="#/equipements">{t('maison.pieces.rattacher')}</a></p>
+            {/if}
+          </div>
         {/each}
       </div>
     </section>
@@ -149,6 +205,104 @@
     background: var(--surface);
     color: var(--ink);
     box-shadow: 0 1px 3px rgb(0 0 0 / 15%);
+  }
+
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
+  }
+
+  header .page-sub {
+    flex: 1;
+    min-width: 200px;
+  }
+
+  .edit,
+  .add button,
+  .manage button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 0;
+    border-radius: 999px;
+    padding: 7px 14px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 650;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
+  .edit.active {
+    background: var(--warm-soft);
+    color: var(--warm-ink);
+  }
+
+  .add {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .add input {
+    flex: 1;
+    min-width: 180px;
+    max-width: 320px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font: inherit;
+    background: var(--surface);
+    color: var(--ink);
+  }
+
+  .add button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .add a,
+  .vide a {
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--warm-ink);
+  }
+
+  .manage {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .manage .sp {
+    flex: 1;
+  }
+
+  .manage button {
+    padding: 6px 10px;
+  }
+
+  .manage .danger {
+    background: color-mix(in srgb, var(--alert) 16%, var(--surface-2));
+    color: var(--alert);
+  }
+
+  .slot.off > :global(:not(.manage)) {
+    opacity: 0.45;
+  }
+
+  .vide {
+    margin: 0;
+    padding: 18px;
+    border-radius: 16px;
+    border: 1px dashed var(--line);
+    color: var(--ink-3);
+    font-size: 13px;
   }
 
   .floor {

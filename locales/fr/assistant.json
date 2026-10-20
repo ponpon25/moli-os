@@ -113,8 +113,8 @@
   "assistant.import.note_from_id": "Importé de Home Assistant (automation « {alias} », id {id}).",
   "assistant.import.note_from": "Importé de Home Assistant (automation « {alias} »).",
   "assistant.import.note_switch_off": "Quand tu valides celui-ci, désactive l'original dans HA, sinon les deux agiront.",
-  "assistant.settings.key_invalid": "ce n'est pas une clé d'API (elle commence par sk-, sans espace)",
-  "assistant.settings.key_refused": "OpenAI refuse cette clé : vérifie-la, ou qu'elle n'a pas été supprimée",
+  "assistant.settings.key_invalid": "ce n'est pas une clé d'API (sans espace, 20 caractères au moins)",
+  "assistant.settings.key_refused": "{provider} refuse cette clé : vérifie-la, ou qu'elle n'a pas été supprimée",
   "assistant.settings.key_in_clear": "le modèle est joint en http, sans chiffrement : une clé n'y est jamais envoyée (base_url en https pour s'en servir)",
   "assistant.settings.vault": "coffre : {error}",
   "assistant.voice.style.enjoue.label": "Enjoué",
@@ -146,5 +146,6 @@
   "assistant.door.porte": "la porte",
   "assistant.recap.porte": "🔔 À la porte : {n}",
   "assistant.recap.porte_sonne": "{time} · porte · sonné, sans message",
-  "assistant.recap.porte_message": "{time} · porte · « {message} »"
+  "assistant.recap.porte_message": "{time} · porte · « {message} »",
+  "assistant.indice.mistral_formule": "Mistral limite fortement une clé sans formule : dans console.mistral.ai › Administration › Abonnements, choisis « Experiment » (gratuit, numéro de téléphone vérifié ; les échanges peuvent servir à entraîner leurs modèles) ou « Scale » (paiement à l'usage, sans abonnement mensuel)."
 }

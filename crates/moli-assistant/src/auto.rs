@@ -219,7 +219,7 @@ impl Assistant {
         ];
         let mut last_problems = String::new();
         for attempt in 0..2 {
-            let model = &self.0.config.builder_model;
+            let model = &self.active().builder_model;
             let mut body = json!({
                 "model": model,
                 "messages": messages,
@@ -233,8 +233,7 @@ impl Assistant {
                 body["max_tokens"] = json!(3_000);
             }
             let answer = self
-                .0
-                .endpoint
+                .endpoint()
                 .chat(key, &body)
                 .await
                 .map_err(|e| AssistantError::Upstream(e.to_string()))?;
@@ -309,11 +308,12 @@ impl Assistant {
                 house::Reader::Chat,
             ),
         );
+        let model = self.model();
         let mut body = json!({
-            "model": self.0.config.model,
+            "model": model,
             "messages": [{ "role": "system", "content": system }, { "role": "user", "content": prompt }],
         });
-        if is_reasoning(&self.0.config.model) {
+        if is_reasoning(&model) {
             body["max_completion_tokens"] = json!(3_000);
             body["reasoning_effort"] = json!("low");
         } else {
@@ -321,8 +321,7 @@ impl Assistant {
             body["max_tokens"] = json!(400);
         }
         let answer = self
-            .0
-            .endpoint
+            .endpoint()
             .chat(key.as_deref(), &body)
             .await
             .map_err(|e| AssistantError::Upstream(e.to_string()))?;

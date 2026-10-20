@@ -58,6 +58,10 @@ impl Endpoint {
         })
     }
 
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+
     /// Plain HTTP only makes sense for a model on the local network: no key
     /// is required there, and none is ever sent (it would travel in clear).
     pub(crate) fn is_local(&self) -> bool {
@@ -91,7 +95,13 @@ impl Endpoint {
             || String::from_utf8_lossy(&answer[..answer.len().min(200)]).into_owned(),
             str::to_owned,
         );
-        anyhow::anyhow!("{}: HTTP {} {message}", self.host, status.as_u16())
+        let mut why = format!("{}: HTTP {} {message}", self.host, status.as_u16());
+        // Mistral answers a key without a plan (or past its free allowance) with a bare 429.
+        if status.as_u16() == 429 && self.host.ends_with("mistral.ai") {
+            why.push_str(" — ");
+            why.push_str(&moli_i18n::tr!("assistant.indice.mistral_formule"));
+        }
+        anyhow::anyhow!(why)
     }
 
     /// The raw answer of a POST; the provider's own error words otherwise.
@@ -216,12 +226,18 @@ impl Endpoint {
     /// `GET /models` with `key`: over TLS only, a key never travels in clear.
     fn models(&self, key: &str) -> anyhow::Result<Request<Full<Bytes>>> {
         anyhow::ensure!(self.tls, "{}: a key is only sent over https", self.host);
-        Ok(Request::builder()
+        let mut builder = Request::builder()
             .method(Method::GET)
             .uri(format!("{}/models", self.base))
             .header("accept", "application/json")
-            .header("authorization", format!("Bearer {key}"))
-            .body(Full::new(Bytes::new()))?)
+            .header("authorization", format!("Bearer {key}"));
+        // Anthropic's own listing wants its own header: the same key, said both ways.
+        if self.host == "api.anthropic.com" {
+            builder = builder
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01");
+        }
+        Ok(builder.body(Full::new(Bytes::new()))?)
     }
 
     /// The provider's verdict on a key, by the status of its answer.
@@ -229,6 +245,8 @@ impl Endpoint {
         match status.as_u16() {
             200..=299 => Ok(true),
             401 | 403 => Ok(false),
+            // Google answers a wrong key with a 400 (« Please pass a valid API key »).
+            400 if self.host.ends_with("googleapis.com") => Ok(false),
             other => bail!("{}: HTTP {other}", self.host),
         }
     }
@@ -464,6 +482,31 @@ pub(crate) mod tests {
             request.contains("name=\"language\"\r\n\r\nfr\r\n"),
             "{request}"
         );
+    }
+
+    #[test]
+    fn a_mistral_429_says_which_plan_to_take() {
+        moli_i18n::set_language("fr");
+        let mistral = Endpoint::parse("https://api.mistral.ai/v1").unwrap();
+        let said = mistral
+            .refused(
+                http::StatusCode::TOO_MANY_REQUESTS,
+                br#"{"message":"Rate limit exceeded"}"#,
+            )
+            .to_string();
+        assert!(
+            said.contains("Rate limit exceeded") && said.contains("Experiment"),
+            "{said}"
+        );
+        // Another provider's 429 stays its own words.
+        let openai = Endpoint::parse("https://api.openai.com/v1").unwrap();
+        let said = openai
+            .refused(
+                http::StatusCode::TOO_MANY_REQUESTS,
+                br#"{"error":{"message":"Slow down"}}"#,
+            )
+            .to_string();
+        assert!(said.ends_with("Slow down"), "{said}");
     }
 
     #[tokio::test]

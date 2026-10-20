@@ -197,7 +197,7 @@ async fn the_engine_speaks_the_language_of_the_house() {
     assert_eq!(
         say(hot),
         "When the temperature of room goes above 26.5 °C for 10 min, \
-         notify the house, out loud and Telegram: “Hot”."
+         notify the house, out loud and the messenger: “Hot”."
     );
     assert_eq!(
         say(evening.clone()),

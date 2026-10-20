@@ -846,7 +846,7 @@ fn action_words(step: &Step, hub: &Hub) -> String {
                 places.push(tr!("moteur.lieu.voix"));
             }
             if channels.contains(&Channel::Telegram) {
-                places.push("Telegram".to_owned());
+                places.push(tr!("moteur.lieu.messagerie"));
             }
             if channels.contains(&Channel::Telephone) {
                 places.push(tr!("moteur.lieu.telephone"));

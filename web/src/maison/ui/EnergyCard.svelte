@@ -47,7 +47,7 @@
   const isHc = $derived(/hc/i.test(s?.period ?? ''));
 </script>
 
-<a class="card energy" href="#/energie" aria-label={t('energie.carte.detail')}>
+<a class="card energy" href="#/reglages/energie" aria-label={t('energie.carte.detail')}>
   <div class="card-head">
     <h2><Icon name="bolt" size={18} />{t('energie.carte.titre')}</h2>
     <span class="more" aria-hidden="true"><Icon name="arrow-top-right" size={18} /></span>

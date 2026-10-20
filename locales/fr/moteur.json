@@ -29,7 +29,7 @@
   "moteur.verif.delai": "Le délai maximum va de 1 seconde à 24 heures.",
   "moteur.verif.message_vide": "Le message est vide.",
   "moteur.verif.canal_manquant": "Choisis où prévenir.",
-  "moteur.verif.telegram": "Telegram n'est pas branché (pilote telegram et son bot) : seule la maison sera prévenue.",
+  "moteur.verif.telegram": "Aucune messagerie n'est branchée (pilote Olvid ou Telegram) : seule la maison sera prévenue.",
   "moteur.verif.telephone": "Aucun téléphone appairé ne reçoit de notification : installer l'appli Moli.",
   "moteur.verif.voix": "Aucune enceinte ne sait encore faire d'annonce : rien ne sera dit à voix haute.",
   "moteur.verif.ecrit_vide": "Dis à Moli ce qu'il doit écrire.",
@@ -184,5 +184,7 @@
   "moteur.notice.boucle_titre": "Automatisme coupé",
   "moteur.notice.boucle": "« {nom} » se lançait en boucle : je l'ai arrêté. À vérifier dans Automatismes.",
 
-  "moteur.refus.nom_note": "Seule une personne (code de la maison) peut renommer un automatisme validé ou changer sa note."
+  "moteur.refus.nom_note": "Seule une personne (code de la maison) peut renommer un automatisme validé ou changer sa note.",
+  "moteur.canal.messagerie": "la messagerie",
+  "moteur.lieu.messagerie": "la messagerie"
 }

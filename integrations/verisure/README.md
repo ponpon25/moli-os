@@ -8,8 +8,11 @@
   `crates/moli-verisure/src/model.rs`.
 - Prudence : une seule connexion par mot de passe (un échec compte pour un verrouillage du compte,
   marqué `login_locked` dans le coffre jusqu'à ce qu'un humain le lève), jeton de rafraîchissement
-  rangé dès qu'il arrive, requêtes espacées de 2 s, lecture de la centrale toutes les 2 minutes au
-  plus vite, attente de 10 minutes après un blocage du pare-feu.
+  rangé dès qu'il arrive, requêtes espacées de 2 s, lecture de la centrale toutes les 2 minutes par
+  défaut (option `poll_secs`, 60 au minimum), attente de 10 minutes après un blocage du pare-feu.
+- Point `refresh` (binaire, écriture libre : il lit, il ne commande rien) : une lecture tout de suite,
+  par exemple quand la maison se vide. Ignorée si la dernière lecture date de moins de 30 s, ou si le
+  pilote attend après des échecs (jamais de coup de force contre le pare-feu).
 - Le mode partiel de la centrale s'appelle `partial` dans Moli : c'est la commande `ARMDAY1`, la seule que cette centrale (Central Unit, sans périmètre) accepte pour son partiel, éprouvée sur une vraie ; elle refuse `ARMNIGHT1`. Le tableau de bord l'affiche « Mode Nuit », à la demande du foyer. Une autre centrale peut avoir un autre partiel : à vérifier.
 - Armer et désarmer sont des points de sémantique `control` : la garde les retient pour un humain,
   y compris depuis le dashboard du foyer sans code.

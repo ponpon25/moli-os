@@ -446,6 +446,28 @@ pièces ; il commande ensuite les membres en origine `system` (journal : `lumina
 - **Points** : `home` (binaire, sémantique occupation), lecture seule.
 - **Machines** : `[[driver.options.machine]]` avec `id`, `name`, `ip` (sur le réseau déclaré) : appareil « Machine » (`description` = son adresse), point `online` (allumée tant qu'elle répond, éteinte après deux relevés sans réponse). C'est l'équivalent de l'intégration `ping` de HA pour un ordinateur.
 
+## `olvid` : messages privés (`crates/moli-olvid`)
+
+- **Couvre** : écrire aux personnes de la maison par **Olvid** (messagerie chiffrée de bout en
+  bout, sans numéro de téléphone), par le daemon officiel `olvid/bot-daemon`. Un appareil « Olvid »
+  avec un point `notify` ; les automatismes (leur canal de message écrit), le récapitulatif du soir
+  et les messages de la sonnette y partent comme sur Telegram.
+- **Protocole** : gRPC (HTTP/2 en clair) vers le daemon, client écrit à la main (`hyper` http2,
+  protobuf à la main, 30 Ko de code) ; clé dans l'en-tête `daemon-client-key`. Une connexion par appel.
+- **Configuration** : `[driver.options] daemon = "127.0.0.1:50051"` (le port du conteneur du daemon, publié sur
+  la machine), `bot_name = "Moli"`. Secret `admin_key` (clé d'administration du daemon, donnée par une
+  personne avec `moli-os secrets set <instance> admin_key`) : Moli s'en sert **une fois** pour
+  créer son identité et une clé client (secrets `identity`, `client_key`, `people` écrits ensuite par
+  le pilote).
+- **Appairage** (voir la carte Réglages › Intégrations › Olvid) : le point `pairing` (code du foyer
+  demandé, sémantique `Control`) ouvre 15 minutes ; `link` = lien d'invitation du bot ; une invitation
+  n'est acceptée que fenêtre ouverte ; `code` = le code du bot à saisir dans Olvid ; `sas` = le code
+  d'Olvid à saisir dans Moli (code demandé). La fenêtre se ferme dès qu'une personne est reliée.
+  `forget` oublie une personne (ou `*` tout le monde).
+- **Pas encore** : recevoir (parler à Moli depuis Olvid).
+- **Vérifié** : encodage protobuf et trames gRPC par tests ; contre un vrai daemon : voir
+  `integrations/olvid/README.md`.
+
 ## `profile` : profils déclaratifs (`crates/moli-profile`)
 
 Un seul pilote générique pour tout appareil HTTP décrit en TOML. Voir [profils.md](profils.md).
@@ -488,6 +510,7 @@ ni pièce native). Il ne déplace jamais rien. Sans argument : plan à blanc ; `
 | `ipp` | `moli-ipp` | IPP 2.0 HTTP 631 | identifier, annuler, imprimer (tableau de bord) | Canon MG3600 |
 | `host` | `moli-host` | /proc, /sys ; WoL ; agent HTTP sortant | allumer, éteindre, veille, Claude et Codex pour le téléphone (PIN) | hôte Linux ; PC Windows avec l'agent |
 | `presence` | `moli-presence` | UDP + table ARP de l'hôte | non | téléphones sur le Wi-Fi |
+| `olvid` | `moli-olvid` | gRPC (HTTP/2) vers le daemon Olvid | `notify` (message), appairage | daemon Olvid 2.0 (voir README) |
 | `phones` | `moli-phones` | rapports HTTP de l'appli (jeton) | `notify` (notification) | iPhone (appli Moli) |
 | `telegram` | `moli-telegram` | HTTPS, API des bots | `notify` (message) | oui (API des bots) |
 | `profile` | `moli-profile` | HTTP/HTTPS GET, Meross signé | oui si le profil déclare `[[write]]` (Daikin) | Daikin BRP069 (lecture), Meross EM06, Open-Meteo, Tempo, iopool EcO (voir [profils.md](profils.md#les-profils-du-catalogue)) |

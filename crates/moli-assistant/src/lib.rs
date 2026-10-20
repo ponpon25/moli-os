@@ -21,6 +21,7 @@ mod import;
 mod llm;
 mod outside;
 mod pricing;
+mod provider;
 mod recap;
 mod recordings;
 mod satellite;
@@ -48,6 +49,7 @@ use serde_json::{Value as Json, json};
 
 use crate::house::{Layout, name_of};
 use crate::llm::Endpoint;
+use crate::provider::Active;
 
 /// `[assistant]` in moli.toml.
 #[derive(Clone, Debug, Deserialize)]
@@ -215,7 +217,9 @@ struct Inner {
     history: Option<moli_history::History>,
     layout_path: Option<PathBuf>,
     config: Config,
-    endpoint: Endpoint,
+    /// The provider talked to now (chosen in the dashboard, else `moli.toml`).
+    active: std::sync::RwLock<Active>,
+    provider_path: std::sync::RwLock<Option<PathBuf>>,
     tz: jiff::tz::TimeZone,
     running: tokio::sync::Semaphore,
     recent: Mutex<VecDeque<Instant>>,
@@ -362,7 +366,7 @@ impl Assistant {
         layout_path: Option<PathBuf>,
         config: Config,
     ) -> anyhow::Result<Self> {
-        let endpoint = Endpoint::parse(&config.base_url)?;
+        let active = Active::from_config(&config)?;
         let tz = jiff::tz::TimeZone::get(&config.timezone)?;
         anyhow::ensure!(
             (0.25..=4.0).contains(&config.speech_speed),
@@ -374,7 +378,8 @@ impl Assistant {
             history,
             layout_path,
             config,
-            endpoint,
+            active: std::sync::RwLock::new(active),
+            provider_path: std::sync::RwLock::new(None),
             tz,
             running: tokio::sync::Semaphore::new(2),
             recent: Mutex::new(VecDeque::new()),
@@ -392,12 +397,43 @@ impl Assistant {
         })))
     }
 
+    /// The provider talked to now.
+    fn active(&self) -> Active {
+        self.0
+            .active
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn endpoint(&self) -> Endpoint {
+        self.active().endpoint
+    }
+
+    fn model(&self) -> String {
+        self.active().model
+    }
+
+    fn transcribe_model(&self) -> String {
+        self.active().transcribe_model
+    }
+
+    /// The vault name of this provider's key.
+    fn key_name(&self, id: &str) -> String {
+        provider::secret_name(id, &self.0.config)
+    }
+
     fn key(&self) -> Result<Option<String>, AssistantError> {
-        let key = self.0.hub.secret(&InstanceId::from("assistant"), "api_key");
-        if key.is_none() && !self.0.endpoint.is_local() {
-            return Err(AssistantError::NotConfigured(
-                "no API key: pipe it into `moli-os secrets set assistant api_key`".into(),
-            ));
+        let active = self.active();
+        let key = self
+            .0
+            .hub
+            .secret(&InstanceId::from("assistant"), &self.key_name(&active.id));
+        if key.is_none() && !active.endpoint.is_local() {
+            return Err(AssistantError::NotConfigured(format!(
+                "no API key for {}: give it in the dashboard (Settings › Integrations)",
+                active.id
+            )));
         }
         Ok(key)
     }
@@ -406,13 +442,15 @@ impl Assistant {
     pub fn status(&self) -> Json {
         let ready = self.key().is_ok();
         let c = &self.0.config;
-        let cloud_listen = ready && !c.transcribe_model.is_empty();
+        let active = self.active();
+        let cloud_listen = ready && !active.transcribe_model.is_empty();
         let local_listen = voice::host_port(&c.local_listen).is_some();
-        let cloud_voice = ready && !c.speech_model.is_empty();
+        let cloud_voice = ready && !active.speech_model.is_empty();
         let local_voice = voice::host_port(&c.local_speech).is_some();
         json!({
             "ready": ready,
-            "model": c.model,
+            "provider": active.id,
+            "model": active.model,
             "listen": ready && (cloud_listen || local_listen),
             "speak": ready && (cloud_voice || local_voice),
             "voices": { "cloud": cloud_voice, "local": local_voice },
@@ -442,8 +480,9 @@ impl Assistant {
     /// it fails or is off.
     pub async fn listen(&self, audio: &[u8], mime: &str) -> Result<Heard, AssistantError> {
         let c = &self.0.config;
+        let active = self.active();
         let local = voice::host_port(&c.local_listen);
-        if c.transcribe_model.is_empty() && local.is_none() {
+        if active.transcribe_model.is_empty() && local.is_none() {
             return Err(AssistantError::NotConfigured("voice is disabled".into()));
         }
         let _permit = self.admit()?;
@@ -457,12 +496,11 @@ impl Assistant {
             return Err(AssistantError::Invalid("recording too short".into()));
         }
         let mut failure = None;
-        if !c.transcribe_model.is_empty() {
+        if !active.transcribe_model.is_empty() {
             match self.key() {
                 Ok(key) => match self
-                    .0
-                    .endpoint
-                    .transcribe(key.as_deref(), &c.transcribe_model, audio, mime)
+                    .endpoint()
+                    .transcribe(key.as_deref(), &active.transcribe_model, audio, mime)
                     .await
                 {
                     Ok(text) => {
@@ -543,14 +581,15 @@ impl Assistant {
             0,
         )?;
         let c = &self.0.config;
+        let active = self.active();
         let key = self.key().ok();
         let (chosen, style) = self.voice_and_style();
         let voices = voice::Voices {
             cloud: match &key {
-                Some(key) if !c.speech_model.is_empty() => Some(voice::Cloud {
-                    endpoint: &self.0.endpoint,
+                Some(key) if !active.speech_model.is_empty() => Some(voice::Cloud {
+                    endpoint: &active.endpoint,
                     key: key.as_deref(),
-                    model: &c.speech_model,
+                    model: &active.speech_model,
                     voice: voice.unwrap_or(&chosen),
                     style: &style,
                     speed: self.speed(),
@@ -593,11 +632,11 @@ impl Assistant {
         let result = self.converse(turn).await;
         if let Some(question) = question {
             let heard = self.take_heard();
-            let c = &self.0.config;
+            let active = self.active();
             let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             let hear = heard
                 .as_ref()
-                .map_or(0.0, |h| pricing::hear(&c.transcribe_model, h.seconds));
+                .map_or(0.0, |h| pricing::hear(&active.transcribe_model, h.seconds));
             let (kind, reply, tools, orders, cost) = match &result {
                 Ok(r) => (
                     exchanges::Kind::Turn,
@@ -612,14 +651,14 @@ impl Assistant {
                         .collect(),
                     exchanges::Cost::new(
                         pricing::think(
-                            &c.model,
+                            &active.model,
                             r.usage.prompt_tokens,
                             r.usage.cached_tokens,
                             r.usage.completion_tokens,
                         ) + r.draft_cost,
                         hear,
                         if spoken {
-                            pricing::speak(&c.speech_model, r.reply.chars().count())
+                            pricing::speak(&active.speech_model, r.reply.chars().count())
                         } else {
                             0.0
                         },
@@ -751,9 +790,9 @@ impl Assistant {
     /// history (false activations show up there).
     pub(crate) fn heard_nothing_on(&self, surface: &str, wav: Option<&[u8]>) {
         let heard = self.take_heard();
-        let hear = heard.as_ref().map_or(0.0, |h| {
-            pricing::hear(&self.0.config.transcribe_model, h.seconds)
-        });
+        let hear = heard
+            .as_ref()
+            .map_or(0.0, |h| pricing::hear(&self.transcribe_model(), h.seconds));
         let audio = match wav {
             Some(wav) => self.record(wav),
             None => heard.and_then(|h| h.audio),
@@ -795,7 +834,7 @@ impl Assistant {
         });
     }
 
-    /// The last 24 hours on the house's Telegram (nothing when nothing
+    /// The last 24 hours on the house's messengers (nothing when nothing
     /// happened). Returns whether a message went out.
     pub async fn send_recap(&self) -> bool {
         let now = jiff::Timestamp::now().to_zoned(self.0.tz.clone());
@@ -811,27 +850,29 @@ impl Assistant {
         let Some(text) = text else {
             return false;
         };
-        let Some(point) = self.telegram() else {
-            tracing::info!("no Telegram device: the recap is only in the dashboard");
+        let points = self.messengers();
+        if points.is_empty() {
+            tracing::info!("no messenger (Telegram, Olvid): the recap is only in the dashboard");
             return false;
-        };
-        match self
-            .0
-            .hub
-            .command(
-                &point,
-                Value::Text(text.into()),
-                Origin::Assistant,
-                Some("Moli".into()),
-            )
-            .await
-        {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::warn!(error = %e, "the recap was not sent");
-                false
+        }
+        let mut sent = false;
+        for point in points {
+            match self
+                .0
+                .hub
+                .command(
+                    &point,
+                    Value::Text(text.clone().into()),
+                    Origin::Assistant,
+                    Some("Moli".into()),
+                )
+                .await
+            {
+                Ok(()) => sent = true,
+                Err(e) => tracing::warn!(point = %point, error = %e, "the recap was not sent"),
             }
         }
+        sent
     }
 
     async fn converse(&self, turn: Turn) -> Result<Reply, AssistantError> {
@@ -885,14 +926,15 @@ impl Assistant {
         }
         let mut run = Run::default();
         for step in 0..MAX_STEPS {
+            let model = self.model();
             let mut body = json!({
-                "model": self.0.config.model,
+                "model": model,
                 "messages": messages,
                 "tools": offered,
             });
             // Reasoning models (gpt-5…, o…) take neither a temperature nor
             // `max_tokens`; they think briefly here: answers are short.
-            if is_reasoning(&self.0.config.model) {
+            if is_reasoning(&model) {
                 body["max_completion_tokens"] = json!(4_000);
                 body["reasoning_effort"] = json!("low");
             } else {
@@ -903,8 +945,7 @@ impl Assistant {
                 body["tool_choice"] = json!("none");
             }
             let answer = self
-                .0
-                .endpoint
+                .endpoint()
                 .chat(key.as_deref(), &body)
                 .await
                 .map_err(|e| AssistantError::Upstream(e.to_string()))?;
@@ -1037,7 +1078,7 @@ impl Assistant {
             reply,
             cards: run.cards,
             actions: run.actions,
-            model: self.0.config.model.clone(),
+            model: self.model(),
             usage: run.usage,
             end: run.end,
             tools: run.tools,
@@ -1064,7 +1105,8 @@ impl Assistant {
 
     /// The web is searched only through the provider (never a local model).
     fn searches(&self) -> bool {
-        !self.0.config.search_model.is_empty() && !self.0.endpoint.is_local()
+        let active = self.active();
+        !active.search_model.is_empty() && !active.endpoint.is_local()
     }
 
     /// Models believe they cannot read the news: told otherwise when they can.
@@ -1094,10 +1136,11 @@ impl Assistant {
         }
         run.searches += 1;
         let c = &self.0.config;
+        let active = self.active();
         match outside::search(
-            &self.0.endpoint,
+            &active.endpoint,
             key.as_deref(),
-            &c.search_model,
+            &active.search_model,
             &c.timezone,
             query,
         )
@@ -1106,7 +1149,7 @@ impl Assistant {
             Ok((found, usage)) => {
                 run.search_cost += pricing::SEARCH
                     + pricing::think(
-                        &c.search_model,
+                        &active.search_model,
                         usage["input_tokens"].as_u64().unwrap_or(0),
                         usage["input_tokens_details"]["cached_tokens"]
                             .as_u64()

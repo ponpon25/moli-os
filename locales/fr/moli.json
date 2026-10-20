@@ -97,8 +97,8 @@
 
   "moli.reglages.titre": "Moli, l’assistant",
   "moli.reglages.local": "Modèle local ({model}) : pas de clé nécessaire.",
-  "moli.reglages.cle_ok": "Clé OpenAI enregistrée (chiffrée dans Moli). Environ un demi-centime par échange.",
-  "moli.reglages.cle_manque": "Pour parler avec Moli, il lui faut une clé OpenAI (quelques euros de crédit suffisent pour des mois).",
+  "moli.reglages.cle_ok": "Clé {provider} enregistrée (chiffrée dans Moli).",
+  "moli.reglages.cle_manque": "Pour parler avec Moli, il lui faut une clé {provider}.",
   "moli.reglages.remplacer": "Remplacer la clé",
   "moli.reglages.ajouter": "Ajouter une clé",
   "moli.reglages.comment": "Obtenir une clé OpenAI (5 minutes)",
@@ -106,8 +106,8 @@
   "moli.reglages.etape2": "Dans {link}, ajoute du crédit : 5 € couvrent des centaines de conversations.",
   "moli.reglages.etape3": "Conseillé : fixe une limite de dépense mensuelle dans {link} (par exemple 5 €).",
   "moli.reglages.etape4": "Dans {link}, clique « Create new secret key », nomme-la « Moli », puis copie-la (elle commence par {code}).",
-  "moli.reglages.etape5": "Colle-la ci-dessous : Moli la vérifie auprès d’OpenAI avant de la garder.",
-  "moli.reglages.cle_champ": "Clé OpenAI",
+  "moli.reglages.etape5": "Colle-la ci-dessous : Moli la vérifie auprès du fournisseur avant de la garder.",
+  "moli.reglages.cle_champ": "Clé {provider}",
   "moli.reglages.verification": "Vérification…",
   "moli.reglages.enregistrer": "Enregistrer",
   "moli.reglages.confidentialite": "Ton code est demandé. La clé est chiffrée dans Moli et ne réapparaît nulle part : pour la changer, on la remplace.",
@@ -156,5 +156,13 @@
   "moli.echanges.enregistrer_aide": "Pour tester le micro : chaque phrase reste écoutable ici, puis s'efface au bout de 7 jours.",
   "moli.echanges.enregistre_jusqu": "Le boîtier est enregistré jusqu'au {date} (chaque enregistrement s'efface au bout de 7 jours).",
   "moli.echanges.arreter": "Arrêter l'enregistrement",
-  "moli.echanges.estimation": "Les coûts sont estimés d'après les tarifs publics d'OpenAI ; la facture exacte est sur platform.openai.com."
+  "moli.echanges.estimation": "Les coûts sont estimés d'après les tarifs publics d'OpenAI ; la facture exacte est sur platform.openai.com.",
+  "moli.reglages.fournisseur": "Fournisseur d’IA",
+  "moli.reglages.capacites": "Ce que ce fournisseur sait faire",
+  "moli.reglages.cap_conversation": "Conversation ({model})",
+  "moli.reglages.cap_ecoute": "Écoute en ligne",
+  "moli.reglages.cap_voix": "Voix en ligne",
+  "moli.reglages.cap_recherche": "Recherche sur le web",
+  "moli.reglages.comment_autre": "Obtenir une clé {provider}",
+  "moli.reglages.etape_autre": "Crée un compte et une clé {provider} sur"
 }

@@ -11,9 +11,10 @@
   import Accueil from './pages/Accueil.svelte';
   import Salon from './pages/Salon.svelte';
   import Pieces from './pages/Pieces.svelte';
+  import Equipements from './pages/Equipements.svelte';
+  import Historique from './pages/Historique.svelte';
   import Plan from './pages/Plan.svelte';
   import Cameras from './pages/Cameras.svelte';
-  import Energie from './pages/Energie.svelte';
   import Impression from './pages/Impression.svelte';
   import Dehors from './pages/Dehors.svelte';
   import Moli from './pages/Moli.svelte';
@@ -39,19 +40,12 @@
 
   // `label` is a catalogue key, said where it is shown; Moli is a name.
   const NAV = [
-    { path: '', label: 'commun.nav.accueil', icon: 'home' },
-    { path: 'moli', name: 'Moli', orb: true },
-    { path: 'salon', label: 'commun.nav.salon', icon: 'remote' },
+    { path: '', label: 'commun.nav.accueil', icon: 'dashboard' },
     { path: 'pieces', label: 'commun.nav.pieces', icon: 'light-group' },
-    { path: 'plan', label: 'commun.nav.plan', icon: 'home-roof' },
-    { path: 'carte', label: 'commun.nav.carte', icon: 'map' },
+    { path: 'equipements', label: 'commun.nav.equipements', icon: 'devices' },
     { path: 'cameras', label: 'commun.nav.cameras', icon: 'cctv' },
-    { path: 'parler', label: 'commun.nav.parler', icon: 'talk' },
-    { path: 'energie', label: 'commun.nav.energie', icon: 'bolt', sep: true },
-    { path: 'impression', label: 'commun.nav.impression', icon: 'printer3d' },
-    { path: 'dehors', label: 'commun.nav.dehors', icon: 'flower-outline' },
-    { path: 'automatismes', label: 'commun.nav.automatismes', icon: 'robot', sep: true },
-    { path: 'infra', label: 'commun.nav.infra', icon: 'server' },
+    { path: 'historique', label: 'commun.nav.historique', icon: 'history' },
+    { path: 'automatismes', label: 'commun.nav.automatismes', icon: 'robot' },
   ];
 
   let moliOpen = $state(false);
@@ -92,17 +86,6 @@
     };
   });
 
-  // The theme button says the preference; a forced one says its own side.
-  const themeName = $derived(home.theme === 'auto' ? t('commun.theme.auto') : theme === 'night' ? t('commun.theme.nuit') : t('commun.theme.jour'));
-  const themeTitle = $derived(
-    home.theme === 'auto' ? t('commun.theme.titre_auto') : home.theme === 'dark' ? t('commun.theme.titre_nuit') : t('commun.theme.titre_jour'),
-  );
-
-  function cycleTheme() {
-    home.theme = home.theme === 'auto' ? (theme === 'night' ? 'light' : 'dark') : 'auto';
-    savePref('maison-theme', home.theme);
-  }
-
   const page = $derived(route.split('/')[0] ?? '');
 </script>
 
@@ -118,27 +101,19 @@
       {#each NAV as item (item.path)}
         {#if item.sep}<li class="sep" aria-hidden="true"></li>{/if}
         <li>
-          <a href="#/{item.path}" class:active={page === item.path} aria-current={page === item.path ? 'page' : undefined} title={item.name ?? t(item.label)}>
+          <a href="#/{item.path}" class:active={page === item.path} aria-current={page === item.path ? 'page' : undefined} title={t(item.label)}>
             <span class="glyph">
-              {#if item.orb}<Orb size={22} state={moli.busy ? 'thinking' : 'idle'} />{:else}<Icon name={item.icon} size={22} />{/if}
+              <Icon name={item.icon} size={22} />
             </span>
-            <span class="label">{item.name ?? t(item.label)}</span>
+            <span class="label">{t(item.label)}</span>
           </a>
         </li>
       {/each}
     </ul>
     <div class="rail-foot">
-      <button class="theme" onclick={cycleTheme} title={themeTitle}>
-        <Icon name={theme === 'night' ? 'moon' : 'sun'} size={20} />
-        <span class="label">{themeName}</span>
-      </button>
-      <a href="#/systeme" class:active={page === 'systeme'} title={t('commun.nav.systeme_titre')}>
-        <Icon name="branch" size={20} />
+      <a href="#/reglages" class:active={page === 'reglages' || page === 'systeme'} title={t('commun.nav.systeme_titre')}>
+        <Icon name="tune" size={20} />
         <span class="label">{t('commun.nav.systeme')}</span>
-      </a>
-      <a class="atelier" href="#/atelier" title={t('commun.nav.atelier_titre')}>
-        <Icon name="atelier" size={20} />
-        <span class="label">{t('commun.nav.atelier')}</span>
       </a>
     </div>
   </nav>
@@ -148,6 +123,10 @@
       <Salon />
     {:else if page === 'pieces'}
       <Pieces />
+    {:else if page === 'historique'}
+      <Historique />
+    {:else if page === 'equipements'}
+      <Equipements />
     {:else if page === 'plan'}
       <Plan />
     {:else if page === 'carte'}
@@ -157,11 +136,13 @@
       <Cameras />
     {:else if page === 'parler'}
       <Parler />
+    {:else if page === 'atelier'}
+      <Systeme route="reglages/securite" />
+    {:else if page === 'energie' && !route.startsWith('energie/solaire')}
+      <Systeme route="reglages/energie" />
     {:else if page === 'energie' && route.startsWith('energie/solaire')}
       <!-- The solar demo (a simulation): loaded only when visited. -->
       {#await import('./pages/Solaire.svelte') then { default: Solaire }}<Solaire />{/await}
-    {:else if page === 'energie'}
-      <Energie />
     {:else if page === 'impression'}
       <Impression />
     {:else if page === 'dehors'}
@@ -170,8 +151,8 @@
       <Moli />
     {:else if page === 'automatismes'}
       <Automatismes {route} />
-    {:else if page === 'systeme'}
-      <Systeme />
+    {:else if page === 'systeme' || page === 'reglages'}
+      <Systeme {route} />
     {:else if page === 'infra'}
       <!-- The house's machines: loaded only when visited. -->
       {#await import('./pages/Infra.svelte') then { default: Infra }}<Infra />{/await}
@@ -180,9 +161,7 @@
     {/if}
     <!-- On a phone the rail's foot is hidden: the same three, at the bottom. -->
     <footer class="phone-foot">
-      <a href="#/systeme"><Icon name="branch" size={16} />{t('commun.nav.comment_ca_marche')}</a>
-      <a href="#/atelier"><Icon name="atelier" size={16} />{t('commun.nav.atelier')}</a>
-      <button onclick={cycleTheme}><Icon name={theme === 'night' ? 'moon' : 'sun'} size={16} />{home.theme === 'auto' ? t('commun.theme.auto_pied') : themeName}</button>
+      <a href="#/reglages"><Icon name="tune" size={16} />{t('commun.nav.systeme')}</a>
     </footer>
   </main>
 

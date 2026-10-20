@@ -1,10 +1,8 @@
 <script>
   import { onMount } from 'svelte';
   import Maison from './maison/Maison.svelte';
-  import Atelier from './Atelier.svelte';
 
-  // Two faces, one hub: « Maison » for the family (default), « Atelier »
-  // for tinkering with every device. Routes live in the hash.
+  // Routes live in the hash.
   const read = () => location.hash.replace(/^#\/?/, '');
   let route = $state(read());
 
@@ -15,8 +13,4 @@
   });
 </script>
 
-{#if route === 'atelier' || route.startsWith('atelier/')}
-  <Atelier />
-{:else}
-  <Maison {route} />
-{/if}
+<Maison {route} />

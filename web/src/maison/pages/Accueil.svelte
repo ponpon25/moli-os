@@ -13,8 +13,100 @@
   import AmbiancePicker from '../ui/AmbiancePicker.svelte';
   import Routines from '../ui/Routines.svelte';
   import SkyHero from '../ui/SkyHero.svelte';
+  import { ROW, tileOf, setTile, reorder, saveDashboard, resetDashboard } from '../lib/layout.svelte.js';
 
   const cfg = $derived(home.config ?? {});
+
+  // ---- the arrangement (kept on this device) -------------------------------------
+  let editing = $state(false);
+  let gridEl = $state();
+  let dragId = $state(null);
+  let overId = $state(null);
+  /** where the dragged tile would land: before or after the one under it */
+  let side = $state('before');
+  /** wide tiles are passed over from above or below, narrow ones from the side */
+  let across = $state(false);
+
+  /** The tiles, in their default order, and their default width in columns (of 12). */
+  const DEFS = [
+    { id: 'sky', w: 12 },
+    { id: 'modes', w: 12 },
+    { id: 'notices', w: 12 },
+    { id: 'alarm', w: 12 },
+    { id: 'lights', w: 8 },
+    { id: 'energy', w: 4 },
+    { id: 'routines', w: 4 },
+    { id: 'climate', w: 7 },
+    { id: 'doorbell', w: 5 },
+    { id: 'remote', w: 3 },
+    { id: 'outside', w: 4 },
+  ];
+  /** A tile shows only if the house has what it is about. */
+  const avail = $derived({
+    sky: true,
+    modes: modes.length > 0,
+    notices: true,
+    alarm: !!alarm,
+    lights: true,
+    energy: !energy.missing,
+    routines: true,
+    climate: (cfg.favorites?.climate ?? []).length > 0,
+    doorbell: !!bell,
+    remote: !!tv,
+    outside: !!(out.air || out.weather || out.pool),
+  });
+  const tiles = $derived(
+    DEFS.map((d, i) => ({ id: d.id, ...tileOf(d.id, { on: true, w: d.w, h: 0, order: i }) }))
+      .filter((d) => avail[d.id])
+      .sort((a, b) => a.order - b.order),
+  );
+
+  function startDrag(e, id) {
+    dragId = id;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', id);
+  }
+  function over(e, tile) {
+    if (!editing || !dragId) return;
+    e.preventDefault();
+    const box = e.currentTarget.getBoundingClientRect();
+    across = tile.w < 9;
+    side = (across ? (e.clientX - box.left) / box.width : (e.clientY - box.top) / box.height) < 0.5 ? 'before' : 'after';
+    overId = tile.id;
+  }
+  function drop(e, id) {
+    e.preventDefault();
+    const from = dragId;
+    dragId = overId = null;
+    if (!from || from === id) return;
+    const ids = tiles.map((x) => x.id);
+    ids.splice(ids.indexOf(from), 1);
+    ids.splice(ids.indexOf(id) + (side === 'after' ? 1 : 0), 0, from);
+    reorder(ids);
+  }
+  function startResize(e, tile) {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = e.currentTarget.closest('.widget');
+    const col = (gridEl.clientWidth + 20) / 12;
+    const [x0, y0, w0] = [e.clientX, e.clientY, tile.w];
+    const h0 = tile.h || Math.round(el.offsetHeight / ROW);
+    const move = (ev) =>
+      setTile(
+        tile.id,
+        {
+          w: Math.min(12, Math.max(2, Math.round(w0 + (ev.clientX - x0) / col))),
+          h: Math.max(2, Math.round(h0 + (ev.clientY - y0) / ROW)),
+        },
+        false,
+      );
+    const up = () => {
+      removeEventListener('pointermove', move);
+      saveDashboard();
+    };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up, { once: true });
+  }
   const out = $derived(cfg.outdoor ?? {});
 
   // The favourites if the house chose some, else every light of every room.
@@ -83,7 +175,7 @@
       if (value(d.id, 'smoke') === true) list.push({ tone: 'alert', icon: 'fire', text: t('maison.accueil.fumee', { name: nameOf(d.id) }), href: '#/pieces' });
       if (leak(d.id)) list.push({ tone: 'alert', icon: 'water', text: t('maison.accueil.fuite', { name: nameOf(d.id) }), href: '#/pieces' });
     }
-    if (hub.approvals?.length) list.push({ tone: 'cool', icon: 'lock', text: t('maison.accueil.demandes', { count: hub.approvals.length }), href: '#/atelier' });
+    if (hub.approvals?.length) list.push({ tone: 'cool', icon: 'lock', text: t('maison.accueil.demandes', { count: hub.approvals.length }), href: '#/reglages/securite' });
     for (const door of cfg.doors ?? []) {
       const d = device(door.id);
       if (!d) continue;
@@ -111,7 +203,7 @@
     }
     if (value('energie:maison', 'over_budget') === true) {
       const bill = value('energie:maison', 'bill_projection');
-      list.push({ tone: 'warm', icon: 'bolt', text: t('maison.accueil.facture', { bill: num(bill) }), href: '#/energie' });
+      list.push({ tone: 'warm', icon: 'bolt', text: t('maison.accueil.facture', { bill: num(bill) }), href: '#/reglages/energie' });
     }
     // A dead battery takes its sensor offline: count it all the same.
     const flat = all.filter((d) => lowBattery(d.id));
@@ -159,10 +251,22 @@
   });
 </script>
 
-<div class="accueil">
-  <SkyHero />
+<div class="accueil" class:editing>
+  <header class="head">
+    <h1 class="page-title">{t('maison.dashboard.titre')}</h1>
+    {#if editing}
+      <button class="ghost" onclick={() => resetDashboard()}>{t('maison.dashboard.reinitialiser')}</button>
+    {/if}
+    <button class="edit" class:active={editing} onclick={() => (editing = !editing)}>
+      <Icon name={editing ? 'check' : 'pencil'} size={16} />{editing ? t('maison.dashboard.terminer') : t('maison.dashboard.personnaliser')}
+    </button>
+  </header>
+  {#if editing}<p class="hint">{t('maison.dashboard.aide')}</p>{/if}
 
-  {#if modes.length}
+  {#snippet body(id)}
+    {#if id === 'sky'}
+      <SkyHero />
+    {:else if id === 'modes'}
     <div class="modes" role="radiogroup" aria-label={t('maison.accueil.mode_maison')}>
       {#each modes as m (m)}
         <button role="radio" aria-checked={m === mode} class:on={m === mode} disabled={pending(modeDevice.id, 'state')} onclick={() => setMode(m)}>
@@ -176,8 +280,8 @@
         </button>
       {/if}
     </div>
-  {/if}
-
+  
+    {:else if id === 'notices'}
   <section class="notices" aria-label={t('maison.accueil.a_savoir')}>
     {#each notices as n (n.text)}
       <a class="chip {n.tone}" href={n.href}><Icon name={n.icon} size={16} />{n.text}</a>
@@ -186,9 +290,11 @@
     {/each}
   </section>
 
-  <div class="grid">
-    {#if alarm}<AlarmCard id={alarm.id} />{/if}
-    <section class="card lights" class:full={energy.missing}>
+
+    {:else if id === 'alarm'}
+      <AlarmCard id={alarm.id} />
+    {:else if id === 'lights'}
+    <section class="card lights" >
       <div class="card-head">
         <h2><Icon name="light" size={18} />{t('maison.accueil.lumieres')} <span class="count">{litCount ? t('maison.accueil.allumees', { count: litCount }) : t('maison.accueil.tout_eteint')}</span></h2>
         <a class="more" href="#/pieces" aria-label={t('maison.accueil.toutes_pieces')}><Icon name="arrow-top-right" size={18} /></a>
@@ -213,12 +319,12 @@
       {/if}
     </section>
 
-    <div class="side">
-      {#if !energy.missing}<EnergyCard />{/if}
-      <Routines />
-    </div>
 
-    {#if (cfg.favorites?.climate ?? []).length}
+    {:else if id === 'energy'}
+      <EnergyCard />
+    {:else if id === 'routines'}
+      <Routines />
+    {:else if id === 'climate'}
       <section class="card climate">
         <div class="card-head"><h2><Icon name="air-conditioner" size={18} />{t('maison.accueil.clim')}</h2></div>
         <div class="clims">
@@ -227,9 +333,8 @@
           {/each}
         </div>
       </section>
-    {/if}
-
-    {#if bell}
+    
+    {:else if id === 'doorbell'}
       <section class="card doorbell">
         <div class="card-head">
           <h2><Icon name="bell" size={18} />{t('maison.accueil.devant_porte')}</h2>
@@ -238,9 +343,8 @@
         <CameraTile id={bell.id} name={bell.name} refresh={15} />
         <p class="muted small">{passage ? t('maison.accueil.dernier_passage', { when: relative(passage, home.now) }) : t('maison.accueil.personne')}</p>
       </section>
-    {/if}
-
-    {#if tv}
+    
+    {:else if id === 'remote'}
     <a class="card remote" href="#/salon">
       <span class="tv-object" aria-hidden="true">
         <span class="screen" class:lit={tvOn}></span>
@@ -252,9 +356,8 @@
       </span>
       <span class="go"><Icon name="arrow-top-right" size={20} /></span>
     </a>
-    {/if}
-
-    {#if out.air || out.weather || out.pool}
+    
+    {:else if id === 'outside'}
     <a class="card outside" href="#/dehors">
       <div class="card-head"><h2><Icon name="flower-outline" size={18} />{t('maison.accueil.dehors')}</h2><span class="more" aria-hidden="true"><Icon name="arrow-top-right" size={18} /></span></div>
       <div class="facts">
@@ -264,7 +367,48 @@
         <div><small>{t('maison.accueil.piscine')}</small><b class="num">{value(out.pool, 'temperature') != null ? `${num(value(out.pool, 'temperature'), 1)}°` : '—'}</b></div>
       </div>
     </a>
+    
     {/if}
+  {/snippet}
+
+  <div class="grid" bind:this={gridEl}>
+    {#each tiles as tile (tile.id)}
+      {#if editing || tile.on}
+        <div
+          class="widget"
+          class:off={!tile.on}
+          class:over={overId === tile.id && dragId !== tile.id}
+          data-side={side}
+          data-across={across}
+          style:--w={tile.w}
+          style:min-height={tile.h ? `${tile.h * ROW}px` : null}
+          draggable={editing}
+          ondragstart={(e) => startDrag(e, tile.id)}
+          ondragover={(e) => over(e, tile)}
+          ondragleave={() => overId === tile.id && (overId = null)}
+          ondrop={(e) => drop(e, tile.id)}
+          ondragend={() => ((dragId = null), (overId = null))}
+          role="group"
+          aria-label={t(`maison.dashboard.t_${tile.id}`)}
+        >
+          {#if editing}
+            <div class="bar">
+              <span class="grip" aria-hidden="true"><Icon name="drag" size={18} /></span>
+              <b>{t(`maison.dashboard.t_${tile.id}`)}</b>
+              <button onclick={() => setTile(tile.id, { on: !tile.on })} title={tile.on ? t('maison.dashboard.masquer') : t('maison.dashboard.afficher')} aria-label={tile.on ? t('maison.dashboard.masquer') : t('maison.dashboard.afficher')}>
+                <Icon name={tile.on ? 'eye' : 'eye-off'} size={16} />
+              </button>
+            </div>
+          {/if}
+          <div class="inner">{@render body(tile.id)}</div>
+          {#if editing && tile.on}
+            <button class="grow" onpointerdown={(e) => startResize(e, tile)} title={t('maison.dashboard.redimensionner')} aria-label={t('maison.dashboard.redimensionner')}>
+              <Icon name="resize" size={18} />
+            </button>
+          {/if}
+        </div>
+      {/if}
+    {/each}
   </div>
 </div>
 
@@ -330,6 +474,45 @@
     font-size: 14px;
   }
 
+  .head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .head .page-title {
+    flex: 1;
+    margin: 0;
+  }
+
+  .edit,
+  .ghost,
+  .bar button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 0;
+    border-radius: 999px;
+    padding: 7px 14px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 650;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
+  .edit.active {
+    background: var(--warm-soft);
+    color: var(--warm-ink);
+  }
+
+  .hint {
+    margin: -8px 0 0;
+    font-size: 13px;
+    color: var(--ink-3);
+  }
+
   .grid {
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -337,37 +520,120 @@
     align-items: start;
   }
 
-  .grid > :global(.alarm) {
-    grid-column: span 12;
+  .widget {
+    position: relative;
+    grid-column: span var(--w, 12);
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-width: 0;
+    container-type: inline-size;
   }
 
-  .lights {
-    grid-column: span 8;
+  .inner {
+    display: grid;
+    gap: 20px;
+    min-width: 0;
   }
 
-  .lights.full {
-    grid-column: span 12;
+  .inner > :global(*) {
+    min-width: 0;
   }
 
-  .side {
-    grid-column: span 4;
+  .editing .widget {
+    outline: 2px dashed color-mix(in srgb, var(--ink-3) 40%, transparent);
+    outline-offset: 6px;
+    border-radius: 18px;
+    cursor: grab;
+    min-height: 84px;
   }
 
-  .climate {
-    grid-column: span 7;
+  /* The bar says where it lands: beside the tile, or above / below it. */
+  .editing .widget.over::after {
+    content: '';
+    position: absolute;
+    z-index: 2;
+    border-radius: 3px;
+    background: var(--warm-ink);
+    pointer-events: none;
   }
 
-  .doorbell {
-    grid-column: span 5;
-    grid-row: span 2;
+  .editing .widget.over[data-across='true']::after {
+    top: -6px;
+    bottom: -6px;
+    width: 5px;
   }
 
-  .remote {
-    grid-column: span 3;
+  .editing .widget.over[data-across='true'][data-side='before']::after {
+    left: -13px;
   }
 
-  .outside {
-    grid-column: span 4;
+  .editing .widget.over[data-across='true'][data-side='after']::after {
+    right: -13px;
+  }
+
+  .editing .widget.over[data-across='false']::after {
+    left: -6px;
+    right: -6px;
+    height: 5px;
+  }
+
+  .editing .widget.over[data-across='false'][data-side='before']::after {
+    top: -13px;
+  }
+
+  .editing .widget.over[data-across='false'][data-side='after']::after {
+    bottom: -13px;
+  }
+
+  .editing .widget.off .inner {
+    opacity: 0.35;
+  }
+
+  /* Arranging: the tiles show what they are but do not act. */
+  .editing .inner {
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+
+  .bar b {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .bar button {
+    padding: 5px 9px;
+  }
+
+  .grip {
+    display: grid;
+    color: var(--ink-3);
+  }
+
+  .grow {
+    position: absolute;
+    right: -6px;
+    bottom: -6px;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--warm-soft);
+    color: var(--warm-ink);
+    cursor: nwse-resize;
+    touch-action: none;
   }
 
   .moods {
@@ -430,13 +696,13 @@
 
   .tiles {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
     gap: 12px;
   }
 
   .clims {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 12px;
   }
 
@@ -519,8 +785,8 @@
 
   .facts {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
+    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+    gap: 10px 8px;
   }
 
   .facts small {
@@ -535,27 +801,13 @@
     font-weight: 650;
   }
 
-  @media (max-width: 1180px) {
-    .lights,
-    .climate {
-      grid-column: span 12;
-    }
-
-    .side,
-    .doorbell {
-      grid-column: span 6;
-      grid-row: auto;
-    }
-
-    .remote,
-    .outside {
-      grid-column: span 6;
-    }
-  }
-
   @media (max-width: 760px) {
-    .grid > * {
+    .widget {
       grid-column: span 12 !important;
+    }
+
+    .grow {
+      display: none;
     }
 
     .tiles {

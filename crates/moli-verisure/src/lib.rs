@@ -44,6 +44,10 @@ const RATE_BACKOFF: Duration = Duration::from_secs(5 * 60);
 const ERROR_BACKOFF: Duration = Duration::from_secs(2 * 60);
 /// A panel asked again soon after an order: it needs a moment to settle.
 const AFTER_ORDER: Duration = Duration::from_secs(20);
+/// An asked reading (`refresh`) is skipped when the last one is this recent:
+/// Verisure's firewall counts requests, and a person who flips a switch twice
+/// must not be taken for a flood.
+const REFRESH_GAP: Duration = Duration::from_secs(30);
 
 /// Driver configuration (`[driver.options]` in `moli.toml`). The identifier
 /// and the password are not here: they live in the secret store.
@@ -215,7 +219,10 @@ async fn authenticate(client: &mut Client, ctx: &DriverCtx) -> Result<(), Stop> 
 }
 
 fn missing(ctx: &DriverCtx) -> String {
-    moli_i18n::tr!("pilotes.verisure.identifiants_manquants", instance = ctx.instance())
+    moli_i18n::tr!(
+        "pilotes.verisure.identifiants_manquants",
+        instance = ctx.instance()
+    )
 }
 
 /// A new device: asks for the SMS, then waits for a person to type it.
@@ -284,6 +291,15 @@ fn alarm_device(ctx: &DriverCtx, installation: &Installation) -> Device {
                 moli_i18n::tr!("pilotes.verisure.etat"),
                 Kind::Text,
                 false,
+                Semantic::Other,
+            ),
+            // A reading asked for now (an automation when the house empties):
+            // it reads, it never orders, so it is free to anyone.
+            spec(
+                "refresh",
+                moli_i18n::tr!("pilotes.verisure.actualiser"),
+                Kind::Binary,
+                true,
                 Semantic::Other,
             ),
             // `control`: the guard holds an order here for a human, whoever
@@ -395,12 +411,14 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
     }
     let id = ctx.device_id(&installation.number);
     ctx.upsert_device(alarm_device(ctx, &installation));
+    ctx.set_state(&id, "refresh", Value::Bool(false));
     tracing::info!(instance = %ctx.instance(), "verisure installation found");
     ctx.ready();
 
     let poll = Duration::from_secs(config.poll_secs.max(MIN_POLL));
     let mut next = tokio::time::Instant::now();
     let mut failures = 0u32;
+    let mut last_read: Option<tokio::time::Instant> = None;
     // The panel's last code: an order says it back (the app does the same).
     let mut current = String::new();
 
@@ -408,6 +426,14 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
         tokio::select! {
             command = ctx.next_command() => {
                 let Some(command) = command else { return Ok(()) };
+                if &*command.key == "refresh" {
+                    // Answered at once: the reading follows (a few seconds).
+                    command.reply(Ok(()));
+                    if refresh_due(last_read.map(|t| t.elapsed()), failures) {
+                        next = tokio::time::Instant::now();
+                    }
+                    continue;
+                }
                 match order(&mut client, ctx, &installation, &id, &mut current, command).await {
                     Ok(()) => next = tokio::time::Instant::now() + AFTER_ORDER,
                     Err(Stop::Park(reason)) => return park(ctx, reason).await,
@@ -418,6 +444,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
                 match read(&mut client, ctx, &installation).await {
                     Ok(code) => {
                         failures = 0;
+                        last_read = Some(tokio::time::Instant::now());
                         publish(ctx, &id, &code);
                         ctx.set_availability(&id, true);
                         current = code;
@@ -437,6 +464,13 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
             }
         }
     }
+}
+
+/// Whether an asked reading goes ahead: never while the driver is backing off
+/// after failures (a firewall block must be left alone), never right after
+/// another reading.
+fn refresh_due(since_last_read: Option<Duration>, failures: u32) -> bool {
+    failures == 0 && since_last_read.is_none_or(|d| d >= REFRESH_GAP)
 }
 
 /// One reading of the panel, with a renewed session if the old one ended.
@@ -477,7 +511,10 @@ async fn order(
         return Ok(());
     }
     let Some(verb) = model::command_for(&mode, current) else {
-        command.reply(Err(moli_i18n::tr!("pilotes.verisure.mode_inconnu", mode = mode)));
+        command.reply(Err(moli_i18n::tr!(
+            "pilotes.verisure.mode_inconnu",
+            mode = mode
+        )));
         return Ok(());
     };
     // A warm session: the hub's answer cannot wait for a login.
@@ -504,10 +541,17 @@ async fn order(
         }
     };
     tracing::info!(instance = %ctx.instance(), order = verb, "verisure order taken");
-    ctx.set_state(id, "last_order", Value::Text(moli_i18n::tr!("pilotes.verisure.ordre_envoye").into()));
+    ctx.set_state(
+        id,
+        "last_order",
+        Value::Text(moli_i18n::tr!("pilotes.verisure.ordre_envoye").into()),
+    );
     command.reply(Ok(()));
 
-    let text = match client.finish_command(installation, verb, current, &reference).await {
+    let text = match client
+        .finish_command(installation, verb, current, &reference)
+        .await
+    {
         Ok(result) => {
             if let Some(code) = result.code {
                 publish(ctx, id, &code);
@@ -527,6 +571,14 @@ async fn order(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_asked_reading_is_throttled_and_never_beats_a_backoff() {
+        assert!(refresh_due(None, 0));
+        assert!(refresh_due(Some(Duration::from_secs(31)), 0));
+        assert!(!refresh_due(Some(Duration::from_secs(5)), 0));
+        assert!(!refresh_due(Some(Duration::from_secs(600)), 1));
+    }
 
     #[test]
     fn options_are_checked() {

@@ -113,8 +113,8 @@
   "assistant.import.note_from_id": "Imported from Home Assistant (automation “{alias}”, id {id}).",
   "assistant.import.note_from": "Imported from Home Assistant (automation “{alias}”).",
   "assistant.import.note_switch_off": "When you approve this one, turn off the original in HA, or both will run.",
-  "assistant.settings.key_invalid": "that isn’t an API key (it starts with sk-, no spaces)",
-  "assistant.settings.key_refused": "OpenAI rejected this key: check it, and make sure it hasn’t been deleted",
+  "assistant.settings.key_invalid": "that isn’t an API key (no spaces, 20 characters at least)",
+  "assistant.settings.key_refused": "{provider} rejected this key: check it, and make sure it hasn’t been deleted",
   "assistant.settings.key_in_clear": "the model is reached over plain http, unencrypted: a key is never sent there (set base_url to https to use one)",
   "assistant.settings.vault": "vault: {error}",
   "assistant.voice.style.enjoue.label": "Cheerful",
@@ -146,5 +146,6 @@
   "assistant.door.porte": "the door",
   "assistant.recap.porte": "🔔 At the door: {n}",
   "assistant.recap.porte_sonne": "{time} · door · rang, no message",
-  "assistant.recap.porte_message": "{time} · door · “{message}”"
+  "assistant.recap.porte_message": "{time} · door · “{message}”",
+  "assistant.indice.mistral_formule": "Mistral heavily limits a key without a plan: in console.mistral.ai › Admin › Subscriptions, pick “Experiment” (free, verified phone number; exchanges may be used to train their models) or “Scale” (pay as you go, no monthly fee)."
 }

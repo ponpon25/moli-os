@@ -1,0 +1,25 @@
+[integration]
+id = "olvid"
+name = "Olvid (messages privés à la maison)"
+brands = ["Olvid"]
+models = []
+# gRPC (HTTP/2) en clair vers le daemon officiel olvid/bot-daemon, dans la maison.
+transport = "tcp"
+driver = "olvid"
+crate = "moli-olvid"
+
+[discovery]
+mdns = []
+ssdp = []
+ports = []
+
+[needs]
+# La clé d'administration du daemon : dans le coffre (`moli-os secrets set <instance> admin_key`),
+# jamais dans moli.toml. Moli s'en sert une fois pour créer son bot et sa clé client.
+secrets = ["admin_key"]
+vars = []
+options = ["daemon", "bot_name"]
+
+[origin]
+reused = "remplace une notification par Telegram ; messagerie chiffrée de bout en bout, sans numéro de téléphone"
+author = "agent"

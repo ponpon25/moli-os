@@ -70,7 +70,7 @@ impl Assistant {
             audio: wav.as_deref().and_then(|w| self.record(w)),
             cost: exchanges::Cost::new(
                 0.0,
-                pricing::hear(&self.0.config.transcribe_model, seconds),
+                pricing::hear(&self.transcribe_model(), seconds),
                 0.0,
                 0.0,
             ),
@@ -97,19 +97,25 @@ impl Assistant {
             )
     }
 
-    /// The house's Telegram, if it has one.
-    pub(crate) fn telegram(&self) -> Option<PointId> {
-        self.0.hub.snapshot().devices.iter().find_map(|d| {
-            (d.device.manufacturer.as_deref() == Some("Telegram")
-                && d.device.points.iter().any(|p| &*p.key == "notify"))
-            .then(|| PointId::new(&d.device.id, "notify"))
-        })
+    /// The house's written messengers (Telegram, Olvid), if it has any.
+    pub(crate) fn messengers(&self) -> Vec<PointId> {
+        self.0
+            .hub
+            .snapshot()
+            .devices
+            .iter()
+            .filter(|d| {
+                matches!(d.device.manufacturer.as_deref(), Some("Telegram" | "Olvid"))
+                    && d.device.points.iter().any(|p| &*p.key == "notify")
+            })
+            .map(|d| PointId::new(&d.device.id, "notify"))
+            .collect()
     }
 
-    /// `text` on Telegram, and `said` on the door speakers.
+    /// `text` on the messengers, and `said` on the door speakers.
     async fn tell_household(&self, text: &str, said: Option<String>) {
         let mut orders: Vec<(PointId, String)> = Vec::new();
-        if let Some(point) = self.telegram() {
+        for point in self.messengers() {
             orders.push((point, text.to_owned()));
         }
         if let Some(said) = said {

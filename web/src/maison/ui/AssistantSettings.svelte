@@ -7,8 +7,9 @@
   import { fetchSpeech } from '../lib/voice/speech.js';
   import Icon from './Icon.svelte';
 
-  /** Moli's settings: the OpenAI key (given by a person, code asked;
-   *  tested, filed encrypted in Moli, never shown again) and the voice. */
+  /** Moli's settings: which AI provider it talks to (OpenAI, Mistral, Gemini,
+   *  Claude), that provider's key (given by a person, code asked; tested,
+   *  filed encrypted in Moli, never shown again) and the voice. */
   let s = $state(null);
   let open = $state(false);
   let key = $state('');
@@ -31,7 +32,7 @@
       const res = await fetch('/api/assistant/key', {
         method: 'PUT',
         headers: { 'content-type': 'application/json', 'x-moli-origin': 'ui' },
-        body: JSON.stringify({ api_key: key.trim() }),
+        body: JSON.stringify({ api_key: key.trim(), provider: s.provider }),
       });
       if (res.status === 403) {
         // A person's gesture: the code first, then the same request again.
@@ -51,6 +52,35 @@
       busy = false;
     }
   }
+
+  /** The provider receives what the house says to Moli: a person's choice (code asked). */
+  async function chooseProvider(id) {
+    if (id === s.provider) return;
+    busy = true;
+    try {
+      const res = await fetch('/api/assistant/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'x-moli-origin': 'ui' },
+        body: JSON.stringify({ provider: id }),
+      });
+      if (res.status === 403) {
+        home.held = { label: t('moli.reglages.fournisseur'), reason: 'ton code', custom: () => chooseProvider(id) };
+        return;
+      }
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      s = body;
+      open = !body.key && !body.local_model;
+      key = '';
+      moli.status = await fetch('/api/assistant').then((r) => r.json());
+    } catch (e) {
+      note(t('moli.reglages.cle_erreur', { message: e.message.replace(/^invalid request: |^model unavailable: /, '') }), 'error');
+    } finally {
+      busy = false;
+    }
+  }
+
+  const current = $derived(s?.providers?.find((p) => p.id === s.provider));
 
   async function choose(change) {
     const before = s;
@@ -118,9 +148,9 @@
           {#if s.local_model}
             {t('moli.reglages.local', { model: s.model })}
           {:else if s.key}
-            {t('moli.reglages.cle_ok')}
+            {t('moli.reglages.cle_ok', { provider: current?.name })}
           {:else}
-            {t('moli.reglages.cle_manque')}
+            {t('moli.reglages.cle_manque', { provider: current?.name })}
           {/if}
         </span>
       </div>
@@ -129,19 +159,44 @@
       {/if}
     </div>
 
-    {#if open}
-      <div class="how">
-        <b>{t('moli.reglages.comment')}</b>
-        <ol>
-          <li>{@render step('moli.reglages.etape1', 'https://platform.openai.com/signup', 'platform.openai.com')}</li>
-          <li>{@render step('moli.reglages.etape2', 'https://platform.openai.com/settings/organization/billing/overview', 'Billing')}</li>
-          <li>{@render step('moli.reglages.etape3', 'https://platform.openai.com/settings/organization/limits', 'Limits')}</li>
-          <li>{@render step('moli.reglages.etape4', 'https://platform.openai.com/api-keys', 'API keys')}</li>
-          <li>{t('moli.reglages.etape5')}</li>
-        </ol>
+    {#if s.providers?.length > 1}
+      <div class="providers" role="radiogroup" aria-label={t('moli.reglages.fournisseur')}>
+        {#each s.providers as p (p.id)}
+          <button role="radio" aria-checked={s.provider === p.id} class:on={s.provider === p.id} disabled={busy} onclick={() => chooseProvider(p.id)}>
+            {p.name}{#if p.key}<Icon name="check" size={14} />{/if}
+          </button>
+        {/each}
       </div>
+      {#if current}
+        <ul class="caps" aria-label={t('moli.reglages.capacites')}>
+          <li class="on">{t('moli.reglages.cap_conversation', { model: current.model })}</li>
+          <li class:on={current.listen}>{t('moli.reglages.cap_ecoute')}</li>
+          <li class:on={current.speak}>{t('moli.reglages.cap_voix')}</li>
+          <li class:on={current.search}>{t('moli.reglages.cap_recherche')}</li>
+        </ul>
+      {/if}
+    {/if}
+
+    {#if open}
+      {#if s.provider === 'openai'}
+        <div class="how">
+          <b>{t('moli.reglages.comment')}</b>
+          <ol>
+            <li>{@render step('moli.reglages.etape1', 'https://platform.openai.com/signup', 'platform.openai.com')}</li>
+            <li>{@render step('moli.reglages.etape2', 'https://platform.openai.com/settings/organization/billing/overview', 'Billing')}</li>
+            <li>{@render step('moli.reglages.etape3', 'https://platform.openai.com/settings/organization/limits', 'Limits')}</li>
+            <li>{@render step('moli.reglages.etape4', 'https://platform.openai.com/api-keys', 'API keys')}</li>
+            <li>{t('moli.reglages.etape5')}</li>
+          </ol>
+        </div>
+      {:else if current?.keys_url}
+        <div class="how">
+          <b>{t('moli.reglages.comment_autre', { provider: current.name })}</b>
+          <p>{t('moli.reglages.etape_autre', { provider: current.name })} <a href={current.keys_url} target="_blank" rel="noopener">{current.keys_url.replace(/^https:\/\//, '')}</a></p>
+        </div>
+      {/if}
       <form class="form" onsubmit={(e) => (e.preventDefault(), saveKey())} autocomplete="off">
-        <label>{t('moli.reglages.cle_champ')}<input bind:value={key} type="password" placeholder="sk-…" spellcheck="false" autocomplete="new-password" /></label>
+        <label>{t('moli.reglages.cle_champ', { provider: current?.name })}<input bind:value={key} type="password" placeholder="…" spellcheck="false" autocomplete="new-password" /></label>
         <button class="btn primary" disabled={busy || key.trim().length < 20}>{busy ? t('moli.reglages.verification') : t('moli.reglages.enregistrer')}</button>
         <small class="muted">{t('moli.reglages.confidentialite')}</small>
       </form>
@@ -248,6 +303,62 @@
   .btn:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .providers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .providers button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 0;
+    border-radius: 999px;
+    padding: 8px 16px;
+    font: inherit;
+    font-weight: 650;
+    background: var(--surface);
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
+  .providers button.on {
+    background: var(--ink);
+    color: var(--bg);
+  }
+
+  .caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .caps li {
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: line-through;
+    background: var(--surface);
+    color: var(--ink-3);
+    opacity: 0.7;
+  }
+
+  .caps li.on {
+    text-decoration: none;
+    opacity: 1;
+    color: var(--ink-2);
+  }
+
+  .how p {
+    margin: 0;
+    color: var(--ink-2);
   }
 
   .how {

@@ -238,16 +238,36 @@ pub(crate) struct Prefs {
     style: Option<String>,
     #[serde(default)]
     pace: Option<String>,
+    /// Which AI provider Moli talks to: the house's data goes there.
+    #[serde(default)]
+    provider: Option<String>,
 }
 
 /// The voice, the tone and the pace: a taste, not a power, so no code asked.
+/// The provider is another matter: it is who receives what the house says
+/// to Moli, so a person (code) chooses it.
 pub(crate) async fn set_settings(
     Extension(Moli(moli)): Extension<Moli>,
+    Extension(humans): Extension<Arc<Sessions>>,
+    caller: Caller,
+    headers: HeaderMap,
     axum::Json(prefs): axum::Json<Prefs>,
 ) -> Response {
     let Some(moli) = moli else {
         return not_configured();
     };
+    if let Some(provider) = prefs.provider.as_deref() {
+        if !humans.is_human(&headers, &caller.key) {
+            return (
+                StatusCode::FORBIDDEN,
+                axum::Json(json!({ "error": moli_i18n::tr!("serveur.cle.assistant_humain") })),
+            )
+                .into_response();
+        }
+        if let Err(e) = moli.set_provider(provider).await {
+            return failure(&e);
+        }
+    }
     match moli
         .set_voice_prefs(
             prefs.voice.as_deref(),
@@ -264,6 +284,9 @@ pub(crate) async fn set_settings(
 #[derive(serde::Deserialize)]
 pub(crate) struct Key {
     api_key: String,
+    /// Whose key it is; the provider in use when absent.
+    #[serde(default)]
+    provider: Option<String>,
 }
 
 /// The API key, given by a person (code): tested, then filed encrypted.
@@ -284,7 +307,7 @@ pub(crate) async fn set_key(
     let Some(moli) = moli else {
         return not_configured();
     };
-    match moli.set_key(&key.api_key).await {
+    match moli.set_key(key.provider.as_deref(), &key.api_key).await {
         Ok(()) => axum::Json(json!({ "stored": true })).into_response(),
         Err(e) => failure(&e),
     }

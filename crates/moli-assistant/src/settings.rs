@@ -9,6 +9,8 @@ use moli_core::InstanceId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
+use crate::llm::Endpoint;
+use crate::provider::{self, Active, PRESETS};
 use crate::{Assistant, AssistantError, CLOUD_VOICES};
 
 /// Tones a person can pick: id, then the catalogue keys of its label and of
@@ -90,7 +92,13 @@ fn configured_style(speech_style: &str) -> String {
     }
 }
 
-/// An OpenAI key, at first sight: no spaces, a sensible length.
+/// What `assistant-provider.json` keeps: the provider a person chose.
+#[derive(Debug, Serialize, Deserialize)]
+struct Chosen {
+    provider: String,
+}
+
+/// A key, at first sight: no spaces, a sensible length.
 pub(crate) fn plausible_key(key: &str) -> bool {
     (20..=300).contains(&key.len()) && key.chars().all(|c| c.is_ascii_graphic())
 }
@@ -107,6 +115,25 @@ impl Assistant {
     /// Reads the voice chosen in the dashboard (`data/assistant.json`);
     /// without it, `moli.toml` decides.
     pub fn load_voice_prefs(&self, path: PathBuf) {
+        // The provider chosen in the dashboard is kept beside the voice.
+        let provider_path = path.with_file_name("assistant-provider.json");
+        if let Some(Chosen { provider }) = std::fs::read(&provider_path)
+            .ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            && let Some(preset) = provider::preset(&provider)
+            && let Ok(active) = Active::from_preset(preset, &self.0.config)
+        {
+            *self
+                .0
+                .active
+                .write()
+                .unwrap_or_else(PoisonError::into_inner) = active;
+        }
+        *self
+            .0
+            .provider_path
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(provider_path);
         let prefs = read_prefs(&path);
         *self.0.prefs.write().unwrap_or_else(PoisonError::into_inner) = prefs;
         *self
@@ -156,11 +183,50 @@ impl Assistant {
                 style_id(&configured_style(&c.speech_style)).to_owned(),
             ),
         };
+        let active = self.active();
+        let has_key = |id: &str| {
+            self.0
+                .hub
+                .secret(&InstanceId::from("assistant"), &self.key_name(id))
+                .is_some()
+        };
+        let mut providers: Vec<Json> = PRESETS
+            .iter()
+            .map(|p| {
+                let now = Active::from_preset(p, c).ok();
+                json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "key": has_key(p.id),
+                    "keys_url": p.keys_url,
+                    "model": now.as_ref().map_or(p.model, |a| a.model.as_str()),
+                    "listen": now.as_ref().is_some_and(|a| !a.transcribe_model.is_empty()),
+                    "speak": now.as_ref().is_some_and(|a| !a.speech_model.is_empty()),
+                    "search": now.as_ref().is_some_and(|a| !a.search_model.is_empty()),
+                })
+            })
+            .collect();
+        // moli.toml's own model (a local one, another service), when it is not a preset.
+        if provider::config_id(c) == "custom" {
+            let custom = Active::from_config(c).ok();
+            providers.push(json!({
+                "id": "custom",
+                "name": custom.as_ref().map_or_else(|| "moli.toml".to_owned(), |a| a.endpoint.host().to_owned()),
+                "key": has_key("custom") || active.endpoint.is_local(),
+                "keys_url": "",
+                "model": c.model,
+                "listen": !c.transcribe_model.is_empty(),
+                "speak": !c.speech_model.is_empty(),
+                "search": !c.search_model.is_empty(),
+            }));
+        }
         json!({
-            "key": self.0.hub.secret(&InstanceId::from("assistant"), "api_key").is_some(),
-            "local_model": self.0.endpoint.is_local(),
-            "model": c.model,
-            "cloud_voice": !c.speech_model.is_empty(),
+            "key": has_key(&active.id),
+            "provider": active.id,
+            "providers": providers,
+            "local_model": active.endpoint.is_local(),
+            "model": active.model,
+            "cloud_voice": !active.speech_model.is_empty(),
             "local_voice": crate::voice::host_port(&c.local_speech).is_some(),
             "voice": voice,
             "style": style,
@@ -223,39 +289,90 @@ impl Assistant {
         Ok(self.settings())
     }
 
-    /// Tests a key against the provider, then files it (encrypted).
-    pub async fn set_key(&self, key: &str) -> Result<(), AssistantError> {
+    /// Talks to this provider from now on (kept for the next start). The
+    /// house's data goes to another company with it: a person's choice.
+    pub async fn set_provider(&self, id: &str) -> Result<Json, AssistantError> {
+        let active = if id == "custom" && provider::config_id(&self.0.config) == "custom" {
+            Active::from_config(&self.0.config)
+        } else if let Some(preset) = provider::preset(id) {
+            Active::from_preset(preset, &self.0.config)
+        } else {
+            return Err(AssistantError::Invalid("unknown provider".into()));
+        }
+        .map_err(|e| AssistantError::Upstream(e.to_string()))?;
+        let path = self
+            .0
+            .provider_path
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(path) = path {
+            let tmp = path.with_extension("json.tmp");
+            let body = serde_json::to_vec_pretty(&Chosen {
+                provider: active.id.clone(),
+            })
+            .map_err(|e| AssistantError::Upstream(e.to_string()))?;
+            tokio::fs::write(&tmp, body)
+                .await
+                .and(tokio::fs::rename(&tmp, &path).await)
+                .map_err(|e| AssistantError::Upstream(format!("cannot save the provider: {e}")))?;
+        }
+        tracing::info!(provider = %active.id, model = %active.model, "assistant provider chosen from the dashboard");
+        *self
+            .0
+            .active
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = active;
+        Ok(self.settings())
+    }
+
+    /// Tests a key against its provider (the active one when `provider` is
+    /// none), then files it (encrypted).
+    pub async fn set_key(&self, provider: Option<&str>, key: &str) -> Result<(), AssistantError> {
         let key = key.trim();
         if !plausible_key(key) {
             return Err(AssistantError::Invalid(moli_i18n::tr!(
                 "assistant.settings.key_invalid"
             )));
         }
+        let id = provider.map_or_else(|| self.active().id, str::to_owned);
+        let (endpoint, name) = if id == "custom" && provider::config_id(&self.0.config) == "custom"
+        {
+            let endpoint = Active::from_config(&self.0.config)
+                .map_err(|e| AssistantError::Upstream(e.to_string()))?
+                .endpoint;
+            (endpoint, "moli.toml")
+        } else if let Some(preset) = provider::preset(&id) {
+            let endpoint = Endpoint::parse(preset.base_url)
+                .map_err(|e| AssistantError::Upstream(e.to_string()))?;
+            (endpoint, preset.name)
+        } else {
+            return Err(AssistantError::Invalid("unknown provider".into()));
+        };
         // A model in plain http never sees a key: not to check it either.
-        if self.0.endpoint.is_local() {
+        if endpoint.is_local() {
             return Err(AssistantError::Invalid(moli_i18n::tr!(
                 "assistant.settings.key_in_clear"
             )));
         }
-        let accepted = self
-            .0
-            .endpoint
+        let accepted = endpoint
             .check(key)
             .await
             .map_err(|e| AssistantError::Upstream(e.to_string()))?;
         if !accepted {
             return Err(AssistantError::Invalid(moli_i18n::tr!(
-                "assistant.settings.key_refused"
+                "assistant.settings.key_refused",
+                provider = name
             )));
         }
         self.0
             .hub
-            .store_secret(&InstanceId::from("assistant"), "api_key", key)
+            .store_secret(&InstanceId::from("assistant"), &self.key_name(&id), key)
             .await
             .map_err(|e| {
                 AssistantError::Upstream(moli_i18n::tr!("assistant.settings.vault", error = e))
             })?;
-        tracing::info!("assistant API key filed from the dashboard");
+        tracing::info!(provider = %id, "assistant API key filed from the dashboard");
         Ok(())
     }
 }
@@ -369,16 +486,16 @@ mod tests {
         let hub = moli_runtime::Hub::new(moli_runtime::HubOptions::default()).unwrap();
         let config = serde_json::from_value(json!({})).unwrap();
         let moli = Assistant::new(hub, None, None, None, config).unwrap();
-        match moli.set_key("sk-court").await {
+        match moli.set_key(None, "sk-court").await {
             Err(AssistantError::Invalid(why)) => assert_eq!(
                 why,
-                "ce n'est pas une clé d'API (elle commence par sk-, sans espace)"
+                "ce n'est pas une clé d'API (sans espace, 20 caractères au moins)"
             ),
             other => panic!("{other:?}"),
         }
         assert_eq!(
-            moli_i18n::tr!("assistant.settings.key_refused"),
-            "OpenAI refuse cette clé : vérifie-la, ou qu'elle n'a pas été supprimée"
+            moli_i18n::tr!("assistant.settings.key_refused", provider = "Mistral"),
+            "Mistral refuse cette clé : vérifie-la, ou qu'elle n'a pas été supprimée"
         );
         assert_eq!(
             moli_i18n::tr!("assistant.settings.vault", error = "disque plein"),
@@ -394,7 +511,10 @@ mod tests {
         let (url, task) = crate::llm::tests::fake_http(200, br#"{"data":[]}"#).await;
         let config = serde_json::from_value(json!({ "base_url": url })).unwrap();
         let moli = Assistant::new(hub, None, None, None, config).unwrap();
-        match moli.set_key("sk-proj-abcdefghijklmnopqrstuvwxyz").await {
+        match moli
+            .set_key(None, "sk-proj-abcdefghijklmnopqrstuvwxyz")
+            .await
+        {
             Err(AssistantError::Invalid(why)) => {
                 assert_eq!(why, moli_i18n::tr!("assistant.settings.key_in_clear"));
             }
@@ -402,5 +522,68 @@ mod tests {
         }
         assert!(!task.is_finished(), "nothing was sent");
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn the_provider_is_chosen_and_kept() {
+        let dir = std::env::temp_dir().join(format!("moli-provider-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("assistant.json");
+        let make = || {
+            let hub = moli_runtime::Hub::new(moli_runtime::HubOptions::default()).unwrap();
+            let config = serde_json::from_value(json!({})).unwrap();
+            Assistant::new(hub, None, None, None, config).unwrap()
+        };
+        let moli = make();
+        moli.load_voice_prefs(path.clone());
+        assert_eq!(moli.settings()["provider"], "openai");
+        let s = moli.set_provider("mistral").await.unwrap();
+        assert_eq!(s["provider"], "mistral");
+        assert_eq!(s["model"], "mistral-medium-latest");
+        assert_eq!(s["cloud_voice"], false);
+        let providers = s["providers"].as_array().unwrap();
+        assert_eq!(providers.len(), 4);
+        let mistral = providers.iter().find(|p| p["id"] == "mistral").unwrap();
+        assert_eq!(
+            (
+                mistral["listen"].as_bool(),
+                mistral["speak"].as_bool(),
+                mistral["search"].as_bool()
+            ),
+            (Some(true), Some(false), Some(false))
+        );
+        // Chosen for good: the next start reads it.
+        let again = make();
+        again.load_voice_prefs(path);
+        assert_eq!(again.settings()["provider"], "mistral");
+        assert_eq!(again.status()["model"], "mistral-medium-latest");
+        // Without a key of its own, a provider is not ready.
+        assert_eq!(again.status()["ready"], false);
+        assert!(matches!(
+            moli.set_provider("nope").await,
+            Err(AssistantError::Invalid(_))
+        ));
+        assert!(matches!(
+            moli.set_provider("custom").await,
+            Err(AssistantError::Invalid(_))
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn each_provider_has_its_own_key() {
+        let hub = moli_runtime::Hub::new(moli_runtime::HubOptions::default()).unwrap();
+        let config = serde_json::from_value(json!({})).unwrap();
+        let moli = Assistant::new(hub, None, None, None, config).unwrap();
+        // The house's own provider keeps the historical name.
+        assert_eq!(moli.key_name("openai"), "api_key");
+        assert_eq!(moli.key_name("mistral"), "api_key_mistral");
+        assert_eq!(moli.key_name("anthropic"), "api_key_anthropic");
+        // An unknown provider or one never chosen: refused before anything is sent.
+        assert!(matches!(
+            moli.set_key(Some("nope"), "sk-proj-abcdefghijklmnopqrstuvwxyz")
+                .await,
+            Err(AssistantError::Invalid(_))
+        ));
     }
 }

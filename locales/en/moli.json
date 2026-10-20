@@ -97,8 +97,8 @@
 
   "moli.reglages.titre": "Moli, the assistant",
   "moli.reglages.local": "Local model ({model}): no key needed.",
-  "moli.reglages.cle_ok": "OpenAI key saved (encrypted inside Moli). Roughly half a cent per exchange.",
-  "moli.reglages.cle_manque": "To talk with Moli, it needs an OpenAI key (a few euros of credit last for months).",
+  "moli.reglages.cle_ok": "{provider} key saved (encrypted inside Moli).",
+  "moli.reglages.cle_manque": "To talk with Moli, it needs a {provider} key.",
   "moli.reglages.remplacer": "Replace the key",
   "moli.reglages.ajouter": "Add a key",
   "moli.reglages.comment": "Get an OpenAI key (5 minutes)",
@@ -106,8 +106,8 @@
   "moli.reglages.etape2": "In {link}, add some credit: €5 covers hundreds of conversations.",
   "moli.reglages.etape3": "Recommended: set a monthly spending limit in {link} (for example €5).",
   "moli.reglages.etape4": "In {link}, click “Create new secret key”, name it “Moli”, then copy it (it starts with {code}).",
-  "moli.reglages.etape5": "Paste it below: Moli checks it with OpenAI before keeping it.",
-  "moli.reglages.cle_champ": "OpenAI key",
+  "moli.reglages.etape5": "Paste it below: Moli checks it with the provider before keeping it.",
+  "moli.reglages.cle_champ": "{provider} key",
   "moli.reglages.verification": "Checking…",
   "moli.reglages.enregistrer": "Save",
   "moli.reglages.confidentialite": "You’ll be asked for your code. The key is encrypted inside Moli and never shown again: to change it, replace it.",
@@ -156,5 +156,13 @@
   "moli.echanges.enregistrer_aide": "To test the microphone: each sentence can be heard here, then is deleted after 7 days.",
   "moli.echanges.enregistre_jusqu": "The satellite is recorded until {date} (each recording is deleted after 7 days).",
   "moli.echanges.arreter": "Stop recording",
-  "moli.echanges.estimation": "Costs are estimated from OpenAI's public prices; the exact bill is on platform.openai.com."
+  "moli.echanges.estimation": "Costs are estimated from OpenAI's public prices; the exact bill is on platform.openai.com.",
+  "moli.reglages.fournisseur": "AI provider",
+  "moli.reglages.capacites": "What this provider can do",
+  "moli.reglages.cap_conversation": "Conversation ({model})",
+  "moli.reglages.cap_ecoute": "Online listening",
+  "moli.reglages.cap_voix": "Online voice",
+  "moli.reglages.cap_recherche": "Web search",
+  "moli.reglages.comment_autre": "Get a {provider} key",
+  "moli.reglages.etape_autre": "Create an account and a {provider} key at"
 }

@@ -664,7 +664,12 @@ async fn notify(
     }
     let heading = title.unwrap_or_else(|| a.name.clone());
     if channels.contains(&Channel::Telegram) {
-        say(messengers, format!("{heading}\n{message}"), "Telegram").await;
+        say(
+            messengers,
+            format!("{heading}\n{message}"),
+            &tr!("moteur.canal.messagerie"),
+        )
+        .await;
     }
     if channels.contains(&Channel::Telephone) {
         say(

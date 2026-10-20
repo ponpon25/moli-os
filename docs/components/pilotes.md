@@ -467,6 +467,31 @@ pièces ; il commande ensuite les membres en origine `system` (journal : `lumina
 - **Pas encore** : recevoir (parler à Moli depuis Olvid).
 - **Vérifié** : encodage protobuf et trames gRPC par tests ; contre un vrai daemon : voir
   `integrations/olvid/README.md`.
+## `hitachi` : climatiseurs Hitachi, compte airCloud Go (`crates/moli-hitachi`)
+
+- **Passe par le cloud de Hitachi**, avec le compte du foyer (l'appli *airCloud Go*). Les clims
+  n'ont aucun port ouvert ; rien ne se passe sur le réseau local.
+- **État** : WebSocket STOMP (`notification-global-prod.aircloudhome.com/rac-notifications/websocket`).
+  `ON_CONNECT` donne toutes les clims du compte avec leur état complet (`vendorThingId` = nom du module
+  `JCH-…`, stable après réappairage : c'est l'identité Moli ; marche, mode, consigne, température de la
+  pièce, vitesse, oscillation, défaut, `online`). `REFRESH_ALL` (SEND vers `/app/racs/{user}/{famille}`)
+  redemande tout : toutes les 60 s, et 3 s et 10 s après un ordre. Aucun autre message poussé relevé.
+- **Ordres** : `PUT /rac/basic-idu-control/general-control-command-status/{id}?familyId=…`, **état
+  complet** à chaque fois (pas de delta). Réponse `{commandId, status:"DONE"}`. Bornes lues dans
+  `POST /rac/model-wise/rac-configuration/` (consigne par mode, vitesses permises). Le pilote refuse
+  avant d'envoyer un ordre hors bornes.
+- **Session** : `POST /iam/auth/sign-in` (e-mail, mot de passe) → jeton de 30 minutes. Pas de
+  rafraîchissement vu dans le trafic de l'appli, qui se reconnecte : le pilote aussi, 3 minutes avant la
+  fin. Un refus du compte (`login_locked`) arrête le pilote jusqu'à ce qu'un humain le lève.
+- **Vocabulaire** : celui du profil Daikin (`on`, `mode` = `froid`/`chaud`/`auto`/`déshumidification`/
+  `ventilation`, `target_temperature`, `temperature`) : la carte « clim » du tableau de bord marche sans
+  changement. `fan_speed` `auto`, `1`…`5`.
+- **Voie locale écartée (pour l'instant)** : le module de chaque clim appelle directement le cloud Kii
+  (`api-jchjp.kiiapps.com`) et ne vérifie pas… sauf qu'il retient le certificat vu et que **toute coupure
+  de courant efface cette confiance** (réappairage complet à chaque fois). Le service de notification
+  donne déjà l'état complet : la voie locale n'apporterait que l'indépendance d'internet, au prix d'un
+  serveur TLS parlant RSA/CBC (rustls ne sait pas le faire, à vérifier avec le vrai ClientHello du module) et d'un réappairage après chaque panne.
+- Non couvert : minuteries, programmes, consommation, lamelles en écriture, mode vacances.
 
 ## `profile` : profils déclaratifs (`crates/moli-profile`)
 
@@ -513,6 +538,7 @@ ni pièce native). Il ne déplace jamais rien. Sans argument : plan à blanc ; `
 | `olvid` | `moli-olvid` | gRPC (HTTP/2) vers le daemon Olvid | `notify` (message), appairage | daemon Olvid 2.0 (voir README) |
 | `phones` | `moli-phones` | rapports HTTP de l'appli (jeton) | `notify` (notification) | iPhone (appli Moli) |
 | `telegram` | `moli-telegram` | HTTPS, API des bots | `notify` (message) | oui (API des bots) |
+| `hitachi` | `moli-hitachi` | REST + WebSocket STOMP du compte airCloud Go (cloud) | oui : marche, mode, consigne, vitesse | pas encore (cibles : RAK-DJ25RHAE, RAK-DJ35RHAE) |
 | `profile` | `moli-profile` | HTTP/HTTPS GET, Meross signé | oui si le profil déclare `[[write]]` (Daikin) | Daikin BRP069 (lecture), Meross EM06, Open-Meteo, Tempo, iopool EcO (voir [profils.md](profils.md#les-profils-du-catalogue)) |
 | `helpers` | `moli-helpers` | aucun (valeurs gardées par Moli) | oui | sans objet |
 | `lumieres` (interne) | `moli-lights` | aucun (lit et commande d'autres appareils via le hub) | oui | ampoules Hue derrière un relais |

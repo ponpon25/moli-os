@@ -1,0 +1,268 @@
+[
+ {
+  "id": 1,
+  "racTypeId": 174,
+  "region": "EU",
+  "cloudId": "174_RAK-DJ35RHAE",
+  "racOperationModes": [
+   {
+    "id": 2,
+    "featureId": 2,
+    "mode": "COOLING",
+    "sendingValue": 64,
+    "minTemperature": 16.0,
+    "maxTemperature": 32.0,
+    "temperatureSettingPitchType": 0.5,
+    "enableSettings": {
+     "temperature": true,
+     "humidity": false,
+     "fan": true,
+     "swing": true,
+     "timer": true,
+     "eco": false
+    },
+    "enableFanSpeed": {
+     "AUTO": true,
+     "LV1": true,
+     "LV2": true,
+     "LV3": true,
+     "LV4": true,
+     "LV5": true
+    }
+   },
+   {
+    "id": 6,
+    "featureId": 6,
+    "mode": "FAN",
+    "sendingValue": 81,
+    "minTemperature": 0.0,
+    "maxTemperature": 0.0,
+    "temperatureSettingPitchType": 1.0,
+    "enableSettings": {
+     "temperature": false,
+     "humidity": false,
+     "fan": true,
+     "swing": true,
+     "timer": true,
+     "eco": false
+    },
+    "enableFanSpeed": {
+     "AUTO": false,
+     "LV1": true,
+     "LV2": true,
+     "LV3": true,
+     "LV4": true,
+     "LV5": true
+    }
+   },
+   {
+    "id": 26,
+    "featureId": 26,
+    "mode": "DRY",
+    "sendingValue": 33,
+    "minTemperature": 16.0,
+    "maxTemperature": 32.0,
+    "temperatureSettingPitchType": 0.5,
+    "enableSettings": {
+     "temperature": true,
+     "humidity": false,
+     "fan": true,
+     "swing": true,
+     "timer": true,
+     "eco": false
+    },
+    "enableFanSpeed": {
+     "AUTO": true,
+     "LV1": true,
+     "LV2": true,
+     "LV3": false,
+     "LV4": false,
+     "LV5": false
+    }
+   },
+   {
+    "id": 45,
+    "featureId": 45,
+    "mode": "HEATING",
+    "sendingValue": 16,
+    "minTemperature": 16.0,
+    "maxTemperature": 32.0,
+    "temperatureSettingPitchType": 0.5,
+    "enableSettings": {
+     "temperature": true,
+     "humidity": false,
+     "fan": true,
+     "swing": true,
+     "timer": true,
+     "eco": false
+    },
+    "enableFanSpeed": {
+     "AUTO": true,
+     "LV1": true,
+     "LV2": true,
+     "LV3": true,
+     "LV4": true,
+     "LV5": true
+    }
+   },
+   {
+    "id": 1,
+    "featureId": 1,
+    "mode": "AUTO",
+    "sendingValue": 33024,
+    "minTemperature": 16.0,
+    "maxTemperature": 32.0,
+    "temperatureSettingPitchType": 0.5,
+    "enableSettings": {
+     "temperature": true,
+     "humidity": false,
+     "fan": true,
+     "swing": true,
+     "timer": true,
+     "eco": false
+    },
+    "enableFanSpeed": {
+     "AUTO": true,
+     "LV1": true,
+     "LV2": true,
+     "LV3": true,
+     "LV4": true,
+     "LV5": true
+    }
+   }
+  ]
+ },
+ {
+  "id": 1,
+  "racTypeId": 174,
+  "region": "EU",
+  "cloudId": "174_RAK-DJ25RHAE",
+  "racOperationModes": [
+   {
+    "id": 2,
+    "featureId": 2,
+    "mode": "COOLING",
+    "sendingValue": 64,
+    "minTemperature": 16.0,
+    "maxTemperature": 32.0,
+    "temperatureSettingPitchType": 0.5,
+    "enableSettings": {
+     "temperature": true,
+     "humidity": false,
+     "fan": true,
+     "swing": true,
+     "timer": true,
+     "eco": false
+    },
+    "enableFanSpeed": {
+     "AUTO": true,
+     "LV1": true,
+     "LV2": true,
+     "LV3": true,
+     "LV4": true,
+     "LV5": true
+    }
+   },
+   {
+    "id": 6,
+    "featureId": 6,
+    "mode": "FAN",
+    "sendingValue": 81,
+    "minTemperature": 0.0,
+    "maxTemperature": 0.0,
+    "temperatureSettingPitchType": 1.0,
+    "enableSettings": {
+     "temperature": false,
+     "humidity": false,
+     "fan": true,
+     "swing": true,
+     "timer": true,
+     "eco": false
+    },
+    "enableFanSpeed": {
+     "AUTO": false,
+     "LV1": true,
+     "LV2": true,
+     "LV3": true,
+     "LV4": true,
+     "LV5": true
+    }
+   },
+   {
+    "id": 26,
+    "featureId": 26,
+    "mode": "DRY",
+    "sendingValue": 33,
+    "minTemperature": 16.0,
+    "maxTemperature": 32.0,
+    "temperatureSettingPitchType": 0.5,
+    "enableSettings": {
+     "temperature": true,
+     "humidity": false,
+     "fan": true,
+     "swing": true,
+     "timer": true,
+     "eco": false
+    },
+    "enableFanSpeed": {
+     "AUTO": true,
+     "LV1": true,
+     "LV2": true,
+     "LV3": false,
+     "LV4": false,
+     "LV5": false
+    }
+   },
+   {
+    "id": 45,
+    "featureId": 45,
+    "mode": "HEATING",
+    "sendingValue": 16,
+    "minTemperature": 16.0,
+    "maxTemperature": 32.0,
+    "temperatureSettingPitchType": 0.5,
+    "enableSettings": {
+     "temperature": true,
+     "humidity": false,
+     "fan": true,
+     "swing": true,
+     "timer": true,
+     "eco": false
+    },
+    "enableFanSpeed": {
+     "AUTO": true,
+     "LV1": true,
+     "LV2": true,
+     "LV3": true,
+     "LV4": true,
+     "LV5": true
+    }
+   },
+   {
+    "id": 1,
+    "featureId": 1,
+    "mode": "AUTO",
+    "sendingValue": 33024,
+    "minTemperature": 16.0,
+    "maxTemperature": 32.0,
+    "temperatureSettingPitchType": 0.5,
+    "enableSettings": {
+     "temperature": true,
+     "humidity": false,
+     "fan": true,
+     "swing": true,
+     "timer": true,
+     "eco": false
+    },
+    "enableFanSpeed": {
+     "AUTO": true,
+     "LV1": true,
+     "LV2": true,
+     "LV3": true,
+     "LV4": true,
+     "LV5": true
+    }
+   }
+  ]
+ }
+]

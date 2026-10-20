@@ -1,0 +1,31 @@
+[integration]
+id = "hitachi"
+name = "Climatiseurs Hitachi (compte airCloud Go)"
+brands = ["Hitachi"]
+models = ["RAK-DJ25RHAE", "RAK-DJ35RHAE", "RAM-G55N2HAE"]
+transport = "https"
+driver = "hitachi"
+crate = "moli-hitachi"
+
+[discovery]
+# No discovery on the LAN: the units are listed by the owner's account.
+mdns = []
+ssdp = []
+ports = [443]
+
+[needs]
+# username (the account's e-mail), password: typed by a person, stored with `moli-os secrets set`.
+secrets = ["username", "password"]
+vars = []
+options = []
+
+[origin]
+reused = "aucun code repris : protocole relevé dans le trafic de l'application officielle (REST et WebSocket STOMP) avec le compte du foyer ; fixtures fictives"
+author = "agent"
+
+# Replayed by the crate's tests (crates/moli-hitachi/src/model.rs).
+[[fixture]]
+file = "fixtures/notification.json"
+
+[[fixture]]
+file = "fixtures/rac-configuration.json"

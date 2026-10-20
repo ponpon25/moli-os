@@ -1,0 +1,69 @@
+{
+ "notificationType": "ON_CONNECT",
+ "data": [
+  {
+   "serialNumber": "XXXX-XXXX-XXXX",
+   "model": "HITACHI",
+   "id": 100001,
+   "vendorThingId": "JCH-aabbcc01",
+   "name": "Salon",
+   "roomTemperature": 23.0,
+   "mode": "AUTO",
+   "iduTemperature": 25.0,
+   "humidity": 2147483647,
+   "power": "OFF",
+   "relativeTemperature": 0.0,
+   "fanSpeed": "AUTO",
+   "fanSwing": "OFF",
+   "updatedAt": 1700000000000,
+   "errorStatus": {
+    "active": false,
+    "priority": 0,
+    "lastUpdatedAt": 0,
+    "subCategory": "NO_ERROR",
+    "errorCode": null,
+    "iduNo": null,
+    "refNo": null
+   },
+   "lastOnlineUpdatedAt": 1700000000000,
+   "modelTypeId": 174,
+   "cloudId": "174_RAK-DJ25RHAE",
+   "opt4": 0,
+   "blockUserRacOperation": false,
+   "online": true,
+   "SysType": 1
+  },
+  {
+   "serialNumber": "XXXX-XXXX-XXXX",
+   "model": "HITACHI",
+   "id": 100002,
+   "vendorThingId": "JCH-aabbcc02",
+   "name": "Chambre",
+   "roomTemperature": 20.5,
+   "mode": "HEATING",
+   "iduTemperature": 25.0,
+   "humidity": 2147483647,
+   "power": "ON",
+   "relativeTemperature": 0.0,
+   "fanSpeed": "AUTO",
+   "fanSwing": "OFF",
+   "updatedAt": 1700000000000,
+   "errorStatus": {
+    "active": false,
+    "priority": 0,
+    "lastUpdatedAt": 0,
+    "subCategory": "NO_ERROR",
+    "errorCode": null,
+    "iduNo": null,
+    "refNo": null
+   },
+   "lastOnlineUpdatedAt": 1700000000000,
+   "modelTypeId": 174,
+   "cloudId": "174_RAK-DJ35RHAE",
+   "opt4": 0,
+   "blockUserRacOperation": false,
+   "online": true,
+   "SysType": 1
+  }
+ ]
+}

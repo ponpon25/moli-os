@@ -2,13 +2,63 @@
 // the house's cards, and each clim on its own. The dashboard draws them and
 // the settings list them, so both read this catalogue.
 
-import { home, hub, deviceKind, nameOf } from './home.svelte.js';
+import { home, hub, deviceKind, nameOf, device } from './home.svelte.js';
 import { dash, tileOf, setTile, onDashboard, showOnDashboard } from './layout.svelte.js';
 import { t } from '../../lib/i18n.svelte.js';
+import { energy } from './energy-live.svelte.js';
 
 /** A clim's tile is `clim:` and the device's id. */
 export const CLIM = 'clim:';
 export const isClim = (id) => id.startsWith(CLIM);
+
+/** Any other device the family put on the dashboard has `dev:` and its id. */
+export const DEV = 'dev:';
+export const isDev = (id) => id.startsWith(DEV);
+
+/** The house's alarm: a device that takes a `mode` among which « disarmed »
+ *  (its card is the dashboard's `alarm` tile). */
+export const isAlarm = (d) => !!d?.points?.some((p) => p.key === 'mode' && p.kind?.values?.includes('disarmed'));
+
+/** Whether the house has what a card is about (the others are not offered: no
+ *  doorbell, no remote, no weather to show). A device's tile always has. */
+export function available(id) {
+  const cfg = home.config ?? {};
+  const devices = Object.values(hub.devices);
+  const out = cfg.outdoor ?? {};
+  switch (id) {
+    case 'modes':
+      return !!devices.find((d) => d.id.endsWith(':mode_maison'))?.points.find((p) => p.key === 'state')?.kind.values?.length;
+    case 'alarm':
+      return devices.some(isAlarm);
+    case 'lights':
+      return true;
+    case 'energy':
+      return !energy.missing;
+    case 'doorbell':
+      return !!(cfg.favorites?.cameras ?? [])[0];
+    case 'remote':
+      return !!cfg.salon?.tv;
+    case 'outside':
+      return !!(out.air || out.weather || out.pool);
+    default:
+      return true;
+  }
+}
+
+/** Lights and clims are on the dashboard unless taken off; everything else is
+ *  off until the family puts it there. */
+const byDefault = (d) => ['light', 'group', 'climate'].includes(deviceKind(d));
+
+/** Whether a device is on the dashboard (the box in Équipements). */
+export function deviceOnDashboard(d) {
+  if (isAlarm(d)) return tileOf('alarm', { on: true }).on;
+  return onDashboard(d.id, byDefault(d));
+}
+
+export function showDevice(d, yes) {
+  if (isAlarm(d)) setTile('alarm', { on: yes });
+  else showOnDashboard(d.id, yes);
+}
 
 /** The tiles that are not devices, in their default order, and their default
  *  width in columns (of 12). `clims` stands where the clims come. */
@@ -18,6 +68,7 @@ const DEFS = [
   { id: 'notices', w: 12 },
   { id: 'alarm', w: 12 },
   { id: 'lights', w: 8 },
+  { id: 'ambiances', w: 8 },
   { id: 'energy', w: 4 },
   { id: 'routines', w: 4 },
   { id: 'clims' },
@@ -62,6 +113,14 @@ export function catalogue() {
       tiles.push({ id, device: c.id, label: c.name, ...mine, on: onDashboard(c.id, old.on !== false) });
     });
   });
+  // Every other device the family chose to show, after the rest.
+  Object.values(hub.devices)
+    .filter((d) => !byDefault(d) && !isAlarm(d) && onDashboard(d.id, false))
+    .sort((a, b) => nameOf(a.id).localeCompare(nameOf(b.id)))
+    .forEach((d, k) => {
+      const id = DEV + d.id;
+      tiles.push({ id, device: d.id, label: nameOf(d.id), ...tileOf(id, { w: 4, rows: 0, order: 100 + k }), on: true });
+    });
   return tiles.sort((a, b) => a.order - b.order);
 }
 

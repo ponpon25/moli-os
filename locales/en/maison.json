@@ -230,7 +230,7 @@
   "maison.dashboard.personnaliser": "Customise",
   "maison.dashboard.terminer": "Done",
   "maison.dashboard.reinitialiser": "Reset to default",
-  "maison.dashboard.aide": "Drag a tile to move it, pull its corner to resize it, the eye hides it.",
+  "maison.dashboard.aide": "Grab a tile’s bar to move it, pull its corner to resize it (double-click: automatic height), the eye hides it.",
   "maison.dashboard.masquer": "Hide this tile",
   "maison.dashboard.afficher": "Show this tile",
   "maison.dashboard.redimensionner": "Resize",
@@ -238,7 +238,10 @@
   "maison.dashboard.t_modes": "House mode",
   "maison.dashboard.t_notices": "Worth knowing",
   "maison.dashboard.t_alarm": "Alarm",
-  "maison.dashboard.t_lights": "Lights and moods",
+  "maison.dashboard.t_lights": "Lights",
+  "maison.dashboard.t_ambiances": "Moods",
+  "maison.dashboard.masquees": "Hidden tiles are put back from Equipment.",
+  "maison.dashboard.envoyer": "Send",
   "maison.dashboard.t_energy": "Energy",
   "maison.dashboard.t_routines": "Routines",
   "maison.dashboard.t_climate": "Climate",
@@ -296,5 +299,7 @@
   "maison.historique.vide_filtre": "Nothing matches.",
   "maison.historique.plus": "Show {count} more",
   "maison.equipements.dashboard": "Dashboard",
+  "maison.equipements.cartes": "Dashboard cards",
+  "maison.equipements.carte_sans_equipement": "Card without a device",
   "maison.equipements.afficher_dashboard": "Show {name} on the dashboard"
 }

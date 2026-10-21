@@ -1,6 +1,7 @@
 <script>
   import { hub, roomList, roomOf, nameOf, deviceKind, hidden, reachable, roomNamed, home } from '../lib/home.svelte.js';
-  import { layout, addRoom, setDeviceRoom, onDashboard, showOnDashboard } from '../lib/layout.svelte.js';
+  import { layout, addRoom, setDeviceRoom } from '../lib/layout.svelte.js';
+  import { catalogue, showTile, available, deviceOnDashboard, showDevice } from '../lib/tiles.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
 
@@ -37,6 +38,9 @@
     const names = new Set([...roomList().map((r) => r.name), ...(home.config?.rooms ?? []).map((r) => r.name), ...layout.extraRooms]);
     return [...names].sort((a, b) => a.localeCompare(b));
   });
+
+  /** The dashboard's cards that are not about one device (the sky, the moods…). */
+  const cards = $derived(catalogue().filter((c) => !c.device && c.id !== 'alarm' && available(c.id)));
 
   const source = (d) => d.id.split(':')[0];
   const norm = (s) => String(s ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -108,6 +112,24 @@
     </div>
   </div>
 
+  {#if filter === 'all' && !query}
+  <section class="group">
+    <h2>{t('maison.equipements.cartes')} <small>{cards.length}</small></h2>
+    <ul>
+      {#each cards as c (c.id)}
+        <li>
+          <span class="glyph"><Icon name="info" size={20} /></span>
+          <span class="who"><b>{c.label}</b><small>{t('maison.equipements.carte_sans_equipement')}</small></span>
+          <label class="show" title={t('maison.equipements.afficher_dashboard', { name: c.label })}>
+            <input type="checkbox" checked={c.on} onchange={(e) => showTile(c, e.currentTarget.checked)} aria-label={t('maison.equipements.afficher_dashboard', { name: c.label })} />
+            <span>{t('maison.equipements.dashboard')}</span>
+          </label>
+        </li>
+      {/each}
+    </ul>
+  </section>
+  {/if}
+
   {#each groups as [src, list] (src)}
     <section class="group">
       <h2>{src} <small>{list.length}</small></h2>
@@ -123,12 +145,10 @@
                 {#if hidden(x.d.id)} · {t('maison.equipements.masque')}{/if}
               </small>
             </span>
-            {#if x.kind === 'climate'}
-              <label class="show" title={t('maison.equipements.afficher_dashboard', { name: x.name })}>
-                <input type="checkbox" checked={onDashboard(x.d.id)} onchange={(e) => showOnDashboard(x.d.id, e.currentTarget.checked)} aria-label={t('maison.equipements.afficher_dashboard', { name: x.name })} />
-                <span>{t('maison.equipements.dashboard')}</span>
-              </label>
-            {/if}
+            <label class="show" title={t('maison.equipements.afficher_dashboard', { name: x.name })}>
+              <input type="checkbox" checked={deviceOnDashboard(x.d)} onchange={(e) => showDevice(x.d, e.currentTarget.checked)} aria-label={t('maison.equipements.afficher_dashboard', { name: x.name })} />
+              <span>{t('maison.equipements.dashboard')}</span>
+            </label>
             {#if creating === x.d.id}
               <form onsubmit={create}>
                 <!-- svelte-ignore a11y_autofocus -->

@@ -1,12 +1,12 @@
 <script>
-  import { catalogue, showTile } from '../lib/tiles.svelte.js';
+  import { catalogue, showTile, available } from '../lib/tiles.svelte.js';
   import { resetDashboard } from '../lib/layout.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
 
   /** What the dashboard shows: one switch per tile (each clim has its own).
    *  The order and the size are set on the dashboard itself. */
-  const tiles = $derived(catalogue());
+  const tiles = $derived(catalogue().filter((x) => !!x.device || available(x.id)));
   const shown = $derived(tiles.filter((x) => x.on).length);
 </script>
 

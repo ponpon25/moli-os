@@ -1,6 +1,5 @@
 <script>
   import { onMount } from 'svelte';
-  import { energy } from '../lib/energy-live.svelte.js';
   import { home, hub, value, device, isOn, clock, num, relative, lastSeen, roomList, lampsOf, nameOf, doorOpen, leak, lowBattery, act, pending } from '../lib/home.svelte.js';
   import { isPrinter, phase } from '../lib/printers.js';
   import { t, locale } from '../../lib/i18n.svelte.js';
@@ -13,82 +12,275 @@
   import AmbiancePicker from '../ui/AmbiancePicker.svelte';
   import Routines from '../ui/Routines.svelte';
   import SkyHero from '../ui/SkyHero.svelte';
-  import { ROW, setTile, reorder, saveDashboard, resetDashboard } from '../lib/layout.svelte.js';
-  import { catalogue, showTile, isClim } from '../lib/tiles.svelte.js';
+  import { ROW, setTile, saveDashboard, resetDashboard, onDashboard } from '../lib/layout.svelte.js';
+  import { catalogue, showTile, isClim, isDev, available } from '../lib/tiles.svelte.js';
+  import DeviceCard from '../ui/DeviceCard.svelte';
+  import SensorCard from '../ui/SensorCard.svelte';
+  import SpeakerCard from '../ui/SpeakerCard.svelte';
+  import CoverTile from '../ui/CoverTile.svelte';
+  import PrinterCard from '../ui/PrinterCard.svelte';
+  import PaperPrinterCard from '../ui/PaperPrinterCard.svelte';
+  import Remote from '../ui/Remote.svelte';
+  import { deviceKind } from '../lib/home.svelte.js';
+  import { isPaperPrinter } from '../lib/paper.js';
 
   const cfg = $derived(home.config ?? {});
 
   // ---- the arrangement (kept on this device) -------------------------------------
   let editing = $state(false);
   let gridEl = $state();
-  let dragId = $state(null);
-  let overId = $state(null);
-  /** where the dragged tile would land: before or after the one under it */
-  let side = $state('before');
-  /** wide tiles are passed over from above or below, narrow ones from the side */
-  let across = $state(false);
+  let gridWidth = $state(1200);
+  let gridHeight = $state(0);
+  let stageEl = $state();
 
-  /** A tile shows only if the house has what it is about. */
-  const avail = $derived({
-    sky: true,
-    modes: modes.length > 0,
-    notices: true,
-    alarm: !!alarm,
-    lights: true,
-    energy: !energy.missing,
-    routines: true,
-    doorbell: !!bell,
-    remote: !!tv,
-    outside: !!(out.air || out.weather || out.pool),
+  /** The grid's columns follow the room there is: 12 on a wide screen, 6 on a
+   *  tablet, one on a phone. A tile keeps its width in twelfths and takes the
+   *  nearest span of the grid it is drawn in. */
+  const cols = $derived(gridWidth >= 1000 ? 12 : gridWidth >= 620 ? 6 : 1);
+  const spanOf = (w) => (cols === 12 ? w : cols === 6 ? Math.min(6, Math.max(3, Math.ceil(w / 2))) : 1);
+  const GAP = 20;
+  /** The arranging view draws the real tiles at half size (so they keep their
+   *  proportions); a row of it is then half a row, in px. */
+  /** How much the arranging view shrinks the dashboard. The tiles are laid out
+   *  at their true width and the whole grid is then scaled, so what is seen
+   *  there is what the dashboard will be, only smaller. */
+  const scale = $derived(!editing ? 1 : cols === 12 ? 0.6 : cols === 6 ? 0.75 : 1);
+
+  // The room there is is the stage's; the grid's own height is what the
+  // scaled view takes.
+  $effect(() => {
+    if (!stageEl || !gridEl) return;
+    const measure = () => {
+      gridWidth = stageEl.clientWidth;
+      gridHeight = gridEl.offsetHeight;
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(stageEl);
+    ro.observe(gridEl);
+    addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      removeEventListener('resize', measure);
+    };
   });
-  const tiles = $derived(catalogue().filter((d) => isClim(d.id) || avail[d.id]));
 
-  function startDrag(e, id) {
-    dragId = id;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', id);
+  /** The order while a tile is being moved on a narrow screen (null the rest of the time). */
+  let live = $state(null);
+  let dragId = $state(null);
+  /** where the tile being moved (or resized) asks to be: the others make room */
+  let drag = $state(null);
+  let prio = $state(null);
+  /** the floating copy under the finger */
+  let floater = $state(null);
+  /** the size shown while a tile is being resized */
+  let sizing = $state(null);
+  /** the rows a tile takes by itself (what it shows, measured) */
+  let auto = $state({});
+
+  /** Measures a tile that has no height of its own (0: it shows nothing). */
+  function fit(node, id) {
+    const ro = new ResizeObserver(() => {
+      const h = node.offsetHeight;
+      const rows = h === 0 ? (node.classList.contains('preview') ? 3 : 0) : Math.max(2, Math.ceil((h + GAP) / ROW));
+      if (auto[id] !== rows) auto[id] = rows;
+    });
+    ro.observe(node);
+    return { destroy: () => ro.disconnect() };
   }
-  function over(e, tile) {
-    if (!editing || !dragId) return;
+
+  const tiles = $derived(catalogue().filter((d) => isClim(d.id) || (isDev(d.id) ? !!device(d.device) : available(d.id) && (d.id !== 'lights' || shownLights.length > 0) && (d.id !== 'ambiances' || !!mood))));
+
+  // ---- where the tiles sit ---------------------------------------------------------
+  // A grid of 12 columns and thin rows; a tile has its column and row (`x`,
+  // `y`), its width and its rows. One that never had a place (or is new)
+  // takes the first that fits, in the order it comes.
+  const COLS = 12;
+  const BIG = 1e6;
+  const wideOf = (t) => Math.min(COLS, Math.max(1, t.w));
+  const rowsOf = (t) => t.rows || auto[t.id] || 6;
+
+  /** Where every tile ends up. Each asks for a place; they are taken by `y`
+   *  then `x` (the one being moved first on a tie), and each sits as high as it
+   *  can without covering one already placed. So a tile dropped on another
+   *  pushes it down, and a hole is filled by what comes after. */
+  function solve(items, first) {
+    const order = items.slice().sort((a, b) => a.y - b.y || (a.id === first ? -1 : b.id === first ? 1 : 0) || a.x - b.x || a.seq - b.seq);
+    const done = [];
+    const at = new Map();
+    for (const it of order) {
+      /** the highest row where it sits at column `x` */
+      const drop = (x) => {
+        const free = (y) => done.every((p) => x >= p.x + p.w || x + it.w <= p.x || y >= p.y + p.r || y + it.r <= p.y);
+        return [0, ...done.map((p) => p.y + p.r)].sort((m, n) => m - n).find(free);
+      };
+      let x = Math.min(Math.max(0, it.x), COLS - it.w);
+      // No place of its own yet: the first that fits, from the top left.
+      if (it.fresh) {
+        let best = Infinity;
+        for (let c = 0; c <= COLS - it.w; c++) if (drop(c) < best) [x, best] = [c, drop(c)];
+      }
+      const y = drop(x);
+      done.push({ x, y, w: it.w, r: it.r });
+      at.set(it.id, { x, y });
+    }
+    return at;
+  }
+
+  const hereTiles = $derived(tiles.filter((x) => x.on));
+  const placed = $derived.by(() => {
+    // A tile that shows nothing (no routine, say) takes no place.
+    const items = hereTiles
+      .filter((x) => editing || x.rows || auto[x.id] !== 0)
+      .map((x, i) => ({ id: x.id, x: x.x ?? 0, y: x.y ?? BIG + i, w: wideOf(x), r: rowsOf(x), seq: i, fresh: x.y == null }));
+    const mine = drag && items.find((i) => i.id === drag.id);
+    if (mine) [mine.x, mine.y, mine.fresh] = [drag.x, drag.y, false];
+    return solve(items, drag?.id ?? prio);
+  });
+  const shownTiles = $derived.by(() => {
+    if (live) {
+      const by = new Map(hereTiles.map((x) => [x.id, x]));
+      return live.map((id) => by.get(id)).filter(Boolean);
+    }
+    const pos = (x) => placed.get(x.id) ?? { x: 0, y: BIG };
+    return hereTiles.slice().sort((p, q) => pos(p).y - pos(q).y || pos(p).x - pos(q).x);
+  });
+
+  /** Keeps the places as they now are, for every tile. */
+  function freeze(pos, save = true) {
+    for (const [id, p] of pos) setTile(id, { x: p.x, y: p.y }, false);
+    if (save) saveDashboard();
+  }
+
+  /** The tiles in this reading order, packed from the top (a narrow screen
+   *  only moves tiles in a list). */
+  function repack(ids) {
+    const items = ids.map((id, i) => {
+      const x = hereTiles.find((t) => t.id === id);
+      return { id, x: 0, y: BIG + i, w: wideOf(x), r: rowsOf(x), seq: i, fresh: true };
+    });
+    freeze(solve(items, null));
+  }
+
+  function scroller(el) {
+    for (let n = el.parentElement; n; n = n.parentElement) {
+      const oy = getComputedStyle(n).overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+    }
+    return document.scrollingElement;
+  }
+
+  function startDrag(e, tile) {
+    if (e.button > 0) return;
     e.preventDefault();
-    const box = e.currentTarget.getBoundingClientRect();
-    across = tile.w < 9;
-    side = (across ? (e.clientX - box.left) / box.width : (e.clientY - box.top) / box.height) < 0.5 ? 'before' : 'after';
-    overId = tile.id;
+    const widget = e.currentTarget.closest('.widget');
+    const box = widget.getBoundingClientRect();
+    const [dx, dy] = [e.clientX - box.left, e.clientY - box.top];
+    const scrolled = scroller(gridEl);
+    const grid = cols === COLS;
+    let [px, py] = [e.clientX, e.clientY];
+    let raf = 0;
+    dragId = tile.id;
+    // Everything stays where it is, whatever the tile that moves does.
+    freeze(placed, false);
+    if (grid) drag = { id: tile.id, ...placed.get(tile.id) };
+    else live = shownTiles.map((x) => x.id);
+    floater = { label: tile.label, x: box.left, y: box.top, w: box.width, h: box.height };
+
+    /** Asks for the place under the tile: on the grid, the cell its corner is
+     *  over; on a narrow screen, the spot in the list. */
+    const place = () => {
+      floater = { ...floater, x: px - dx, y: py - dy };
+      if (grid) {
+        const g = gridEl.getBoundingClientRect();
+        const pitch = (g.width + GAP * scale) / COLS;
+        drag = {
+          id: tile.id,
+          x: Math.min(COLS - wideOf(tile), Math.max(0, Math.round((px - dx - g.left) / pitch))),
+          y: Math.max(0, Math.round((py - dy - g.top) / (ROW * scale))),
+        };
+        return;
+      }
+      // The tile under the pointer, else the nearest one (below the last, say).
+      let target = null;
+      let best = Infinity;
+      for (const el of gridEl.querySelectorAll('.widget')) {
+        if (el.dataset.id === tile.id) continue;
+        const r = el.getBoundingClientRect();
+        const dist = Math.hypot(Math.max(r.left - px, 0, px - r.right), Math.max(r.top - py, 0, py - r.bottom));
+        if (dist < best) [target, best] = [el, dist];
+      }
+      if (!target) return;
+      const ids = live.filter((i) => i !== tile.id);
+      const at = ids.indexOf(target.dataset.id);
+      const r = target.getBoundingClientRect();
+      const across = r.width > gridEl.getBoundingClientRect().width * 0.6;
+      const after = across || py > r.bottom ? py - r.top > r.height / 2 : px - r.left > r.width / 2;
+      const next = [...ids.slice(0, at + (after ? 1 : 0)), tile.id, ...ids.slice(at + (after ? 1 : 0))];
+      if (next.join() !== live.join()) live = next;
+    };
+    // The page follows when the pointer nears its top or bottom edge.
+    const tick = () => {
+      const view = scrolled === document.scrollingElement ? { top: 0, bottom: innerHeight } : scrolled.getBoundingClientRect();
+      const edge = 70;
+      const speed = py < view.top + edge ? -(view.top + edge - py) / 4 : py > view.bottom - edge ? (py - (view.bottom - edge)) / 4 : 0;
+      if (speed) {
+        scrolled.scrollTop += speed;
+        place();
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    const move = (ev) => {
+      [px, py] = [ev.clientX, ev.clientY];
+      place();
+    };
+    const end = (ev) => {
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', end);
+      removeEventListener('pointercancel', end);
+      cancelAnimationFrame(raf);
+      if (ev.type === 'pointerup') {
+        if (grid && drag) freeze(placed);
+        else if (live) repack(live);
+      }
+      dragId = live = floater = drag = null;
+    };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', end);
+    addEventListener('pointercancel', end);
   }
-  function drop(e, id) {
-    e.preventDefault();
-    const from = dragId;
-    dragId = overId = null;
-    if (!from || from === id) return;
-    const ids = tiles.map((x) => x.id);
-    ids.splice(ids.indexOf(from), 1);
-    ids.splice(ids.indexOf(id) + (side === 'after' ? 1 : 0), 0, from);
-    reorder(ids);
-  }
+
   function startResize(e, tile) {
     e.preventDefault();
     e.stopPropagation();
-    const el = e.currentTarget.closest('.widget');
-    const col = (gridEl.clientWidth + 20) / 12;
-    const [x0, y0, w0] = [e.clientX, e.clientY, tile.w];
-    const h0 = tile.h || Math.round(el.offsetHeight / ROW);
-    const move = (ev) =>
-      setTile(
-        tile.id,
-        {
-          w: Math.min(12, Math.max(2, Math.round(w0 + (ev.clientX - x0) / col))),
-          h: Math.max(2, Math.round(h0 + (ev.clientY - y0) / ROW)),
-        },
-        false,
-      );
-    const up = () => {
-      removeEventListener('pointermove', move);
-      saveDashboard();
+    const unit = (gridWidth + GAP) / cols;
+    const [x0, y0] = [e.clientX, e.clientY];
+    const span0 = spanOf(tile.w);
+    const rows0 = tile.rows || auto[tile.id] || 6;
+    prio = tile.id;
+    freeze(placed, false);
+    const apply = (ev) => {
+      const span = cols === 1 ? 1 : Math.min(cols, Math.max(cols === 12 ? 2 : 3, Math.round(span0 + (ev.clientX - x0) / scale / unit)));
+      const rows = Math.max(2, Math.round(rows0 + (ev.clientY - y0) / scale / ROW));
+      const w = cols === 12 ? span : span * 2;
+      sizing = { id: tile.id, w, rows };
+      setTile(tile.id, { w: cols === 1 ? tile.w : w, rows }, false);
     };
-    addEventListener('pointermove', move);
-    addEventListener('pointerup', up, { once: true });
+    const end = () => {
+      removeEventListener('pointermove', apply);
+      removeEventListener('pointerup', end);
+      removeEventListener('pointercancel', end);
+      freeze(placed);
+      prio = null;
+      sizing = null;
+    };
+    addEventListener('pointermove', apply);
+    addEventListener('pointerup', end);
+    addEventListener('pointercancel', end);
   }
+  /** Back to the tile's own height. */
+  const autoHeight = (tile) => setTile(tile.id, { rows: 0 });
   const out = $derived(cfg.outdoor ?? {});
 
   // The favourites if the house chose some, else every light of every room.
@@ -102,7 +294,9 @@
     if (fav.length) return fav;
     return roomList().flatMap((r) => r.lights.map((d) => ({ id: d.id, name: null, icon: 'light', also: [] })));
   });
-  const litCount = $derived(lights.filter((l) => [l.id, ...(l.also ?? [])].some((i) => isOn(i))).length);
+  /** The lights the family wants on the dashboard (each has its own box in Équipements). */
+  const shownLights = $derived(lights.filter((l) => onDashboard(l.id)));
+  const litCount = $derived(shownLights.filter((l) => [l.id, ...(l.also ?? [])].some((i) => isOn(i))).length);
 
   // Ambiances, room by room (the last room chosen is remembered here).
   const moodRooms = $derived(roomList().map((r) => ({ name: r.name, lamps: lampsOf(r) })).filter((r) => r.lamps.length));
@@ -243,11 +437,32 @@
       <Icon name={editing ? 'check' : 'pencil'} size={16} />{editing ? t('maison.dashboard.terminer') : t('maison.dashboard.personnaliser')}
     </button>
   </header>
-  {#if editing}<p class="hint">{t('maison.dashboard.aide')}</p>{/if}
+  {#if editing}<p class="hint">{t('maison.dashboard.aide')} <a href="#/equipements">{t('maison.dashboard.masquees')}</a></p>{/if}
 
   {#snippet body(tile)}
     {#if isClim(tile.id)}
       <ClimateCard id={tile.device} name={tile.label} />
+    {:else if isDev(tile.id)}
+      {@const d = device(tile.device)}
+      {@const kind = deviceKind(d)}
+      {#if kind === 'camera'}
+        <section class="card doorbell">
+          <div class="card-head"><h2><Icon name="cctv" size={18} />{tile.label}</h2></div>
+          <CameraTile id={tile.device} name={tile.label} refresh={15} />
+        </section>
+      {:else if kind === 'plug'}
+        <LightTile id={tile.device} name={tile.label} icon="power" />
+      {:else if kind === 'cover'}
+        <CoverTile id={tile.device} name={tile.label} />
+      {:else if kind === 'speaker'}
+        <SpeakerCard id={tile.device} name={tile.label} />
+      {:else if kind === 'tv'}
+        <Remote tv={tile.device} speaker={speaker} />
+      {:else if kind === 'printer'}
+        {#if isPaperPrinter(d)}<PaperPrinterCard id={tile.device} />{:else}<PrinterCard id={tile.device} />{/if}
+      {:else}
+        <DeviceCard id={tile.device} name={tile.label} />
+      {/if}
     {:else if tile.id === 'sky'}
       <SkyHero />
     {:else if tile.id === 'modes'}
@@ -284,23 +499,25 @@
         <a class="more" href="#/pieces" aria-label={t('maison.accueil.toutes_pieces')}><Icon name="arrow-top-right" size={18} /></a>
       </div>
       <div class="tiles">
-        {#each lights as l (l.id)}
+        {#each shownLights as l (l.id)}
           <LightTile id={l.id} name={l.name} icon={l.icon} also={l.also ?? []} dimmer />
         {/each}
       </div>
-      {#if mood}
-        <div class="moods">
-          <div class="moods-head">
-            <span class="moods-title"><Icon name="palette" size={16} />{t('maison.accueil.ambiance')}</span>
-            <div class="rooms" role="group" aria-label={t('maison.accueil.piece')}>
-              {#each moodRooms as r (r.name)}
-                <button class:on={r.name === mood.name} onclick={() => pickRoom(r.name)} aria-pressed={r.name === mood.name}>{r.name}</button>
-              {/each}
-            </div>
+    </section>
+
+    {:else if tile.id === 'ambiances'}
+    <section class="card lights ambiances">
+      <div class="moods">
+        <div class="moods-head">
+          <span class="moods-title"><Icon name="palette" size={16} />{t('maison.accueil.ambiance')}</span>
+          <div class="rooms" role="group" aria-label={t('maison.accueil.piece')}>
+            {#each moodRooms as r (r.name)}
+              <button class:on={r.name === mood.name} onclick={() => pickRoom(r.name)} aria-pressed={r.name === mood.name}>{r.name}</button>
+            {/each}
           </div>
-          <AmbiancePicker lights={mood.lamps} label={mood.name} />
         </div>
-      {/if}
+        <AmbiancePicker lights={mood.lamps} label={mood.name} />
+      </div>
     </section>
 
 
@@ -345,38 +562,35 @@
     {/if}
   {/snippet}
 
-  <div class="grid" bind:this={gridEl}>
-    {#each tiles as tile (tile.id)}
-      {#if editing || tile.on}
+  <div class="stage" class:arranging-stage={editing} bind:this={stageEl} style:height={editing && gridHeight ? `${gridHeight * scale + 26 + 180}px` : null}>
+  <div class="grid" class:arranging={editing} style:--s={scale} style:grid-template-columns="repeat({cols}, minmax(0, 1fr))" style:transform={editing ? `scale(${scale})` : null} style:width={editing ? `${gridWidth}px` : null} bind:this={gridEl}>
+    {#each shownTiles as tile (tile.id)}
+      {#if tile.on}
         <div
           class="widget"
           class:off={!tile.on}
-          class:over={overId === tile.id && dragId !== tile.id}
-          data-side={side}
-          data-across={across}
-          style:--w={tile.w}
-          style:min-height={tile.h ? `${tile.h * ROW}px` : null}
-          draggable={editing}
-          ondragstart={(e) => startDrag(e, tile.id)}
-          ondragover={(e) => over(e, tile)}
-          ondragleave={() => overId === tile.id && (overId = null)}
-          ondrop={(e) => drop(e, tile.id)}
-          ondragend={() => ((dragId = null), (overId = null))}
+          class:moving={dragId === tile.id}
+          data-id={tile.id}
+          style:grid-column={cols === COLS ? `${(placed.get(tile.id)?.x ?? 0) + 1} / span ${wideOf(tile)}` : `span ${spanOf(tile.w)}`}
+          style:grid-row={cols === COLS ? `${(placed.get(tile.id)?.y ?? 0) + 1} / span ${rowsOf(tile)}` : `span ${rowsOf(tile)}`}
           role="group"
           aria-label={tile.label}
         >
           {#if editing}
-            <div class="bar">
+            <div class="bar" style:zoom={1 / scale} onpointerdown={(e) => startDrag(e, tile)} role="presentation">
               <span class="grip" aria-hidden="true"><Icon name="drag" size={18} /></span>
               <b>{tile.label}</b>
-              <button onclick={() => showTile(tile, !tile.on)} title={tile.on ? t('maison.dashboard.masquer') : t('maison.dashboard.afficher')} aria-label={tile.on ? t('maison.dashboard.masquer') : t('maison.dashboard.afficher')}>
+              <span class="size">{sizing?.id === tile.id ? `${sizing.w}×${sizing.rows}` : tile.w + (tile.rows ? `×${tile.rows}` : '')}</span>
+              <button onpointerdown={(e) => e.stopPropagation()} onclick={() => showTile(tile, !tile.on)} title={tile.on ? t('maison.dashboard.masquer') : t('maison.dashboard.afficher')} aria-label={tile.on ? t('maison.dashboard.masquer') : t('maison.dashboard.afficher')}>
                 <Icon name={tile.on ? 'eye' : 'eye-off'} size={16} />
               </button>
             </div>
+            <div class="inner preview" class:auto={!tile.rows} use:fit={tile.id}>{@render body(tile)}</div>
+          {:else}
+            <div class="inner" class:auto={!tile.rows} use:fit={tile.id}>{@render body(tile)}</div>
           {/if}
-          <div class="inner">{@render body(tile)}</div>
-          {#if editing && tile.on}
-            <button class="grow" onpointerdown={(e) => startResize(e, tile)} title={t('maison.dashboard.redimensionner')} aria-label={t('maison.dashboard.redimensionner')}>
+          {#if editing && tile.on && cols > 1}
+            <button class="grow" style:zoom={1 / scale} onpointerdown={(e) => startResize(e, tile)} ondblclick={() => autoHeight(tile)} title={t('maison.dashboard.redimensionner')} aria-label={t('maison.dashboard.redimensionner')}>
               <Icon name="resize" size={18} />
             </button>
           {/if}
@@ -384,11 +598,18 @@
       {/if}
     {/each}
   </div>
+  </div>
+  {#if floater}
+    <div class="floater" style:left="{floater.x}px" style:top="{floater.y}px" style:width="{floater.w}px" style:height="{floater.h}px">
+      <Icon name="drag" size={18} /><b>{floater.label}</b>
+    </div>
+  {/if}
 </div>
 
 <style>
   .accueil {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 22px;
   }
 
@@ -450,12 +671,13 @@
 
   .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
   }
 
   .head .page-title {
-    flex: 1;
+    flex: 1 1 auto;
     margin: 0;
   }
 
@@ -471,6 +693,7 @@
     font: inherit;
     font-size: 13px;
     font-weight: 650;
+    white-space: nowrap;
     background: var(--surface-2);
     color: var(--ink-2);
     cursor: pointer;
@@ -478,6 +701,10 @@
 
   .edit.active {
     background: var(--warm-soft);
+    color: var(--warm-ink);
+  }
+
+  .hint a {
     color: var(--warm-ink);
   }
 
@@ -492,13 +719,16 @@
     grid-template-columns: repeat(12, minmax(0, 1fr));
     /* A tile that fits a hole higher up takes it: a hidden tile leaves no gap. */
     grid-auto-flow: dense;
-    gap: 20px;
-    align-items: start;
+    /* Thin rows: a tile takes as many as it needs, and tiles stack freely. */
+    grid-auto-rows: 20px;
+    gap: 0 20px;
+    align-items: stretch;
   }
 
   .widget {
     position: relative;
-    grid-column: span var(--w, 12);
+    grid-column: span var(--span, 12);
+    grid-row: span var(--rows, 6);
     display: grid;
     grid-template-rows: minmax(0, 1fr);
     min-width: 0;
@@ -510,90 +740,131 @@
     display: none;
   }
 
-  .editing .widget {
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
   .inner {
     display: grid;
     gap: 20px;
     min-width: 0;
+    /* the gap under the tile */
+    margin-bottom: 20px;
+  }
+
+  /* A height of its own: what does not fit scrolls inside the tile instead of
+     spilling over the next one. */
+  .inner:not(.auto) {
+    overflow: auto;
+    scrollbar-width: none;
+  }
+
+  /* No height of its own: as tall as what it shows (which is measured). */
+  .inner.auto {
+    align-self: start;
   }
 
   .inner > :global(*) {
     min-width: 0;
   }
 
-  .editing .widget {
-    outline: 2px dashed color-mix(in srgb, var(--ink-3) 40%, transparent);
-    outline-offset: 6px;
+  .stage {
+    min-width: 0;
+  }
+
+  /* Room above the first tab and below the last tile, to drop a tile there. */
+  .stage.arranging-stage {
+    padding-top: 26px;
+    padding-bottom: 180px;
+  }
+
+  /* Arranging: the dashboard as it is, scaled down (the stage keeps the room
+     it takes), each tile with a bar to take hold of it. */
+  .arranging {
+    transform-origin: 0 0;
+  }
+
+  /* The outline is the tile's own, not the gap under it. */
+  .arranging .preview {
+    outline: 2px dashed color-mix(in srgb, var(--ink-3) 55%, transparent);
+    outline-offset: 4px;
     border-radius: 18px;
-    cursor: grab;
-    min-height: 84px;
+    min-height: 60px;
   }
 
-  /* The bar says where it lands: beside the tile, or above / below it. */
-  .editing .widget.over::after {
-    content: '';
-    position: absolute;
-    z-index: 2;
-    border-radius: 3px;
-    background: var(--warm-ink);
-    pointer-events: none;
+  .arranging .widget.off {
+    opacity: 0.45;
   }
 
-  .editing .widget.over[data-across='true']::after {
-    top: -6px;
-    bottom: -6px;
-    width: 5px;
+  /* Hold the place of the tile being moved. */
+  .arranging .widget.moving .preview {
+    outline-color: var(--warm-ink);
+    background: var(--warm-soft);
+    opacity: 0.6;
   }
 
-  .editing .widget.over[data-across='true'][data-side='before']::after {
-    left: -13px;
+  .arranging .widget.moving .bar,
+  .arranging .widget.moving .grow {
+    visibility: hidden;
   }
 
-  .editing .widget.over[data-across='true'][data-side='after']::after {
-    right: -13px;
-  }
-
-  .editing .widget.over[data-across='false']::after {
-    left: -6px;
-    right: -6px;
-    height: 5px;
-  }
-
-  .editing .widget.over[data-across='false'][data-side='before']::after {
-    top: -13px;
-  }
-
-  .editing .widget.over[data-across='false'][data-side='after']::after {
-    bottom: -13px;
-  }
-
-  .editing .widget.off .inner {
-    opacity: 0.35;
-  }
-
-  /* Arranging: the tiles show what they are but do not act. */
-  .editing .inner {
+  /* The tile itself: it shows what it is but does not act. */
+  .preview {
     pointer-events: none;
     user-select: none;
   }
 
-  .bar {
+  .floater {
+    position: fixed;
+    z-index: 50;
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 8px;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 2px solid var(--warm-ink);
+    border-radius: 16px;
+    background: var(--warm-soft);
+    color: var(--warm-ink);
     font-size: 13px;
+    box-shadow: 0 14px 34px rgb(0 0 0 / 0.35);
+    pointer-events: none;
+    align-items: flex-start;
+  }
+
+  /* A tab hung over the tile's top edge, so it hides nothing of the tile. */
+  .bar {
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    left: 10px;
+    max-width: calc(100% - 20px);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 4px 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line, color-mix(in srgb, var(--ink) 14%, transparent));
+    background: var(--surface-2);
+    box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+    transform: translateY(-65%);
+    font-size: 13px;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .bar:active {
+    cursor: grabbing;
   }
 
   .bar b {
-    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .size {
+    font-size: 11px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
   }
 
   .bar button {
@@ -607,18 +878,26 @@
 
   .grow {
     position: absolute;
-    right: -6px;
-    bottom: -6px;
+    z-index: 3;
+    right: 8px;
+    bottom: 8px;
     display: grid;
     place-items: center;
-    width: 30px;
-    height: 30px;
+    width: 34px;
+    height: 34px;
+    box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
     border: 0;
     border-radius: 50%;
-    background: var(--warm-soft);
+    background: linear-gradient(var(--warm-soft), var(--warm-soft)) var(--surface-2);
     color: var(--warm-ink);
     cursor: nwse-resize;
     touch-action: none;
+  }
+
+  .ambiances .moods {
+    margin: 0;
+    padding: 0;
+    border: 0;
   }
 
   .moods {
@@ -781,14 +1060,6 @@
   }
 
   @media (max-width: 760px) {
-    .widget {
-      grid-column: span 12 !important;
-    }
-
-    .grow {
-      display: none;
-    }
-
     .tiles {
       grid-template-columns: 1fr 1fr;
     }

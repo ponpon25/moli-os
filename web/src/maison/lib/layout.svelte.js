@@ -100,13 +100,19 @@ export function showOnDashboard(id, yes) {
 
 // ---- the dashboard's tiles -------------------------------------------------------
 
-/** Width in columns (of 12), height in rows of `ROW` px (0: its own). */
-export const ROW = 60;
+/** Width in columns (of 12), height in rows of `ROW` px (0: its own, as
+ *  tall as what it shows). A row is thin on purpose: tiles stack in any way
+ *  (two small ones beside a tall one). */
+export const ROW = 20;
 
 export const dash = $state({ tiles: read('maison-dashboard', {}) });
 
+/** A tile's settings. Heights were once kept in rows of 60 px (`h`): they
+ *  carry over, in the rows of today. */
 export function tileOf(id, fallback) {
-  return { ...fallback, ...(dash.tiles[id] ?? {}) };
+  const mine = dash.tiles[id] ?? {};
+  const { h, ...rest } = { ...fallback, ...mine };
+  return { ...rest, rows: mine.rows ?? (h ? h * 3 : 0) };
 }
 
 export function setTile(id, patch, save = true) {

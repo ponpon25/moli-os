@@ -230,7 +230,7 @@
   "maison.dashboard.personnaliser": "Personnaliser",
   "maison.dashboard.terminer": "Terminer",
   "maison.dashboard.reinitialiser": "Tout remettre par défaut",
-  "maison.dashboard.aide": "Glissez une tuile pour la déplacer, tirez son coin pour la redimensionner, l’œil la masque.",
+  "maison.dashboard.aide": "Attrapez la barre d’une tuile pour la déplacer, tirez son coin pour la redimensionner (double‑clic : hauteur automatique), l’œil la masque.",
   "maison.dashboard.masquer": "Masquer cette tuile",
   "maison.dashboard.afficher": "Afficher cette tuile",
   "maison.dashboard.redimensionner": "Redimensionner",
@@ -238,7 +238,10 @@
   "maison.dashboard.t_modes": "Mode de la maison",
   "maison.dashboard.t_notices": "À savoir",
   "maison.dashboard.t_alarm": "Alarme",
-  "maison.dashboard.t_lights": "Lumières et ambiances",
+  "maison.dashboard.t_lights": "Lumières",
+  "maison.dashboard.t_ambiances": "Ambiances",
+  "maison.dashboard.masquees": "Tuiles masquées ou à remettre : dans Équipements.",
+  "maison.dashboard.envoyer": "Envoyer",
   "maison.dashboard.t_energy": "Énergie",
   "maison.dashboard.t_routines": "Routines",
   "maison.dashboard.t_climate": "Climatisation",
@@ -296,5 +299,7 @@
   "maison.historique.vide_filtre": "Rien ne correspond.",
   "maison.historique.plus": "Voir {count} de plus",
   "maison.equipements.dashboard": "Dashboard",
+  "maison.equipements.cartes": "Cartes du dashboard",
+  "maison.equipements.carte_sans_equipement": "Carte sans équipement",
   "maison.equipements.afficher_dashboard": "Afficher {name} sur le dashboard"
 }

@@ -24,6 +24,12 @@ impl std::fmt::Debug for Image {
     }
 }
 
+/// Produces the cover of what a device plays (a picture to show beside
+/// the title, not a camera: nothing here makes the device a camera).
+pub trait CoverSource: std::fmt::Debug + Send + Sync + 'static {
+    fn cover(&self) -> BoxFuture<'_, anyhow::Result<Image>>;
+}
+
 /// Produces a fresh image on demand.
 pub trait SnapshotSource: std::fmt::Debug + Send + Sync + 'static {
     fn snapshot(&self) -> BoxFuture<'_, anyhow::Result<Image>>;

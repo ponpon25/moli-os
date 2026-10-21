@@ -123,6 +123,8 @@
   "assistant.voice.style.pose.instructions": "Ton calme et chaleureux, posé et rassurant, débit naturel, français naturel de France.",
   "assistant.voice.style.doux.label": "Doux",
   "assistant.voice.style.doux.instructions": "Ton doux et feutré, presque à voix basse, comme le soir quand la maison s'endort. Débit lent, français naturel de France.",
+  "assistant.voice.style.jarvis.label": "Jarvis",
+  "assistant.voice.style.jarvis.instructions": "Voix d'un majordome numérique britannique d'exception, d'un calme absolu. Ton posé, précis et distingué, d'une politesse irréprochable, avec une pointe d'humour pince-sans-rire et un soupçon de condescendance affectueuse. Voix grave et feutrée, débit mesuré et régulier, diction impeccable. Français de France soigné, prononciation standard, sans aucun accent québécois ni américain. Jamais d'enthousiasme excessif.",
   "assistant.voice.pace.normal": "Normal",
   "assistant.voice.pace.rapide": "Rapide",
   "assistant.voice.pace.tres_rapide": "Très rapide",

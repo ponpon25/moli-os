@@ -155,6 +155,7 @@ fn device_routes() -> Router<Hub> {
         .route("/api/devices", get(rest::devices))
         .route("/api/devices/{id}", get(rest::device))
         .route("/api/devices/{id}/snapshot", get(rest::snapshot))
+        .route("/api/devices/{id}/cover", get(rest::cover))
         .route(
             "/api/devices/{id}/print",
             post(rest::print).layer(DefaultBodyLimit::max(rest::MAX_PAGE)),
@@ -189,6 +190,16 @@ fn house_routes(humans: &Arc<session::Sessions>, options: &Options) -> Router<Hu
         .route(
             "/api/integrations/tuya-cloud",
             get(integrations::tuya_cloud).put(integrations::set_tuya_cloud),
+        )
+        .route(
+            "/api/integrations/apple-music",
+            get(integrations::apple_music)
+                .put(integrations::set_apple_user_token)
+                .delete(integrations::forget_apple_user_token),
+        )
+        .route(
+            "/api/integrations/apple-music/developer-token",
+            get(integrations::apple_developer_token),
         )
         .route("/api/homekit", get(homekit::status))
         .route("/api/homekit/policy", put(homekit::set_policy))

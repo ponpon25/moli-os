@@ -12,6 +12,7 @@
   import Salon from './pages/Salon.svelte';
   import Pieces from './pages/Pieces.svelte';
   import Equipements from './pages/Equipements.svelte';
+  import Enceintes from './pages/Enceintes.svelte';
   import Historique from './pages/Historique.svelte';
   import Plan from './pages/Plan.svelte';
   import Cameras from './pages/Cameras.svelte';
@@ -43,6 +44,7 @@
     { path: '', label: 'commun.nav.accueil', icon: 'dashboard' },
     { path: 'pieces', label: 'commun.nav.pieces', icon: 'light-group' },
     { path: 'equipements', label: 'commun.nav.equipements', icon: 'devices' },
+    { path: 'enceintes', label: 'commun.nav.enceintes', icon: 'speaker' },
     { path: 'cameras', label: 'commun.nav.cameras', icon: 'cctv' },
     { path: 'historique', label: 'commun.nav.historique', icon: 'history' },
     { path: 'automatismes', label: 'commun.nav.automatismes', icon: 'robot' },
@@ -127,6 +129,8 @@
       <Historique />
     {:else if page === 'equipements'}
       <Equipements />
+    {:else if page === 'enceintes'}
+      <Enceintes />
     {:else if page === 'plan'}
       <Plan />
     {:else if page === 'carte'}

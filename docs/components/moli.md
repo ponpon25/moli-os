@@ -198,7 +198,7 @@ masqué raccroche.
   (`assistant/api_key`), jamais renvoyée. Tuto pas à pas dans la carte (compte, crédit,
   limite de dépense, création de la clé). Prise en compte immédiatement.
 - **Voix, ton et débit** : `GET|PUT /api/assistant/settings` `{voice?, style?, pace?}` (sans code :
-  un goût, pas un pouvoir). Tons : `enjoue` (défaut), `pose`, `doux`. Débits : `normal` (1),
+  un goût, pas un pouvoir). Tons : `enjoue` (défaut), `pose`, `doux`, `jarvis` (majordome numérique britannique, posé et pince-sans-rire, français de France soigné). Débits : `normal` (1),
   `rapide` (1,2, le défaut de `speech_speed`), `tres_rapide` (1,4). Gardés dans
   `data/assistant.json` ; sans ce fichier, `speech_voice`/`speech_style` de `moli.toml`.
   ▶ à côté de chaque voix pour l'écouter.

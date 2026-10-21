@@ -734,6 +734,46 @@ pub(crate) async fn snapshot(
     }
 }
 
+/// The cover of what a speaker plays: the dashboard shows it beside the
+/// title. The picture comes through Moli (the speaker's address is of no
+/// use to a browser away from home), and may be kept a while: the address
+/// the dashboard asks with changes with the picture.
+pub(crate) async fn cover(
+    State(hub): State<Hub>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> Response {
+    use moli_runtime::media::SnapshotError;
+    let id = DeviceId::from(id);
+    if caller
+        .person
+        .as_ref()
+        .is_some_and(crate::people::PersonRef::is_guest)
+    {
+        return error(
+            StatusCode::FORBIDDEN,
+            &moli_i18n::tr!("serveur.personnes.invite_limite"),
+        );
+    }
+    match hub.cover_image(&id).await {
+        Ok(image) => (
+            [
+                (axum::http::header::CONTENT_TYPE, image.content_type),
+                (
+                    axum::http::header::CACHE_CONTROL,
+                    "private, max-age=3600".to_owned(),
+                ),
+            ],
+            image.bytes,
+        )
+            .into_response(),
+        Err(e @ (SnapshotError::UnknownDevice | SnapshotError::NotACamera)) => {
+            error(StatusCode::NOT_FOUND, &e.to_string())
+        }
+        Err(e) => error(StatusCode::BAD_GATEWAY, &e.to_string()),
+    }
+}
+
 // ---- printing ---------------------------------------------------------------
 
 /// Biggest page taken (the dashboard sends 0.5 to 3 MB; Moli lives in 128 MB).

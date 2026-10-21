@@ -123,6 +123,8 @@
   "assistant.voice.style.pose.instructions": "Calm and warm tone, composed and reassuring, natural pace, natural, native-sounding English.",
   "assistant.voice.style.doux.label": "Soft",
   "assistant.voice.style.doux.instructions": "Soft, hushed tone, almost whispered, like in the evening when the house falls asleep. Slow pace, natural, native-sounding English.",
+  "assistant.voice.style.jarvis.label": "Jarvis",
+  "assistant.voice.style.jarvis.instructions": "Voice of an exceptional British digital butler, perfectly calm. Composed, precise, refined tone, impeccably polite, with a touch of dry wit and affectionate condescension. Deep, soft voice, measured and even pace, impeccable diction. Never overly enthusiastic.",
   "assistant.voice.pace.normal": "Normal",
   "assistant.voice.pace.rapide": "Fast",
   "assistant.voice.pace.tres_rapide": "Very fast",

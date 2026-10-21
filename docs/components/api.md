@@ -281,6 +281,11 @@ Légende « Accès » : **libre** = aucune condition au-delà de la garde `Host`
 | GET | `/api/devices` | libre ; un invité : ses pièces seulement (§ 3.1) | aucune | `Snapshot` : `{devices:[DeviceView], drivers:[DriverView], approvals:[ApprovalRequest], guard}` | aucune |
 | GET | `/api/devices/{id}` | libre ; un invité : ses pièces seulement | `id` = device_id | `DeviceView` | `404` unknown device ; `403` invité, hors de ses pièces |
 | GET | `/api/devices/{id}/snapshot` | libre ; **humain** si la caméra est dans une pièce protégée | aucune | image brute, `content-type` de la caméra, `cache-control: no-store` | `403` pièce protégée ; `404` appareil inconnu / pas une caméra ; `502` pas d'image en 20 s ou échec |
+| GET | `/api/integrations/apple-music` | libre | aucune | `{configured, connected, instance}` : Apple Music est-il configuré (clé, identifiants), un compte est-il connecté (jamais les clés) | aucune |
+| GET | `/api/integrations/apple-music/developer-token` | **humain** | aucune | `{token, storefront}` : un jeton développeur ES256 d'une heure, signé par Moli, pour la connexion du navigateur à Apple (MusicKit JS) | `403` ; `404` Apple Music pas configuré |
+| PUT | `/api/integrations/apple-music` | **humain** | `{user_token}` | `{stored:true}` : le jeton du compte Apple de la personne, rangé dans le coffre (jamais renvoyé) | `403` ; `404` ; `422` pas un jeton ; `500` coffre |
+| DELETE | `/api/integrations/apple-music` | **humain** | aucune | `{stored:false}` : le compte est oublié (la clé de la maison reste) | `403` ; `500` coffre |
+| GET | `/api/devices/{id}/cover` | libre ; un invité : refusé | aucune | la pochette de ce que joue une enceinte (image, `cache-control: private, max-age=3600`) ; l'enceinte la sert, Moli la relaie (jamais une adresse hors de l'enceinte) | `404` appareil inconnu / sans pochette ; `502` pas d'image |
 | GET | `/api/home` | libre | aucune | contenu de `data/home.json` (disposition du dashboard famille), `{}` si absent | `500` JSON invalide |
 | GET | `/api/system` | libre | aucune | `{version, stats, drivers, bricks, surfaces, perf, coverage}` (carte du système, § 2.3) | aucune |
 | GET | `/api/bench` | libre | aucune | `data/bench.json` tel quel (comparaison avec Home Assistant, écrite par un script côté hôte, hors de ce dépôt) | `404` no comparison available yet |

@@ -3,8 +3,16 @@
 //! `[driver.options.announce]`, spoken announcements too (`announce.rs`),
 //! and `quiet`: while on, no announcement is said (whoever asks), until it
 //! is switched off or [`QUIET_FOR`] has passed (a silence forgotten on).
+//! With `discover = true`, every player of the home at once, grouped by
+//! room (`household.rs`).
 
+mod actions;
 mod announce;
+mod apple;
+mod cover;
+mod events;
+mod household;
+mod playback;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +25,8 @@ use serde::Deserialize;
 
 const PORT: u16 = 1400;
 const POLL: Duration = Duration::from_secs(2);
+/// What a speaker is given to fill its queue.
+const SLOW: Duration = Duration::from_secs(30);
 /// A silence ends by itself after this long.
 pub const QUIET_FOR: Duration = Duration::from_secs(4 * 3600);
 const AV: (&str, &str) = (
@@ -31,10 +41,35 @@ const RENDERING: (&str, &str) = (
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    pub host: String,
+    /// One player (the driver is that player), or, with `discover`, an
+    /// address to start from when the search finds nothing.
+    #[serde(default)]
+    pub host: Option<String>,
+    /// Every player of the home, found by search, one device per room.
+    #[serde(default)]
+    pub discover: bool,
+    /// With `discover`: players call back when something changes (read at
+    /// once, and the safety round slows down). On by default.
+    #[serde(default = "yes")]
+    pub events: bool,
+    /// Where they call back (this machine, any free port to give them).
+    #[serde(default = "events_port")]
+    pub events_port: u16,
+    /// With `discover`: the Apple Music catalogue, searched from Moli and
+    /// played by the speakers (the private key is the secret `apple_music_key`).
+    #[serde(default)]
+    pub apple: Option<apple::Config>,
     /// Spoken announcements (absent: none).
     #[serde(default)]
     pub announce: Option<announce::Config>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn events_port() -> u16 {
+    3400
 }
 
 /// Where the speaker's local API certificate fingerprint is kept.
@@ -58,7 +93,13 @@ impl Driver for Sonos {
     }
 
     fn run<'a>(&'a self, ctx: &'a mut DriverCtx) -> BoxFuture<'a, anyhow::Result<()>> {
-        Box::pin(run(&self.config, ctx))
+        Box::pin(async move {
+            if self.config.discover {
+                household::run(&self.config, ctx).await
+            } else {
+                run(&self.config, ctx).await
+            }
+        })
     }
 }
 
@@ -69,6 +110,16 @@ async fn soap(
     args: &[(&str, &str)],
 ) -> anyhow::Result<String> {
     moli_net::upnp::soap(host, PORT, path, service, action, args).await
+}
+
+/// An action that takes a while (a long playlist put in the queue).
+async fn soap_slow(
+    host: &str,
+    (path, service): (&str, &str),
+    action: &str,
+    args: &[(&str, &str)],
+) -> anyhow::Result<String> {
+    moli_net::upnp::soap_within(host, PORT, path, service, action, args, SLOW).await
 }
 
 fn point(
@@ -220,9 +271,19 @@ async fn describe(host: &str) -> anyhow::Result<(String, String, String)> {
 }
 
 /// Where the sound comes from, as the remote needs it: `tv` (a soundbar's
-/// TV input: the TV's volume is then the speaker's), `line_in`, `group`
-/// (it follows another player), `music`, or `none`.
-const SOURCES: [&str; 5] = ["tv", "line_in", "group", "music", "none"];
+/// TV input: the TV's volume is then the speaker's), `line_in`, `airplay`,
+/// `bluetooth`, `radio`, `group` (it follows another player), `music`, or
+/// `none`.
+const SOURCES: [&str; 8] = [
+    "tv",
+    "line_in",
+    "airplay",
+    "bluetooth",
+    "radio",
+    "group",
+    "music",
+    "none",
+];
 
 /// The source of a track, by its address.
 fn source(uri: &str) -> &'static str {
@@ -235,12 +296,43 @@ fn source(uri: &str) -> &'static str {
         "line_in"
     } else if uri.starts_with("x-rincon:") {
         "group"
+    } else if uri.starts_with("x-sonos-vli:") && uri.contains(",airplay:") {
+        "airplay"
+    } else if uri.starts_with("x-sonos-vli:") && uri.contains(",bluetooth:") {
+        "bluetooth"
+    } else if uri.starts_with("x-sonosapi-stream:")
+        || uri.starts_with("x-sonosapi-radio:")
+        || uri.starts_with("x-sonosapi-hls:")
+        || uri.starts_with("x-rincon-mp3radio:")
+    {
+        "radio"
     } else {
         "music"
     }
 }
 
-async fn poll(host: &str) -> anyhow::Result<Vec<(&'static str, Value)>> {
+/// `H:MM:SS` as seconds (`NOT_IMPLEMENTED`, empty: none).
+fn seconds(text: &str) -> Option<i64> {
+    let mut parts = text.trim().split(':');
+    let (h, m, s) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(h.parse::<i64>().ok()? * 3600 + m.parse::<i64>().ok()? * 60 + s.parse::<i64>().ok()?)
+}
+
+/// What a player says now.
+struct Polled {
+    values: Vec<(&'static str, Value)>,
+    /// Where in the track, in seconds (`full` readings only).
+    position: Option<i64>,
+    /// The track's address: a change of it is a change of track.
+    track: String,
+}
+
+/// Reads a player. `full` adds what a room shows beyond the remote's needs:
+/// album, cover, length.
+async fn poll(host: &str, full: bool) -> anyhow::Result<Polled> {
     let transport = soap(host, AV, "GetTransportInfo", &[("InstanceID", "0")]).await?;
     let state = tag(&transport, "CurrentTransportState")
         .unwrap_or("UNKNOWN")
@@ -261,11 +353,13 @@ async fn poll(host: &str) -> anyhow::Result<Vec<(&'static str, Value)>> {
     .await?;
     let position = soap(host, AV, "GetPositionInfo", &[("InstanceID", "0")]).await?;
     let meta = unescape(tag(&position, "TrackMetaData").unwrap_or(""));
-    let from = source(&unescape(tag(&position, "TrackURI").unwrap_or("")));
+    let track = unescape(tag(&position, "TrackURI").unwrap_or(""));
+    let from = source(&track);
     let text = |s: Option<&str>| {
         s.map(|s| unescape(s).trim().to_owned())
             .filter(|s| !s.is_empty() && s != "NOT_IMPLEMENTED")
     };
+    let as_text = |t: Option<String>| t.map_or(Value::Null, |t| Value::Text(t.into()));
     let mut values = vec![
         (
             "playing",
@@ -274,19 +368,56 @@ async fn poll(host: &str) -> anyhow::Result<Vec<(&'static str, Value)>> {
         ("state", Value::Text(state.to_lowercase().into())),
         ("source", Value::Text(from.into())),
         ("mute", Value::Bool(tag(&mute, "CurrentMute") == Some("1"))),
-        (
-            "title",
-            text(tag(&meta, "title")).map_or(Value::Null, |t| Value::Text(t.into())),
-        ),
-        (
-            "artist",
-            text(tag(&meta, "creator")).map_or(Value::Null, |t| Value::Text(t.into())),
-        ),
+        ("title", as_text(text(tag(&meta, "title")))),
+        ("artist", as_text(text(tag(&meta, "creator")))),
     ];
     if let Some(v) = tag(&volume, "CurrentVolume").and_then(|v| v.parse::<i64>().ok()) {
         values.push(("volume", Value::Int(v)));
     }
-    Ok(values)
+    let mut at = None;
+    if full {
+        let settings = soap(host, AV, "GetTransportSettings", &[("InstanceID", "0")]).await?;
+        let (shuffle, repeat) =
+            playback::mode_parts(tag(&settings, "PlayMode").unwrap_or("NORMAL"));
+        values.push(("shuffle", Value::Bool(shuffle)));
+        values.push(("repeat", Value::Text(repeat.into())));
+        // The queue counts only while it is what plays.
+        let media = soap(host, AV, "GetMediaInfo", &[("InstanceID", "0")]).await?;
+        let in_queue = tag(&media, "CurrentURI")
+            .is_some_and(|uri| unescape(uri).starts_with("x-rincon-queue:"));
+        let number = |text: Option<&str>| {
+            text.and_then(|t| t.trim().parse::<i64>().ok())
+                .filter(|n| *n > 0)
+                .filter(|_| in_queue)
+                .map_or(Value::Null, Value::Int)
+        };
+        values.push(("queue_length", number(tag(&media, "NrTracks"))));
+        values.push(("queue_position", number(tag(&position, "Track"))));
+        values.push(("album", as_text(text(tag(&meta, "album")))));
+        values.push((
+            "art",
+            as_text(text(tag(&meta, "albumArtURI")).map(|art| cover(host, &art))),
+        ));
+        let length = tag(&position, "TrackDuration")
+            .and_then(seconds)
+            .filter(|s| *s > 0);
+        values.push(("duration", length.map_or(Value::Null, Value::Int)));
+        at = length.and(tag(&position, "RelTime").and_then(seconds));
+    }
+    Ok(Polled {
+        values,
+        position: at,
+        track,
+    })
+}
+
+/// A cover's address, whole (a player gives a path of its own).
+fn cover(host: &str, art: &str) -> String {
+    if art.starts_with('/') {
+        format!("http://{host}:{PORT}{art}")
+    } else {
+        art.to_owned()
+    }
 }
 
 async fn apply(host: &str, command: &CommandRequest) -> anyhow::Result<()> {
@@ -329,7 +460,10 @@ async fn apply(host: &str, command: &CommandRequest) -> anyhow::Result<()> {
 }
 
 async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
-    let host = config.host.as_str();
+    let host = config
+        .host
+        .as_deref()
+        .context(moli_i18n::tr!("pilotes.sonos.hote_requis"))?;
     let (udn, room, model) = describe(host)
         .await
         .with_context(|| format!("sonos {host}"))?;
@@ -390,13 +524,13 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
                     quiet_until = None;
                     set_quiet(ctx, &id, None);
                 }
-                match poll(host).await {
-                Ok(values) => {
+                match poll(host, false).await {
+                Ok(polled) => {
                     if online != Some(true) {
                         online = Some(true);
                         ctx.set_availability(&id, true);
                     }
-                    for (key, value) in values {
+                    for (key, value) in polled.values {
                         ctx.set_state(&id, key, value);
                     }
                 }
@@ -471,6 +605,27 @@ mod tests {
     }
 
     #[test]
+    fn reads_lengths_and_covers() {
+        assert_eq!(seconds("0:03:43"), Some(223));
+        assert_eq!(seconds("1:00:05"), Some(3605));
+        assert_eq!(seconds("NOT_IMPLEMENTED"), None);
+        assert_eq!(seconds(""), None);
+        assert_eq!(
+            cover("192.168.1.10", "/getaa?s=1&u=x"),
+            "http://192.168.1.10:1400/getaa?s=1&u=x"
+        );
+        assert_eq!(cover("192.168.1.10", "http://a/b.jpg"), "http://a/b.jpg");
+    }
+
+    #[test]
+    fn a_driver_is_one_player_or_the_whole_home() {
+        let one: Config = serde_json::from_str(r#"{"host":"192.168.1.10"}"#).unwrap();
+        assert!(!one.discover);
+        let all: Config = serde_json::from_str(r#"{"discover":true}"#).unwrap();
+        assert!(all.discover && all.host.is_none());
+    }
+
+    #[test]
     fn the_source_says_when_the_tv_plays() {
         assert_eq!(
             source("x-sonos-htastream:RINCON_000000000000001400:spdif"),
@@ -482,6 +637,12 @@ mod tests {
         );
         assert_eq!(source("x-rincon:RINCON_000000000000001400"), "group");
         assert_eq!(source("x-sonos-spotify:spotify%3atrack%3a1"), "music");
+        assert_eq!(source("x-sonos-vli:RINCON_X1400:1,airplay:abc"), "airplay");
+        assert_eq!(
+            source("x-sonos-vli:RINCON_X1400:3,bluetooth:abc"),
+            "bluetooth"
+        );
+        assert_eq!(source("x-sonosapi-hls:hls%3ara.1?sid=204"), "radio");
         assert_eq!(source(" "), "none");
         assert!(SOURCES.contains(&source("anything")));
     }

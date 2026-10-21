@@ -12,6 +12,9 @@
   "serveur.cle.tuya_humain": "seule une personne (code) donne des clés",
   "serveur.cle.tuya_pilote_inconnu": "pas de pilote tuya de ce nom",
   "serveur.cle.tuya_invalide": "ce ne sont pas des clés Tuya (lettres et chiffres : Access ID, puis Access Secret de 32 caractères)",
+  "serveur.cle.apple_humain": "seule une personne (code) connecte un compte Apple Music",
+  "serveur.cle.apple_absente": "Apple Music n'est pas configuré sur ces enceintes",
+  "serveur.cle.apple_invalide": "ce n'est pas un jeton Apple Music",
 
   "serveur.machine.jeton_refuse": "jeton refusé",
   "serveur.machine.foyer_seulement": "réservé au foyer",

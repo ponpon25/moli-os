@@ -273,6 +273,7 @@ struct Model {
     drivers: BTreeMap<InstanceId, DriverSlot>,
     labels: BTreeMap<DeviceId, Label>,
     snapshots: HashMap<DeviceId, Arc<dyn crate::media::SnapshotSource>>,
+    covers: HashMap<DeviceId, Arc<dyn crate::media::CoverSource>>,
     live: HashMap<DeviceId, Arc<dyn crate::media::LiveSource>>,
     talk: HashMap<DeviceId, Arc<dyn crate::media::TalkSource>>,
     printers: HashMap<DeviceId, Arc<dyn crate::media::PrintSink>>,
@@ -1234,11 +1235,7 @@ impl Hub {
         self.0.secrets_problem.as_deref()
     }
 
-    pub(crate) async fn forget_secret(
-        &self,
-        instance: &InstanceId,
-        name: &str,
-    ) -> std::io::Result<bool> {
+    pub async fn forget_secret(&self, instance: &InstanceId, name: &str) -> std::io::Result<bool> {
         match &self.0.secrets {
             Some(store) => store.remove(&format!("{instance}/{name}")).await,
             None => Ok(false),
@@ -1410,6 +1407,7 @@ impl Hub {
             model.states.remove(id);
             model.availability.remove(id);
             model.snapshots.remove(id);
+            model.covers.remove(id);
             model.live.remove(id);
             model.talk.remove(id);
             model.printers.remove(id);
@@ -1422,6 +1420,38 @@ impl Hub {
             .remove(id);
         if removed {
             self.emit(Event::DeviceRemoved { device: id.clone() });
+        }
+    }
+
+    pub(crate) fn provide_cover(
+        &self,
+        device: &DeviceId,
+        source: Arc<dyn crate::media::CoverSource>,
+    ) {
+        self.write().covers.insert(device.clone(), source);
+    }
+
+    /// The cover of what `device` plays now.
+    pub async fn cover_image(
+        &self,
+        device: &DeviceId,
+    ) -> Result<crate::media::Image, crate::media::SnapshotError> {
+        use crate::media::SnapshotError;
+        let source = {
+            let model = self.read();
+            if !model.devices.contains_key(device) {
+                return Err(SnapshotError::UnknownDevice);
+            }
+            model
+                .covers
+                .get(device)
+                .cloned()
+                .ok_or(SnapshotError::NotACamera)?
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(8), source.cover()).await {
+            Ok(Ok(image)) => Ok(image),
+            Ok(Err(e)) => Err(SnapshotError::Failed(format!("{e:#}"))),
+            Err(_) => Err(SnapshotError::Timeout),
         }
     }
 

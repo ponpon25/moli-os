@@ -15,7 +15,7 @@ use crate::{Assistant, AssistantError, CLOUD_VOICES};
 
 /// Tones a person can pick: id, then the catalogue keys of its label and of
 /// its instructions for the voice (both in the house's language).
-pub(crate) const STYLES: [(&str, &str, &str); 3] = [
+pub(crate) const STYLES: [(&str, &str, &str); 4] = [
     (
         "enjoue",
         "assistant.voice.style.enjoue.label",
@@ -30,6 +30,11 @@ pub(crate) const STYLES: [(&str, &str, &str); 3] = [
         "doux",
         "assistant.voice.style.doux.label",
         "assistant.voice.style.doux.instructions",
+    ),
+    (
+        "jarvis",
+        "assistant.voice.style.jarvis.label",
+        "assistant.voice.style.jarvis.instructions",
     ),
 ];
 

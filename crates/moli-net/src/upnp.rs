@@ -5,7 +5,7 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{Context as _, bail};
 use http::{Method, Request};
 use http_body_util::Full;
 use hyper::body::Bytes;
@@ -47,6 +47,28 @@ pub async fn soap(
     action: &str,
     args: &[(&str, &str)],
 ) -> anyhow::Result<String> {
+    soap_within(
+        host,
+        port,
+        control_path,
+        service,
+        action,
+        args,
+        crate::TIMEOUT,
+    )
+    .await
+}
+
+/// [`soap`] with its own limit, for an action that takes a while.
+pub async fn soap_within(
+    host: &str,
+    port: u16,
+    control_path: &str,
+    service: &str,
+    action: &str,
+    args: &[(&str, &str)],
+    limit: Duration,
+) -> anyhow::Result<String> {
     let args = args.iter().fold(String::new(), |mut out, (k, v)| {
         use std::fmt::Write as _;
         let _ = write!(out, "<{k}>{}</{k}>", escape(v));
@@ -62,7 +84,7 @@ pub async fn soap(
         .header("content-type", r#"text/xml; charset="utf-8""#)
         .header("soapaction", format!("\"{service}#{action}\""))
         .body(Full::new(Bytes::from(body)))?;
-    let (status, bytes) = crate::plain(host, port, request).await?;
+    let (status, _, bytes) = crate::plain_within(host, port, request, limit).await?;
     let text = String::from_utf8_lossy(&bytes).into_owned();
     if !status.is_success() {
         bail!(
@@ -85,6 +107,54 @@ pub async fn fetch(host: &str, port: u16, path: &str) -> anyhow::Result<String> 
         bail!("{path}: {status}");
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// A UPnP event subscription (GENA). A new one names where the device calls
+/// back (`callback`); a renewal gives the `sid` it was given. The device's
+/// answer: the subscription id, to renew with before `seconds` are over.
+pub async fn subscribe(
+    host: &str,
+    port: u16,
+    path: &str,
+    callback: Option<&str>,
+    sid: Option<&str>,
+    seconds: u32,
+) -> anyhow::Result<String> {
+    let request = Request::builder()
+        .method(Method::from_bytes(b"SUBSCRIBE")?)
+        .uri(path)
+        .header("host", format!("{host}:{port}"))
+        .header("timeout", format!("Second-{seconds}"));
+    let request = match (sid, callback) {
+        (Some(sid), _) => request.header("sid", sid),
+        (None, Some(callback)) => request
+            .header("callback", format!("<{callback}>"))
+            .header("nt", "upnp:event"),
+        (None, None) => bail!("a subscription needs a callback or a sid"),
+    }
+    .body(Full::new(Bytes::new()))?;
+    let (status, headers, _) = crate::plain_with_headers(host, port, request).await?;
+    if !status.is_success() {
+        bail!("{path}: subscription refused ({status})");
+    }
+    Ok(headers
+        .get("sid")
+        .and_then(|v| v.to_str().ok())
+        .context("no subscription id")?
+        .to_owned())
+}
+
+/// GET a file (a cover) from a LAN device, as bytes (capped like [`fetch`]).
+pub async fn fetch_bytes(host: &str, port: u16, path: &str) -> anyhow::Result<Vec<u8>> {
+    let request = Request::builder()
+        .uri(path)
+        .header("host", format!("{host}:{port}"))
+        .body(Full::new(Bytes::new()))?;
+    let (status, bytes) = crate::plain(host, port, request).await?;
+    if !status.is_success() {
+        bail!("{path}: {status}");
+    }
+    Ok(bytes.to_vec())
 }
 
 /// Where a description lives: host, port, path.

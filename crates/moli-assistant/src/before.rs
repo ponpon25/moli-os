@@ -509,7 +509,7 @@ pub(crate) fn summary(done: usize, failed: usize, left: usize) -> String {
 }
 
 /// The tones of the voice (settings.rs).
-pub(crate) const STYLES: [(&str, &str, &str); 3] = [
+pub(crate) const STYLES: [(&str, &str, &str); 4] = [
     (
         "enjoue",
         "Enjoué",
@@ -524,6 +524,11 @@ pub(crate) const STYLES: [(&str, &str, &str); 3] = [
         "doux",
         "Doux",
         "Ton doux et feutré, presque à voix basse, comme le soir quand la maison s'endort. Débit lent, français naturel de France.",
+    ),
+    (
+        "jarvis",
+        "Jarvis",
+        "Voix d'un majordome numérique britannique d'exception, d'un calme absolu. Ton posé, précis et distingué, d'une politesse irréprochable, avec une pointe d'humour pince-sans-rire et un soupçon de condescendance affectueuse. Voix grave et feutrée, débit mesuré et régulier, diction impeccable. Français de France soigné, prononciation standard, sans aucun accent québécois ni américain. Jamais d'enthousiasme excessif.",
     ),
 ];
 

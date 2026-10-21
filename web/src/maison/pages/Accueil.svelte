@@ -17,6 +17,8 @@
   import DeviceCard from '../ui/DeviceCard.svelte';
   import SensorCard from '../ui/SensorCard.svelte';
   import SpeakerCard from '../ui/SpeakerCard.svelte';
+  import PlayerCard from '../ui/PlayerCard.svelte';
+  import { has } from '../lib/speakers.js';
   import CoverTile from '../ui/CoverTile.svelte';
   import PrinterCard from '../ui/PrinterCard.svelte';
   import PaperPrinterCard from '../ui/PaperPrinterCard.svelte';
@@ -28,6 +30,9 @@
 
   // ---- the arrangement (kept on this device) -------------------------------------
   let editing = $state(false);
+  /** How a speaker's player shows on the dashboard: volume and progress, no
+   *  grouping or library (those are the Speakers page's). */
+  const PLAYER_LOOK = { sections: { volumes: true, join: false, library: false, progress: true }, ambient: true };
   let gridEl = $state();
   let gridWidth = $state(1200);
   let gridHeight = $state(0);
@@ -455,7 +460,12 @@
       {:else if kind === 'cover'}
         <CoverTile id={tile.device} name={tile.label} />
       {:else if kind === 'speaker'}
-        <SpeakerCard id={tile.device} name={tile.label} />
+        {#if has(tile.device, 'group_leader')}
+          <!-- A Sonos room: the same player as on the Speakers page. -->
+          <PlayerCard members={[d]} rooms={[]} look={PLAYER_LOOK} groupKey={tile.id} />
+        {:else}
+          <SpeakerCard id={tile.device} name={tile.label} />
+        {/if}
       {:else if kind === 'tv'}
         <Remote tv={tile.device} speaker={speaker} />
       {:else if kind === 'printer'}

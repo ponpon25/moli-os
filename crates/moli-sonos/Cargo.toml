@@ -14,7 +14,7 @@ moli-net.workspace = true
 moli-runtime.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
 tracing.workspace = true
 
 [lints]

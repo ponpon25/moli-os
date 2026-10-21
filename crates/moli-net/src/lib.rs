@@ -5,6 +5,7 @@
 //! time (trust on first use) and enforced afterwards: another machine
 //! answering on that address is refused.
 
+pub mod es256;
 pub mod h264;
 pub mod lan;
 mod legacy;
@@ -619,6 +620,17 @@ pub async fn plain_with_headers(
     port: u16,
     request: Request<Full<Bytes>>,
 ) -> anyhow::Result<(StatusCode, http::HeaderMap, Bytes)> {
+    plain_within(host, port, request, TIMEOUT).await
+}
+
+/// Same, for a device that may take longer than [`TIMEOUT`] to answer (a
+/// speaker filling its queue with a long playlist).
+pub async fn plain_within(
+    host: &str,
+    port: u16,
+    request: Request<Full<Bytes>>,
+    limit: Duration,
+) -> anyhow::Result<(StatusCode, http::HeaderMap, Bytes)> {
     let exchange = async {
         let tcp = TcpStream::connect((host, port))
             .await
@@ -633,7 +645,7 @@ pub async fn plain_with_headers(
         let body = read_body(response.into_body(), MAX_BODY).await?;
         anyhow::Ok((status, headers, body))
     };
-    tokio::time::timeout(TIMEOUT, exchange)
+    tokio::time::timeout(limit, exchange)
         .await
         .with_context(|| format!("{host} did not answer in time"))?
 }
@@ -662,6 +674,28 @@ pub async fn web(
     tokio::time::timeout(limit, exchange)
         .await
         .with_context(|| format!("{host} did not answer in time"))?
+}
+
+/// One `GET` to a web API over HTTPS (public CAs), JSON expected, with an
+/// optional bearer token and other headers. The answer is capped at 2 MiB.
+pub async fn https_get(
+    host: &str,
+    path: &str,
+    bearer: Option<&str>,
+    headers: &[(&str, &str)],
+) -> anyhow::Result<(StatusCode, Bytes)> {
+    let mut request = Request::builder()
+        .method(Method::GET)
+        .uri(path)
+        .header("accept", "application/json");
+    if let Some(token) = bearer {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let request = request.body(Full::new(Bytes::new()))?;
+    web(host, 443, true, request, Duration::from_secs(8), 2 * MIB).await
 }
 
 /// Like [`web`], with the answer's headers too (a service that sets cookies).

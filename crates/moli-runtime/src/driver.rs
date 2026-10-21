@@ -169,6 +169,14 @@ impl DriverCtx {
         self.hub.voice_brain()
     }
 
+    /// Declares that `device` (one of ours) has a cover to show for what
+    /// it plays.
+    pub fn provide_cover(&self, device: &DeviceId, source: Arc<dyn crate::media::CoverSource>) {
+        if self.owns(device) {
+            self.hub.provide_cover(device, source);
+        }
+    }
+
     /// Declares that `device` (one of ours) can produce images on demand.
     pub fn provide_snapshots(
         &self,

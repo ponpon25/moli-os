@@ -12,6 +12,9 @@
   "serveur.cle.tuya_humain": "only a person (with the code) can give keys",
   "serveur.cle.tuya_pilote_inconnu": "no tuya driver with that name",
   "serveur.cle.tuya_invalide": "these are not Tuya keys (letters and digits: the Access ID, then the 32-character Access Secret)",
+  "serveur.cle.apple_humain": "only a person (code) connects an Apple Music account",
+  "serveur.cle.apple_absente": "Apple Music is not set up on these speakers",
+  "serveur.cle.apple_invalide": "this is not an Apple Music token",
 
   "serveur.machine.jeton_refuse": "token refused",
   "serveur.machine.foyer_seulement": "household only",

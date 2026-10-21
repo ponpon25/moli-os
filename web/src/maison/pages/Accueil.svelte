@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { energy } from '../lib/energy-live.svelte.js';
-  import { home, hub, value, device, isOn, deviceKind, clock, num, relative, lastSeen, roomList, lampsOf, nameOf, doorOpen, leak, lowBattery, act, pending } from '../lib/home.svelte.js';
+  import { home, hub, value, device, isOn, clock, num, relative, lastSeen, roomList, lampsOf, nameOf, doorOpen, leak, lowBattery, act, pending } from '../lib/home.svelte.js';
   import { isPrinter, phase } from '../lib/printers.js';
   import { t, locale } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
@@ -13,7 +13,8 @@
   import AmbiancePicker from '../ui/AmbiancePicker.svelte';
   import Routines from '../ui/Routines.svelte';
   import SkyHero from '../ui/SkyHero.svelte';
-  import { ROW, tileOf, setTile, reorder, saveDashboard, resetDashboard, onDashboard } from '../lib/layout.svelte.js';
+  import { ROW, setTile, reorder, saveDashboard, resetDashboard } from '../lib/layout.svelte.js';
+  import { catalogue, showTile, isClim } from '../lib/tiles.svelte.js';
 
   const cfg = $derived(home.config ?? {});
 
@@ -27,31 +28,6 @@
   /** wide tiles are passed over from above or below, narrow ones from the side */
   let across = $state(false);
 
-  /** The tiles, in their default order, and their default width in columns (of 12). */
-  const DEFS = [
-    { id: 'sky', w: 12 },
-    { id: 'modes', w: 12 },
-    { id: 'notices', w: 12 },
-    { id: 'alarm', w: 12 },
-    { id: 'lights', w: 8 },
-    { id: 'energy', w: 4 },
-    { id: 'routines', w: 4 },
-    { id: 'climate', w: 12 },
-    { id: 'doorbell', w: 5 },
-    { id: 'remote', w: 3 },
-    { id: 'outside', w: 4 },
-  ];
-  /** The clims on the dashboard: those the layout file names, and every other
-   *  clim Moli knows unless the family took it off (Équipements). */
-  const clims = $derived.by(() => {
-    const listed = (cfg.favorites?.climate ?? []).filter((c) => onDashboard(c.id));
-    const ids = new Set(listed.map((c) => c.id));
-    const others = Object.values(hub.devices)
-      .filter((d) => deviceKind(d) === 'climate' && !ids.has(d.id) && onDashboard(d.id) && !(cfg.hidden ?? []).includes(d.id))
-      .map((d) => ({ id: d.id, name: nameOf(d.id) }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    return [...listed, ...others];
-  });
   /** A tile shows only if the house has what it is about. */
   const avail = $derived({
     sky: true,
@@ -61,16 +37,11 @@
     lights: true,
     energy: !energy.missing,
     routines: true,
-    climate: clims.length > 0,
     doorbell: !!bell,
     remote: !!tv,
     outside: !!(out.air || out.weather || out.pool),
   });
-  const tiles = $derived(
-    DEFS.map((d, i) => ({ id: d.id, ...tileOf(d.id, { on: true, w: d.w, h: 0, order: i }) }))
-      .filter((d) => avail[d.id])
-      .sort((a, b) => a.order - b.order),
-  );
+  const tiles = $derived(catalogue().filter((d) => isClim(d.id) || avail[d.id]));
 
   function startDrag(e, id) {
     dragId = id;
@@ -274,10 +245,12 @@
   </header>
   {#if editing}<p class="hint">{t('maison.dashboard.aide')}</p>{/if}
 
-  {#snippet body(id)}
-    {#if id === 'sky'}
+  {#snippet body(tile)}
+    {#if isClim(tile.id)}
+      <ClimateCard id={tile.device} name={tile.label} />
+    {:else if tile.id === 'sky'}
       <SkyHero />
-    {:else if id === 'modes'}
+    {:else if tile.id === 'modes'}
     <div class="modes" role="radiogroup" aria-label={t('maison.accueil.mode_maison')}>
       {#each modes as m (m)}
         <button role="radio" aria-checked={m === mode} class:on={m === mode} disabled={pending(modeDevice.id, 'state')} onclick={() => setMode(m)}>
@@ -292,7 +265,7 @@
       {/if}
     </div>
   
-    {:else if id === 'notices'}
+    {:else if tile.id === 'notices'}
   <section class="notices" aria-label={t('maison.accueil.a_savoir')}>
     {#each notices as n (n.text)}
       <a class="chip {n.tone}" href={n.href}><Icon name={n.icon} size={16} />{n.text}</a>
@@ -302,9 +275,9 @@
   </section>
 
 
-    {:else if id === 'alarm'}
+    {:else if tile.id === 'alarm'}
       <AlarmCard id={alarm.id} />
-    {:else if id === 'lights'}
+    {:else if tile.id === 'lights'}
     <section class="card lights" >
       <div class="card-head">
         <h2><Icon name="light" size={18} />{t('maison.accueil.lumieres')} <span class="count">{litCount ? t('maison.accueil.allumees', { count: litCount }) : t('maison.accueil.tout_eteint')}</span></h2>
@@ -331,21 +304,11 @@
     </section>
 
 
-    {:else if id === 'energy'}
+    {:else if tile.id === 'energy'}
       <EnergyCard />
-    {:else if id === 'routines'}
+    {:else if tile.id === 'routines'}
       <Routines />
-    {:else if id === 'climate'}
-      <section class="card climate">
-        <div class="card-head"><h2><Icon name="air-conditioner" size={18} />{t('maison.accueil.clim')}</h2></div>
-        <div class="clims">
-          {#each clims as c (c.id)}
-            <ClimateCard id={c.id} name={c.name} />
-          {/each}
-        </div>
-      </section>
-    
-    {:else if id === 'doorbell'}
+    {:else if tile.id === 'doorbell'}
       <section class="card doorbell">
         <div class="card-head">
           <h2><Icon name="bell" size={18} />{t('maison.accueil.devant_porte')}</h2>
@@ -355,7 +318,7 @@
         <p class="muted small">{passage ? t('maison.accueil.dernier_passage', { when: relative(passage, home.now) }) : t('maison.accueil.personne')}</p>
       </section>
     
-    {:else if id === 'remote'}
+    {:else if tile.id === 'remote'}
     <a class="card remote" href="#/salon">
       <span class="tv-object" aria-hidden="true">
         <span class="screen" class:lit={tvOn}></span>
@@ -368,7 +331,7 @@
       <span class="go"><Icon name="arrow-top-right" size={20} /></span>
     </a>
     
-    {:else if id === 'outside'}
+    {:else if tile.id === 'outside'}
     <a class="card outside" href="#/dehors">
       <div class="card-head"><h2><Icon name="flower-outline" size={18} />{t('maison.accueil.dehors')}</h2><span class="more" aria-hidden="true"><Icon name="arrow-top-right" size={18} /></span></div>
       <div class="facts">
@@ -400,18 +363,18 @@
           ondrop={(e) => drop(e, tile.id)}
           ondragend={() => ((dragId = null), (overId = null))}
           role="group"
-          aria-label={t(`maison.dashboard.t_${tile.id}`)}
+          aria-label={tile.label}
         >
           {#if editing}
             <div class="bar">
               <span class="grip" aria-hidden="true"><Icon name="drag" size={18} /></span>
-              <b>{t(`maison.dashboard.t_${tile.id}`)}</b>
-              <button onclick={() => setTile(tile.id, { on: !tile.on })} title={tile.on ? t('maison.dashboard.masquer') : t('maison.dashboard.afficher')} aria-label={tile.on ? t('maison.dashboard.masquer') : t('maison.dashboard.afficher')}>
+              <b>{tile.label}</b>
+              <button onclick={() => showTile(tile, !tile.on)} title={tile.on ? t('maison.dashboard.masquer') : t('maison.dashboard.afficher')} aria-label={tile.on ? t('maison.dashboard.masquer') : t('maison.dashboard.afficher')}>
                 <Icon name={tile.on ? 'eye' : 'eye-off'} size={16} />
               </button>
             </div>
           {/if}
-          <div class="inner">{@render body(tile.id)}</div>
+          <div class="inner">{@render body(tile)}</div>
           {#if editing && tile.on}
             <button class="grow" onpointerdown={(e) => startResize(e, tile)} title={t('maison.dashboard.redimensionner')} aria-label={t('maison.dashboard.redimensionner')}>
               <Icon name="resize" size={18} />
@@ -527,6 +490,8 @@
   .grid {
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
+    /* A tile that fits a hole higher up takes it: a hidden tile leaves no gap. */
+    grid-auto-flow: dense;
     gap: 20px;
     align-items: start;
   }
@@ -535,9 +500,18 @@
     position: relative;
     grid-column: span var(--w, 12);
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     min-width: 0;
     container-type: inline-size;
+  }
+
+  /* A card that shows nothing (no routine, say) takes no place, nor a gap. */
+  .accueil:not(.editing) .widget:has(> .inner:empty) {
+    display: none;
+  }
+
+  .editing .widget {
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .inner {
@@ -711,12 +685,6 @@
     gap: 12px;
   }
 
-  .clims {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
-    gap: 12px;
-  }
-
   .small {
     font-size: 13px;
     margin-top: 10px;
@@ -823,10 +791,6 @@
 
     .tiles {
       grid-template-columns: 1fr 1fr;
-    }
-
-    .clims {
-      grid-template-columns: 1fr;
     }
   }
 </style>

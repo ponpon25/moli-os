@@ -391,7 +391,7 @@ impl Client {
         if matches!(auth, Auth::Session)
             && (status == http::StatusCode::UNAUTHORIZED
                 || errors.contains("60067")
-                || errors.contains("Invalid Session"))
+                || ends_session(&errors))
         {
             return Err(ApiError::SessionExpired);
         }
@@ -742,9 +742,23 @@ fn first_error(answer: &Json) -> String {
         .to_owned()
 }
 
+/// Whether the errors say the session is over. Verisure writes « Invalid
+/// session » (lower case) as often as « Invalid Session »: it must not matter,
+/// or a dead session is taken for a refusal and never renewed.
+fn ends_session(errors: &str) -> bool {
+    errors.to_ascii_lowercase().contains("invalid session")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dead_session_is_known_whatever_its_case() {
+        assert!(ends_session(r#"[{"message":"Invalid session. Please, try again later."}]"#));
+        assert!(ends_session(r#"[{"message":"Invalid Session"}]"#));
+        assert!(!ends_session(r#"[{"message":"Invalid credentials"}]"#));
+    }
 
     #[test]
     fn countries_have_their_domain_and_language() {

@@ -535,7 +535,22 @@ async fn order(
             }
         };
     }
-    let reference = match client.begin_command(installation, verb, current).await {
+    let begun = match client.begin_command(installation, verb, current).await {
+        // The session ended under us: renewed, and the order goes once more.
+        Err(ApiError::SessionExpired) => match authenticate(client, ctx).await {
+            Ok(()) => client.begin_command(installation, verb, current).await,
+            Err(Stop::Park(reason)) => {
+                command.reply(Err(reason.clone()));
+                return Err(Stop::Park(reason));
+            }
+            Err(Stop::Fail(e)) => {
+                command.reply(Err(format!("{e:#}")));
+                return Ok(());
+            }
+        },
+        other => other,
+    };
+    let reference = match begun {
         Ok(reference) => reference,
         Err(e) => {
             // Said where a person looks (the card), not only to the caller.

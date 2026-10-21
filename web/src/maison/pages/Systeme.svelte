@@ -7,6 +7,7 @@
   import AssistantExchanges from '../ui/AssistantExchanges.svelte';
   import AlexaAccount from '../ui/AlexaAccount.svelte';
   import DashboardCode from '../ui/DashboardCode.svelte';
+  import DashboardSettings from '../ui/DashboardSettings.svelte';
   import OlvidCard from '../ui/OlvidCard.svelte';
   import SecurityDesk from '../ui/SecurityDesk.svelte';
   import Energie from './Energie.svelte';
@@ -19,6 +20,7 @@
 
   const SECTIONS = [
     { id: 'apparence', icon: 'sun' },
+    { id: 'dashboard', icon: 'dashboard' },
     { id: 'personnes', icon: 'account' },
     { id: 'acces', icon: 'lock' },
     { id: 'securite', icon: 'shield' },
@@ -213,6 +215,8 @@
             {/each}
           </div>
         </section>
+      {:else if section === 'dashboard'}
+        <DashboardSettings />
       {:else if section === 'personnes'}
         <PeopleCard />
       {:else if section === 'acces'}

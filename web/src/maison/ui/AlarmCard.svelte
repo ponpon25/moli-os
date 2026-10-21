@@ -1,5 +1,5 @@
 <script>
-  import { value, act, pending } from '../lib/home.svelte.js';
+  import { home, value, since, act, pending } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
 
@@ -15,7 +15,13 @@
   ];
   const state = $derived(value(id, 'state'));
   const mode = $derived(value(id, 'mode'));
-  const last = $derived(value(id, 'last_order'));
+  // An order's outcome says so for a few minutes; after that it is old news.
+  const LAST_FOR = 10 * 60_000;
+  const last = $derived.by(() => {
+    const text = value(id, 'last_order');
+    const at = since(id, 'last_order');
+    return text && (at == null || home.now - at < LAST_FOR) ? text : null;
+  });
   const busy = $derived(pending(id, 'mode'));
 
   // How the state looks: calm green, partial orange, full red.

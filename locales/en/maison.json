@@ -279,6 +279,8 @@
   "maison.equipements.rien": "No device matches.",
   "maison.equipements.autres_vues": "Other views",
   "maison.equipements.echec": "Room not changed: {error}",
+  "maison.equipements.echec_nom": "Name not changed: {error}",
+  "maison.equipements.renommer": "Rename {name}",
   "maison.historique.titre": "History",
   "maison.historique.sous_titre": "What was ordered or changed in the house, and by whom.",
   "maison.historique.chercher": "Search a device, a person…",

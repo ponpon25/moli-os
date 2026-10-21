@@ -1,6 +1,6 @@
 <script>
   import { hub, roomList, roomOf, nameOf, deviceKind, hidden, reachable, roomNamed, home } from '../lib/home.svelte.js';
-  import { layout, addRoom, setDeviceRoom } from '../lib/layout.svelte.js';
+  import { layout, addRoom, setDeviceRoom, setDeviceName } from '../lib/layout.svelte.js';
   import { catalogue, showTile, available, deviceOnDashboard, showDevice } from '../lib/tiles.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
@@ -83,6 +83,23 @@
     await setDeviceRoom(id, value || null);
   }
 
+  /** the device being renamed, and what is typed */
+  let renaming = $state(null);
+  let nameDraft = $state('');
+
+  function startRename(x) {
+    renaming = x.d.id;
+    nameDraft = x.name;
+  }
+
+  async function rename(x) {
+    if (renaming !== x.d.id) return;
+    renaming = null;
+    const name = nameDraft.trim();
+    if (name === x.name) return;
+    await setDeviceName(x.d.id, name);
+  }
+
   async function create(e) {
     e.preventDefault();
     const name = addRoom(draft);
@@ -138,7 +155,23 @@
           <li class:off={!reachable(x.d.id)}>
             <span class="glyph"><Icon name={KIND_ICON[x.kind] ?? 'info'} size={20} /></span>
             <span class="who">
-              <b>{x.name}</b>
+              {#if renaming === x.d.id}
+                <!-- svelte-ignore a11y_autofocus -->
+                <input
+                  class="rename"
+                  bind:value={nameDraft}
+                  maxlength="60"
+                  autofocus
+                  aria-label={t('maison.equipements.renommer', { name: x.name })}
+                  onblur={() => rename(x)}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                    if (e.key === 'Escape') renaming = null;
+                  }}
+                />
+              {:else}
+                <b>{x.name}<button type="button" class="pen" title={t('maison.equipements.renommer', { name: x.name })} aria-label={t('maison.equipements.renommer', { name: x.name })} onclick={() => startRename(x)}>✎</button></b>
+              {/if}
               <small>
                 {[x.d.manufacturer, x.d.model].filter(Boolean).join(' ') || x.d.id}
                 {#if !reachable(x.d.id)} · {t('maison.equipements.hors_ligne')}{/if}
@@ -326,6 +359,30 @@
     font: inherit;
     font-size: 14px;
     background: var(--surface);
+    color: var(--ink);
+  }
+
+  .rename {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    padding: 4px 8px;
+    font: inherit;
+    font-weight: 650;
+    background: var(--surface);
+    color: var(--ink);
+  }
+
+  .pen {
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 6px;
+  }
+
+  .pen:hover {
     color: var(--ink);
   }
 

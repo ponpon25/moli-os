@@ -65,6 +65,25 @@ export async function setDeviceRoom(id, room) {
   }
 }
 
+/** Names a device (empty: back to the name its driver gave). */
+export async function setDeviceName(id, name) {
+  try {
+    const res = await fetch(`/api/labels/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-moli-origin': 'ui' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error ?? res.statusText);
+    }
+    return true;
+  } catch (err) {
+    note(t('maison.equipements.echec_nom', { error: err.message }), 'error');
+    return false;
+  }
+}
+
 /** Takes a room away: its devices lose the family's label; a room the
  *  bridges still name (or the layout file) is hidden instead. */
 export async function removeRoom(name, devices) {

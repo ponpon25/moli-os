@@ -73,7 +73,14 @@ function applyEvent(e) {
       hub.changed[e.point] = e.ts;
       // Only the requested value confirms a command; anything else may be
       // an older report still in flight. The timeout in command() is the net.
-      if (e.point in hub.pending && hub.pending[e.point] === e.value) delete hub.pending[e.point];
+      if (e.point in hub.pending && hub.pending[e.point] === e.value) {
+        // A unit slow to take an order (an air conditioner behind a cloud)
+        // may confirm early and then report its old state again: the asked
+        // value stays shown for a moment.
+        const wait = (settleUntil.get(e.point) ?? 0) - Date.now();
+        if (wait <= 0) delete hub.pending[e.point];
+        else setTimeout(() => hub.pending[e.point] === e.value && delete hub.pending[e.point], wait);
+      }
       break;
     }
     case 'availability':
@@ -214,8 +221,25 @@ function toast(text) {
 
 const headers = { 'content-type': 'application/json', 'x-moli-origin': 'ui' };
 
-export async function command(point, value) {
+/** When an asked value may stop being shown in place of the reported one. */
+const settleUntil = new Map();
+const SETTLE_MS = 10_000;
+
+/** Notes an order just sent: the asked value is shown at once, and, for a
+ *  unit that heats or cools (slow to take orders and to report them), kept
+ *  for a few seconds even when its old state is reported again. Returns how
+ *  long to wait for the unit before giving up on the order. */
+export function asked(point, value) {
   hub.pending[point] = value;
+  const [id] = splitPoint(point);
+  const slow = hub.devices[id]?.points?.some((p) => p.key === 'target_temperature');
+  if (slow) settleUntil.set(point, Date.now() + SETTLE_MS);
+  else settleUntil.delete(point);
+  return slow ? 30_000 : 8000;
+}
+
+export async function command(point, value) {
+  const giveUp = asked(point, value);
   try {
     const res = await fetch('/api/command', {
       method: 'POST',
@@ -233,7 +257,7 @@ export async function command(point, value) {
     // Confirmation arrives as a state event; give up waiting after a while.
     setTimeout(() => {
       if (hub.pending[point] === value) delete hub.pending[point];
-    }, 8000);
+    }, giveUp);
   } catch (err) {
     delete hub.pending[point];
     toast(t('systeme.hub.commande_refusee', { message: err.message }));

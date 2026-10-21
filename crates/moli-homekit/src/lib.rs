@@ -314,6 +314,13 @@ impl Shared {
         }
     }
 
+    fn climate_on(&self, on: &PointId) -> bool {
+        matches!(
+            self.hub.state(on).map(|s| s.value),
+            Some(moli_core::Value::Bool(true))
+        )
+    }
+
     fn offline(&self, point: &PointId) -> bool {
         point
             .split()
@@ -328,6 +335,7 @@ impl Shared {
     }
 
     /// The value of a characteristic, or a HAP status.
+    #[allow(clippy::too_many_lines)] // one arm per kind of characteristic
     pub fn read(&self, c: &Characteristic) -> Result<Json, i32> {
         use accessories::{
             Bind, ST_COMMUNICATION, ST_WRITE_ONLY, arm_current_of, arm_target_of, hex_to_hs, to_hap,
@@ -406,6 +414,32 @@ impl Shared {
                     .or_else(from_mode)
                     .map(|n| serde_json::json!(n))
                     .ok_or(ST_COMMUNICATION)
+            }
+            Bind::ClimateCurrent {
+                on,
+                mode,
+                room,
+                target,
+                modes,
+            } => {
+                if self.offline(on) {
+                    return Err(ST_COMMUNICATION);
+                }
+                let number = |p: &PointId| self.hub.state(p).and_then(|s| s.value.as_f64());
+                let power = self.climate_on(on);
+                let mode = self.state_text(mode).unwrap_or_default();
+                Ok(serde_json::json!(modes.current_of(
+                    power,
+                    &mode,
+                    number(room).zip(number(target))
+                )))
+            }
+            Bind::ClimateTarget { on, mode, modes } => {
+                if self.offline(on) {
+                    return Err(ST_COMMUNICATION);
+                }
+                let mode = self.state_text(mode).unwrap_or_default();
+                Ok(serde_json::json!(modes.target_of(self.climate_on(on), &mode)))
             }
             Bind::ArmTarget(point) => {
                 if self.offline(point) {

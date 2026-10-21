@@ -43,6 +43,7 @@ const SVC_LIGHT_LEVEL: &str = "84";
 const SVC_LEAK: &str = "83";
 const SVC_SMOKE: &str = "87";
 const SVC_SECURITY: &str = "7E";
+const SVC_THERMOSTAT: &str = "4A";
 const SVC_CAMERA: &str = "110";
 const SVC_MICROPHONE: &str = "112";
 const SVC_SPEAKER: &str = "113";
@@ -72,6 +73,10 @@ const C_LEAK: &str = "70";
 const C_SMOKE: &str = "76";
 const C_SEC_CURRENT: &str = "66";
 const C_SEC_TARGET: &str = "67";
+const C_TH_CURRENT: &str = "F";
+const C_TH_TARGET: &str = "33";
+const C_TARGET_TEMPERATURE: &str = "35";
+const C_DISPLAY_UNITS: &str = "36";
 const C_SUPPORTED_VIDEO: &str = "114";
 const C_SUPPORTED_AUDIO: &str = "115";
 const C_SUPPORTED_RTP: &str = "116";
@@ -105,6 +110,8 @@ pub enum Kinds {
     Leak,
     Smoke,
     Alarm,
+    /// An air conditioner (thermostat).
+    Climate,
     /// Live video (a camera of its own, apart from the device's sensors).
     Camera,
 }
@@ -123,6 +130,7 @@ impl Kinds {
             Self::Leak => "leak",
             Self::Smoke => "smoke",
             Self::Alarm => "alarm",
+            Self::Climate => "climate",
             Self::Camera => "camera",
         }
     }
@@ -143,11 +151,94 @@ pub enum Bind {
         mode: Option<PointId>,
     },
     ArmTarget(PointId),
+    /// The thermostat's current state (off, heating, cooling).
+    ClimateCurrent {
+        on: PointId,
+        mode: PointId,
+        room: PointId,
+        target: PointId,
+        modes: ClimateModes,
+    },
+    /// The thermostat's target state (off, heat, cool, auto): the unit's
+    /// power and mode together.
+    ClimateTarget {
+        on: PointId,
+        mode: PointId,
+        modes: ClimateModes,
+    },
     /// A characteristic of a camera's stream management.
     Camera {
         device: DeviceId,
         what: CameraChar,
     },
+}
+
+/// The words an air conditioner's `mode` point uses for the three modes
+/// HomeKit knows (it has none for dry or fan-only).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClimateModes {
+    pub auto: Option<Arc<str>>,
+    pub heat: Option<Arc<str>>,
+    pub cool: Option<Arc<str>>,
+}
+
+impl ClimateModes {
+    fn of(values: &[Arc<str>]) -> Self {
+        let find = |words: &[&str]| {
+            values
+                .iter()
+                .find(|v| words.contains(&v.to_lowercase().as_str()))
+                .cloned()
+        };
+        Self {
+            auto: find(&["auto"]),
+            heat: find(&["chaud", "chauffage", "heat", "heating"]),
+            cool: find(&["froid", "clim", "cool", "cooling"]),
+        }
+    }
+
+    /// HomeKit's target state: 0 off, 1 heat, 2 cool, 3 auto (the modes it
+    /// has no word for, dry and fan, show as auto).
+    pub fn target_of(&self, on: bool, mode: &str) -> i64 {
+        if !on {
+            0
+        } else if self.heat.as_deref() == Some(mode) {
+            1
+        } else if self.cool.as_deref() == Some(mode) {
+            2
+        } else {
+            3
+        }
+    }
+
+    /// The mode a target state asks for (off asks for none).
+    pub fn mode_of(&self, target: i64) -> Option<&Arc<str>> {
+        match target {
+            1 => self.heat.as_ref(),
+            2 => self.cool.as_ref(),
+            3 => self.auto.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// HomeKit's current state: 0 off, 1 heating, 2 cooling. In a mode that
+    /// picks by itself, the room against the setpoint tells (`temperatures`
+    /// are the room's and the setpoint).
+    pub fn current_of(&self, on: bool, mode: &str, temperatures: Option<(f64, f64)>) -> i64 {
+        if !on {
+            0
+        } else if self.heat.as_deref() == Some(mode) {
+            1
+        } else if self.cool.as_deref() == Some(mode) {
+            2
+        } else {
+            match temperatures {
+                Some((room, target)) if room < target - 0.5 => 1,
+                Some((room, target)) if room > target + 0.5 => 2,
+                _ => 0,
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -359,12 +450,21 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
         kinds.push(Kinds::Alarm);
     }
 
+    // An air conditioner: a writable on/off, a `mode` choice and a target
+    // temperature. Its on/off and room temperature belong to that service.
+    let mut climate_points: Vec<&str> = Vec::new();
+    if let Some(service) = climate_of(device, name, &mut climate_points) {
+        services.push(service);
+        kinds.push(Kinds::Climate);
+    }
+
     // Lights and switches.
     let has_power = device.points.iter().any(|p| p.semantic == Semantic::Power);
     let switches: Vec<&PointSpec> = device
         .points
         .iter()
         .filter(|p| p.semantic == Semantic::OnOff && writable(p) && p.kind == Kind::Binary)
+        .filter(|p| !climate_points.contains(&&*p.key))
         .collect();
     let single = switches.len() == 1;
     for on in &switches {
@@ -493,6 +593,7 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
         .points
         .iter()
         .filter(|p| p.access.read && !writable(p))
+        .filter(|p| !climate_points.contains(&&*p.key))
         .collect();
     let many = sensors.iter().filter(|p| sensor_kind(p).is_some()).count() > 1;
     for p in sensors {
@@ -611,6 +712,129 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
     kinds.sort();
     kinds.dedup();
     (services, kinds)
+}
+
+#[allow(clippy::too_many_lines)] // one characteristic after the other
+/// The thermostat service of an air conditioner, and the keys of the
+/// points it takes over.
+fn climate_of<'a>(
+    device: &'a Device,
+    name: &str,
+    taken: &mut Vec<&'a str>,
+) -> Option<ServiceSpec> {
+    let id = |key: &str| PointId::new(&device.id, key);
+    let on = device.points.iter().find(|p| {
+        p.semantic == Semantic::OnOff && writable(p) && p.kind == Kind::Binary && &*p.key == "on"
+    })?;
+    let (mode, values) = device.points.iter().find_map(|p| match &p.kind {
+        Kind::Enum { values } if &*p.key == "mode" && writable(p) && p.semantic != Semantic::Control => {
+            Some((p, values))
+        }
+        _ => None,
+    })?;
+    let target = device.points.iter().find(|p| {
+        &*p.key == "target_temperature" && writable(p) && matches!(p.kind, Kind::Numeric { .. })
+    })?;
+    let room = device.points.iter().find(|p| {
+        p.semantic == Semantic::Temperature
+            && !writable(p)
+            && matches!(p.kind, Kind::Numeric { .. })
+    })?;
+    let modes = ClimateModes::of(values);
+    if modes.cool.is_none() && modes.heat.is_none() {
+        return None;
+    }
+    let (lo, hi) = numeric(target);
+    // Targets HomeKit can pick among, in its numbering.
+    let mut valid = vec![0];
+    valid.extend((1..=3).filter(|t| modes.mode_of(*t).is_some()));
+    let temperature = |key: &str, perms, format_description: &'static str, kind, lo: f64, hi: f64| {
+        spec(
+            kind,
+            "float",
+            perms,
+            Bind::Point(
+                id(key),
+                Conv::Clamped { lo, hi },
+            ),
+            format_description,
+        )
+        .meta(Meta {
+            min: Some(lo),
+            max: Some(hi),
+            step: Some(if kind == C_TARGET_TEMPERATURE { 0.5 } else { 0.1 }),
+            unit: Some("celsius"),
+            ..Meta::default()
+        })
+    };
+    let chars = vec![
+        name_char(name),
+        spec(
+            C_TH_CURRENT,
+            "uint8",
+            READ_NOTIFY,
+            Bind::ClimateCurrent {
+                on: id(&on.key),
+                mode: id(&mode.key),
+                room: id(&room.key),
+                target: id(&target.key),
+                modes: modes.clone(),
+            },
+            "Current Heating Cooling State",
+        )
+        .meta(Meta {
+            valid_values: Some(vec![0, 1, 2]),
+            ..Meta::default()
+        }),
+        spec(
+            C_TH_TARGET,
+            "uint8",
+            READ_WRITE_NOTIFY,
+            Bind::ClimateTarget {
+                on: id(&on.key),
+                mode: id(&mode.key),
+                modes,
+            },
+            "Target Heating Cooling State",
+        )
+        .meta(Meta {
+            valid_values: Some(valid),
+            ..Meta::default()
+        }),
+        temperature(
+            &room.key,
+            READ_NOTIFY,
+            "Current Temperature",
+            C_TEMPERATURE,
+            -270.0,
+            100.0,
+        ),
+        temperature(
+            &target.key,
+            READ_WRITE_NOTIFY,
+            "Target Temperature",
+            C_TARGET_TEMPERATURE,
+            lo,
+            hi,
+        ),
+        // Degrees Celsius; the Home app shows its own unit anyway.
+        spec(
+            C_DISPLAY_UNITS,
+            "uint8",
+            READ_WRITE_NOTIFY,
+            Bind::Static(json!(0)),
+            "Temperature Display Units",
+        )
+        .meta(Meta {
+            valid_values: Some(vec![0, 1]),
+            ..Meta::default()
+        }),
+    ];
+    taken.extend([&*on.key, &*room.key]);
+    Some(ServiceSpec {
+        kind: SVC_THERMOSTAT,
+        chars,
+    })
 }
 
 fn sensor_kind(p: &PointSpec) -> Option<Kinds> {
@@ -889,6 +1113,14 @@ impl Catalog {
                     self.index.insert((accessory.aid, ch.iid), (a, s, c));
                     let points: Vec<&PointId> = match &ch.bind {
                         Bind::Point(p, _) | Bind::Color(p, _) | Bind::ArmTarget(p) => vec![p],
+                        Bind::ClimateTarget { on, mode, .. } => vec![on, mode],
+                        Bind::ClimateCurrent {
+                            on,
+                            mode,
+                            room,
+                            target,
+                            ..
+                        } => vec![on, mode, room, target],
                         Bind::ArmCurrent { state, mode } => {
                             state.iter().chain(mode.iter()).collect()
                         }
@@ -1711,5 +1943,37 @@ mod tests {
             c.watching(&PointId::new(&lamp.device.id, "nope"))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn an_air_conditioner_is_a_thermostat() {
+        let modes = Kind::Enum {
+            values: ["auto", "froid", "chaud", "déshumidification", "ventilation"]
+                .into_iter()
+                .map(Arc::from)
+                .collect(),
+        };
+        let clim = view(
+            "clim",
+            vec![
+                point("on", Kind::Binary, true, Semantic::OnOff),
+                point("mode", modes, true, Semantic::Other),
+                point("target_temperature", range(16.0, 30.0), true, Semantic::Config),
+                point("temperature", range(0.0, 50.0), false, Semantic::Temperature),
+            ],
+        );
+        let c = catalog(std::slice::from_ref(&clim));
+        // One service: no extra switch nor temperature sensor.
+        assert_eq!(types(&c, 2), ["3E", "4A"]);
+        assert_eq!(kinds_of(&clim.device), [Kinds::Climate]);
+        let kinds: Vec<_> = c.accessories[1].services[1].chars.iter().map(|ch| ch.kind).collect();
+        assert_eq!(kinds, ["23", "F", "33", "11", "35", "36"]);
+        let m = ClimateModes::of(&["auto".into(), "froid".into(), "chaud".into()]);
+        assert_eq!(m.target_of(true, "chaud"), 1);
+        assert_eq!(m.target_of(false, "chaud"), 0);
+        assert_eq!(m.target_of(true, "déshumidification"), 3);
+        assert_eq!(m.current_of(true, "froid", None), 2);
+        assert_eq!(m.current_of(false, "froid", None), 0);
+        assert_eq!(m.current_of(true, "auto", Some((18.0, 22.0))), 1);
     }
 }

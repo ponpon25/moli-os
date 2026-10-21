@@ -279,6 +279,8 @@
   "maison.equipements.rien": "Aucun équipement ne correspond.",
   "maison.equipements.autres_vues": "Autres vues",
   "maison.equipements.echec": "Pièce non changée : {error}",
+  "maison.equipements.echec_nom": "Nom non changé : {error}",
+  "maison.equipements.renommer": "Renommer {name}",
   "maison.historique.titre": "Historique",
   "maison.historique.sous_titre": "Ce qui a été commandé ou modifié dans la maison, et par qui.",
   "maison.historique.chercher": "Chercher un appareil, une personne…",

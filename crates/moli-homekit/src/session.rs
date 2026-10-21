@@ -726,6 +726,7 @@ impl Conn {
                 }
             }
             if let Some(value) = entry.get("value").filter(|v| !v.is_null()) {
+                tracing::info!(aid, iid, kind = c.kind, value = %value, "homekit: a write");
                 if !c.perms.contains(&"pw") {
                     status = ST_READ_ONLY;
                 } else if status == OK {
@@ -768,7 +769,34 @@ impl Conn {
             // A constant that is writable (the camera's microphone settings) is
             // accepted and unused; the permissions already refuse the others.
             Bind::Identify | Bind::Static(_) => OK,
-            Bind::ArmCurrent { .. } => ST_READ_ONLY,
+            Bind::ArmCurrent { .. } | Bind::ClimateCurrent { .. } => ST_READ_ONLY,
+            Bind::ClimateTarget { on, mode, modes } => {
+                let Some(target) = value.as_i64().filter(|t| (0..=3).contains(t)) else {
+                    return ST_INVALID;
+                };
+                if target == 0 {
+                    return self.command(on, Value::Bool(false)).await;
+                }
+                let Some(wanted) = modes.mode_of(target) else {
+                    return ST_INVALID;
+                };
+                let now = self.shared.hub.state(mode).map(|s| s.value);
+                if now != Some(Value::Text(wanted.clone())) {
+                    let status = self.command(mode, Value::Text(wanted.clone())).await;
+                    if status != OK {
+                        return status;
+                    }
+                }
+                let running = matches!(
+                    self.shared.hub.state(on).map(|s| s.value),
+                    Some(Value::Bool(true))
+                );
+                if running {
+                    OK
+                } else {
+                    self.command(on, Value::Bool(true)).await
+                }
+            }
             Bind::Camera { device, what } => match what {
                 CameraChar::Setup => {
                     match self

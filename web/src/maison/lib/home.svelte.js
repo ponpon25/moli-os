@@ -1,7 +1,7 @@
 // The family dashboard's model: the hub's live state (SSE, shared with the
 // Atelier), the home layout (/api/home), and gentle helpers on top.
 
-import { hub, connect, login, decide, refreshSession } from '../../lib/hub.svelte.js';
+import { hub, asked, connect, login, decide, refreshSession } from '../../lib/hub.svelte.js';
 import { t, locale } from '../../lib/i18n.svelte.js';
 
 export { hub };
@@ -339,7 +339,7 @@ const headers = { 'content-type': 'application/json', 'x-moli-origin': 'ui' };
 /** Sends an order. Held by the guard (protected room, quiet hours): asks
  *  « c'est moi » through the PIN sheet, then approves it. */
 export async function act(point, val, label) {
-  hub.pending[point] = val;
+  const giveUp = asked(point, val);
   try {
     const res = await fetch('/api/command', {
       method: 'POST',
@@ -355,7 +355,7 @@ export async function act(point, val, label) {
     if (!res.ok) throw new Error(body.error ?? res.statusText);
     setTimeout(() => {
       if (hub.pending[point] === val) delete hub.pending[point];
-    }, 8000);
+    }, giveUp);
     return 'ok';
   } catch (err) {
     delete hub.pending[point];

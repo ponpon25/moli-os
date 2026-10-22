@@ -2,6 +2,8 @@
 // uses): only these end up in the bundle.
 import { t } from '../../lib/i18n.svelte.js';
 import {
+  mdiFullscreen,
+  mdiCommentQuoteOutline,
   mdiCeilingLight,
   mdiCeilingFanLight,
   mdiFloorLamp,
@@ -297,6 +299,8 @@ export const icons = {
   send: mdiSend,
   'shower-head': mdiShowerHead,
   'silverware-fork-knife': mdiSilverwareForkKnife,
+  fullscreen: mdiFullscreen,
+  lyrics: mdiCommentQuoteOutline,
   next: mdiSkipNext,
   previous: mdiSkipPrevious,
   snowflake: mdiSnowflake,

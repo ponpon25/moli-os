@@ -126,7 +126,10 @@ pub enum DeviceStep {
     /// The code was accepted and the device is trusted, but no tokens came
     /// with the answer: a normal login gets them.
     Validated,
-    Challenge { hash: String, phones: Vec<Phone> },
+    Challenge {
+        hash: String,
+        phones: Vec<Phone>,
+    },
 }
 
 /// How a command ended on the panel.
@@ -308,10 +311,16 @@ impl Client {
                 json!({"appVersion": APP_VERSION, "origin": "native"}).to_string(),
             ),
             ("User-Agent".to_owned(), USER_AGENT.to_owned()),
-            ("X-APOLLO-OPERATION-ID".to_owned(), self.operation_id.clone()),
+            (
+                "X-APOLLO-OPERATION-ID".to_owned(),
+                self.operation_id.clone(),
+            ),
             ("X-APOLLO-OPERATION-NAME".to_owned(), operation.to_owned()),
             ("extension".to_owned(), r#"{"mode":"full"}"#.to_owned()),
-            ("content-type".to_owned(), "application/json; charset=utf-8".to_owned()),
+            (
+                "content-type".to_owned(),
+                "application/json; charset=utf-8".to_owned(),
+            ),
         ];
         if let Some(i) = installation {
             headers.push(("numinst".to_owned(), i.number.clone()));
@@ -363,7 +372,9 @@ impl Client {
         }
         let headers = self.headers(operation, &auth, installation);
         let body = json!({"operationName": operation, "variables": variables, "query": query});
-        let mut request = http::Request::builder().method(http::Method::POST).uri(PATH);
+        let mut request = http::Request::builder()
+            .method(http::Method::POST)
+            .uri(PATH);
         for (name, value) in &headers {
             request = request.header(
                 HeaderName::from_bytes(name.as_bytes()).map_err(|e| anyhow!("{e}"))?,
@@ -442,7 +453,13 @@ impl Client {
         vars.insert("lang".into(), json!(self.lang));
         vars.insert("callby".into(), json!(CALLBY));
         let answer = self
-            .call("RefreshLogin", REFRESH, Json::Object(vars), Auth::Bare, None)
+            .call(
+                "RefreshLogin",
+                REFRESH,
+                Json::Object(vars),
+                Auth::Bare,
+                None,
+            )
             .await?;
         let data = &answer["data"]["xSRefreshLogin"];
         if data["res"].as_str() != Some("OK") {
@@ -524,13 +541,22 @@ impl Client {
 
     pub async fn installations(&mut self) -> Result<Vec<Installation>, ApiError> {
         let answer = self
-            .call("mkInstallationList", INSTALLATIONS, json!({}), Auth::Session, None)
+            .call(
+                "mkInstallationList",
+                INSTALLATIONS,
+                json!({}),
+                Auth::Session,
+                None,
+            )
             .await?;
         Ok(model::installations(&answer))
     }
 
     /// Reads the capabilities token when it is missing or old.
-    pub async fn ensure_capabilities(&mut self, installation: &Installation) -> Result<(), ApiError> {
+    pub async fn ensure_capabilities(
+        &mut self,
+        installation: &Installation,
+    ) -> Result<(), ApiError> {
         if self
             .capabilities
             .as_ref()
@@ -579,7 +605,13 @@ impl Client {
         loop {
             counter += 1;
             let answer = self
-                .call(operation, query, variables(counter), Auth::Session, Some(installation))
+                .call(
+                    operation,
+                    query,
+                    variables(counter),
+                    Auth::Session,
+                    Some(installation),
+                )
                 .await?;
             let status = answer["data"][field].clone();
             if status.is_null() {
@@ -600,7 +632,13 @@ impl Client {
         self.ensure_capabilities(installation).await?;
         let vars = json!({"numinst": installation.number, "panel": installation.panel});
         let answer = self
-            .call("CheckAlarm", CHECK_ALARM, vars, Auth::Session, Some(installation))
+            .call(
+                "CheckAlarm",
+                CHECK_ALARM,
+                vars,
+                Auth::Session,
+                Some(installation),
+            )
             .await?;
         let reference = answer["data"]["xSCheckAlarm"]["referenceId"]
             .as_str()
@@ -609,17 +647,25 @@ impl Client {
         let number = installation.number.clone();
         let panel = installation.panel.clone();
         let status = self
-            .poll(installation, "CheckAlarmStatus", CHECK_ALARM_STATUS, "xSCheckAlarmStatus", |_| {
-                json!({
-                    "numinst": number,
-                    "panel": panel,
-                    "referenceId": reference,
-                    "idService": ALARM_SERVICE,
-                })
-            })
+            .poll(
+                installation,
+                "CheckAlarmStatus",
+                CHECK_ALARM_STATUS,
+                "xSCheckAlarmStatus",
+                |_| {
+                    json!({
+                        "numinst": number,
+                        "panel": panel,
+                        "referenceId": reference,
+                        "idService": ALARM_SERVICE,
+                    })
+                },
+            )
             .await?;
         if status["res"].as_str() != Some("OK") {
-            return Err(ApiError::Refused(status["msg"].as_str().unwrap_or("check failed").to_owned()));
+            return Err(ApiError::Refused(
+                status["msg"].as_str().unwrap_or("check failed").to_owned(),
+            ));
         }
         status["protomResponse"]
             .as_str()
@@ -668,7 +714,10 @@ impl Client {
         let submitted = &answer["data"][field];
         if submitted["res"].as_str() == Some("ERROR") {
             return Err(ApiError::Refused(
-                submitted["msg"].as_str().unwrap_or("order refused").to_owned(),
+                submitted["msg"]
+                    .as_str()
+                    .unwrap_or("order refused")
+                    .to_owned(),
             ));
         }
         submitted["referenceId"]
@@ -716,7 +765,11 @@ impl Client {
             if status["error"]["exceptionsNumber"]
                 .as_str()
                 .and_then(|n| n.parse::<u32>().ok())
-                .or_else(|| status["error"]["exceptionsNumber"].as_u64().map(|n| n as u32))
+                .or_else(|| {
+                    status["error"]["exceptionsNumber"]
+                        .as_u64()
+                        .map(|n| n as u32)
+                })
                 .is_some_and(|n| n > 0)
             {
                 format!("{msg} (open zones)")
@@ -755,7 +808,9 @@ mod tests {
 
     #[test]
     fn a_dead_session_is_known_whatever_its_case() {
-        assert!(ends_session(r#"[{"message":"Invalid session. Please, try again later."}]"#));
+        assert!(ends_session(
+            r#"[{"message":"Invalid session. Please, try again later."}]"#
+        ));
         assert!(ends_session(r#"[{"message":"Invalid Session"}]"#));
         assert!(!ends_session(r#"[{"message":"Invalid credentials"}]"#));
     }
@@ -826,7 +881,8 @@ mod tests {
     fn the_first_error_is_found_where_it_is() {
         let at_top = serde_json::json!({"errors": [{"message": "Invalid credentials"}]});
         assert_eq!(first_error(&at_top), "Invalid credentials");
-        let in_data = serde_json::json!({"data": {"xSArmPanel": {"res": "ERROR", "msg": "no way"}}});
+        let in_data =
+            serde_json::json!({"data": {"xSArmPanel": {"res": "ERROR", "msg": "no way"}}});
         assert_eq!(first_error(&in_data), "no way");
         assert_eq!(first_error(&serde_json::json!({})), "no reason given");
     }

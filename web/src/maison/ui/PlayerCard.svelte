@@ -3,11 +3,12 @@
   import { has, list, steerable, mmss } from '../lib/speakers.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
+  import Marquee from './Marquee.svelte';
 
   /** A speaker card: what plays in a room (or a group of rooms), its buttons
    *  and volumes. `members`: the rooms, the one that leads first. `rooms`: all
    *  the rooms (to group with). `look`: what to show (`sections`, `ambient`). */
-  let { members, rooms = [], look, groupKey } = $props();
+  let { members, rooms = [], look, groupKey, onimmerse = null } = $props();
 
   const lead = $derived(members[0].id);
   const src = $derived(value(lead, 'source'));
@@ -36,6 +37,40 @@
     const told = since(lead, 'position') ?? now;
     const moved = playing ? Math.max(0, (now - told) / 1000) : 0;
     return Math.min(duration, p + moved);
+  });
+
+  // Lyrics: only for what Apple Music plays; asked once per song, shown timed
+  // (the line being sung is lit) when Apple times them.
+  const song = $derived(value(lead, 'apple_song'));
+  const canLyrics = $derived(!!song && has(lead, 'lyrics'));
+  let lyricsOpen = $state(false);
+  let asked = $state(null);
+  let lyricsFailed = $state(null);
+  let lyricsBox = $state();
+  const lyrics = $derived(song && value(lead, 'lyrics_for') === song ? list(lead, 'lyrics_lines').filter((l) => l.text) : null);
+  const timed = $derived(!!lyrics?.length && lyrics.every((l) => typeof l.t === 'number'));
+  const current = $derived.by(() => {
+    if (!timed || pos == null) return -1;
+    let at = -1;
+    for (let i = 0; i < lyrics.length; i++) if (lyrics[i].t <= pos + 0.4) at = i;
+    return at;
+  });
+  $effect(() => {
+    if (lyricsOpen && canLyrics && lyrics == null && asked !== song) {
+      asked = song;
+      act(`${lead}/lyrics`, JSON.stringify({ song, title, artist: value(lead, 'artist'), album: value(lead, 'album') ?? '', duration }), t('enceintes.paroles.titre')).then((r) => {
+        if (r !== 'ok') lyricsFailed = song;
+      });
+    }
+  });
+  $effect(() => {
+    if (lyricsOpen && !canLyrics) lyricsOpen = false;
+  });
+  // The lit line stays in the middle of the box (the page itself never moves).
+  $effect(() => {
+    if (current < 0 || !lyricsBox) return;
+    const line = lyricsBox.children[current];
+    if (line) lyricsBox.scrollTo({ top: line.offsetTop - lyricsBox.clientHeight / 2 + line.clientHeight / 2, behavior: 'smooth' });
   });
 
   let panel = $state({});
@@ -71,7 +106,10 @@
     {/if}
     <div class="card-head">
       <h2><Icon name={members.length > 1 ? 'speakers' : 'speaker'} size={18} />{members.map((m) => nameOf(m.id)).join(' + ')}</h2>
-<span class="chip {playing ? 'warm' : ''}">{up ? stateLabel(lead) : t('enceintes.injoignable')}</span>
+<span class="head-right">
+        {#if onimmerse}<button class="soft small" onclick={onimmerse} aria-label={t('enceintes.immersion.titre')} title={t('enceintes.immersion.titre')}><Icon name="fullscreen" size={18} /></button>{/if}
+        <span class="chip {playing ? 'warm' : ''}">{up ? stateLabel(lead) : t('enceintes.injoignable')}</span>
+      </span>
     </div>
 
     <div class="now">
@@ -93,8 +131,8 @@
           </span>
         {/if}
         {#if title}
-          <h3>{title}</h3>
-          {#if value(lead, 'artist')}<p class="sub">{value(lead, 'artist')}{value(lead, 'album') ? ` · ${value(lead, 'album')}` : ''}</p>{/if}
+          <h3><Marquee text={title} /></h3>
+          {#if value(lead, 'artist')}<p class="sub"><Marquee text={`${value(lead, 'artist')}${value(lead, 'album') ? ` · ${value(lead, 'album')}` : ''}`} /></p>{/if}
         {:else if playing}
           <!-- Playing, the speaker has not said what yet: not « nothing ». -->
           <h3>{t('enceintes.lecture_en_cours')}</h3>
@@ -132,7 +170,28 @@
           <Icon name={repeat === 'one' ? 'repeat-once' : 'repeat'} size={20} />
         </button>
       {/if}
+      {#if has(lead, 'lyrics')}
+        <button class="soft" class:active={lyricsOpen} disabled={!canLyrics} onclick={() => (lyricsOpen = !lyricsOpen)} aria-pressed={lyricsOpen} aria-label={t('enceintes.paroles.titre')} title={t('enceintes.paroles.titre')}>
+          <Icon name="lyrics" size={20} />
+        </button>
+      {/if}
     </div>
+
+    {#if lyricsOpen && canLyrics}
+      <div class="lyrics" bind:this={lyricsBox} aria-live="off">
+        {#if lyrics == null && lyricsFailed === song}
+          <p class="muted">{t('enceintes.paroles.aucune')}</p>
+        {:else if lyrics == null}
+          <p class="muted">{t('enceintes.paroles.chargement')}</p>
+        {:else}
+          {#each lyrics as line, i (i)}
+            <p class:now={i === current} class:past={timed && i < current}>{line.text}</p>
+          {:else}
+            <p class="muted">{t('enceintes.paroles.aucune')}</p>
+          {/each}
+        {/if}
+      </div>
+    {/if}
 
     {#if look.sections.volumes}
     <ul class="members">
@@ -227,6 +286,17 @@
 </div>
 
 <style>
+  /* A tile is as tall as its row, whatever the title says: the card fills it. */
+  .player {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: 0;
+  }
+
+  .player .group {
+    flex: 1;
+  }
 
 
   /* The cover, the title and the buttons grow with the tile (about 16:9). */
@@ -288,6 +358,12 @@
     order: 3;
   }
 
+  .head-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .group.down {
     opacity: 0.7;
   }
@@ -315,11 +391,13 @@
     gap: 2px;
   }
 
+  /* A title or artist is one line, long ones scroll (Marquee): a tile never
+     grows with what plays. */
   .what h3 {
     font-size: var(--title);
     line-height: 1.15;
     font-weight: 650;
-    overflow-wrap: anywhere;
+    overflow: hidden;
   }
 
   .eyebrow {
@@ -361,7 +439,7 @@
 
   .sub {
     color: var(--ink-2);
-    overflow-wrap: anywhere;
+    overflow: hidden;
   }
 
   .eq {
@@ -575,6 +653,39 @@
 
   button.soft:disabled {
     opacity: 0.4;
+  }
+
+  .lyrics {
+    margin-top: 14px;
+    max-height: clamp(160px, 26cqw, 320px);
+    overflow-y: auto;
+    padding: 6px clamp(8px, 2cqw, 20px);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    scrollbar-width: none;
+    mask-image: linear-gradient(transparent, #000 14%, #000 86%, transparent);
+  }
+
+  .lyrics p {
+    margin: 0;
+    padding: 0.28em 0;
+    font-size: clamp(15px, 2.6cqw, 24px);
+    font-weight: 650;
+    line-height: 1.25;
+    color: var(--ink-3);
+    transition:
+      color 0.35s var(--ease),
+      transform 0.35s var(--ease);
+    transform-origin: left center;
+  }
+
+  .lyrics p.now {
+    color: var(--ink);
+    transform: scale(1.04);
+  }
+
+  .lyrics:not(:has(.now)) p {
+    color: var(--ink-2);
   }
 
   .members {

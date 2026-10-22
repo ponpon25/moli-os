@@ -12,6 +12,7 @@ mod apple;
 mod cover;
 mod events;
 mod household;
+mod lyrics;
 mod playback;
 
 use std::sync::Arc;
@@ -394,6 +395,10 @@ async fn poll(host: &str, full: bool) -> anyhow::Result<Polled> {
         values.push(("queue_length", number(tag(&media, "NrTracks"))));
         values.push(("queue_position", number(tag(&position, "Track"))));
         values.push(("album", as_text(text(tag(&meta, "album")))));
+        values.push((
+            "apple_song",
+            apple::song_of(&track).map_or(Value::Null, |id| Value::Text(id.into())),
+        ));
         values.push((
             "art",
             as_text(text(tag(&meta, "albumArtURI")).map(|art| cover(host, &art))),

@@ -131,7 +131,8 @@ pub fn mfa_accepted(answer: &Json) -> bool {
     let says = |text: Option<&str>| text.is_some_and(|t| t.contains("mfa.success"));
     says(data["msg"].as_str())
         || says(answer["errors"][0]["message"].as_str())
-        || (data["res"].as_str() == Some("OK") && !data["msg"].as_str().is_some_and(|m| m.contains("error")))
+        || (data["res"].as_str() == Some("OK")
+            && !data["msg"].as_str().is_some_and(|m| m.contains("error")))
 }
 
 /// The phones a second factor can go to.
@@ -250,7 +251,8 @@ mod tests {
     }
 
     /// A hand-written example of the installation list's shape.
-    const INSTALLATIONS: &str = include_str!("../../../integrations/verisure/fixtures/installations.json");
+    const INSTALLATIONS: &str =
+        include_str!("../../../integrations/verisure/fixtures/installations.json");
 
     #[test]
     fn the_installation_list_example_is_read() {
@@ -268,7 +270,8 @@ mod tests {
         assert!(mfa_accepted(&in_data));
         let in_errors = json!({"errors": [{"message": "auth-api.mfa.success"}], "data": null});
         assert!(mfa_accepted(&in_errors));
-        let refused = json!({"data": {"xSValidateDevice": {"res": "ERROR", "msg": "auth-api.mfa.error"}}});
+        let refused =
+            json!({"data": {"xSValidateDevice": {"res": "ERROR", "msg": "auth-api.mfa.error"}}});
         assert!(!mfa_accepted(&refused));
         assert!(!mfa_accepted(&json!({})));
     }
@@ -281,7 +284,13 @@ mod tests {
         let (hash, phones) = challenge(&data).unwrap();
         assert_eq!(hash, "h4sh");
         assert_eq!(phones.len(), 2);
-        assert_eq!(phones[1], Phone { id: 1, number: "XXXXX9876".into() });
+        assert_eq!(
+            phones[1],
+            Phone {
+                id: 1,
+                number: "XXXXX9876".into()
+            }
+        );
         assert!(challenge(&json!({"other": 1})).is_none());
     }
 

@@ -26,12 +26,13 @@ const TOPOLOGY: (&str, &str) = (
 );
 const PLAYER: &str = "urn:schemas-upnp-org:device:ZonePlayer:1";
 /// What a group's followers take from the group's leader.
-const SHARED: [&str; 12] = [
+const SHARED: [&str; 13] = [
     "playing",
     "state",
     "title",
     "artist",
     "album",
+    "apple_song",
     "art",
     "duration",
     "position",
@@ -265,6 +266,26 @@ fn room_device(
             moli_i18n::tr!("pilotes.sonos.parcourir_apple"),
             Kind::Text,
         ));
+        device.points.push(extra(
+            "lyrics_lines",
+            moli_i18n::tr!("pilotes.sonos.paroles"),
+            Kind::Text,
+        ));
+        device.points.push(extra(
+            "lyrics_for",
+            moli_i18n::tr!("pilotes.sonos.paroles_pour"),
+            Kind::Text,
+        ));
+        device.points.push(press(
+            "lyrics",
+            moli_i18n::tr!("pilotes.sonos.demander_paroles"),
+            Kind::Text,
+        ));
+        device.points.push(press(
+            "detail",
+            moli_i18n::tr!("pilotes.sonos.detail_apple"),
+            Kind::Text,
+        ));
         device.points.push(press(
             "play",
             moli_i18n::tr!("pilotes.sonos.lire_apple"),
@@ -293,6 +314,11 @@ fn room_device(
     device.points.push(extra(
         "album",
         moli_i18n::tr!("pilotes.sonos.album"),
+        Kind::Text,
+    ));
+    device.points.push(extra(
+        "apple_song",
+        moli_i18n::tr!("pilotes.sonos.apple_titre"),
         Kind::Text,
     ));
     device.points.push(extra(
@@ -589,6 +615,11 @@ pub(crate) async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<
                                 let id = &command.device.id;
                                 ctx.set_state(id, "results", Value::Text(json.as_str().into()));
                                 ctx.set_state(id, "results_for", Value::Text(query.as_str().into()));
+                            }
+                            Ok(Outcome::Lyrics { song, json }) => {
+                                let id = &command.device.id;
+                                ctx.set_state(id, "lyrics_lines", Value::Text(json.as_str().into()));
+                                ctx.set_state(id, "lyrics_for", Value::Text(song.as_str().into()));
                             }
                             Ok(other) => {
                                 if matches!(other, Outcome::Queue) {

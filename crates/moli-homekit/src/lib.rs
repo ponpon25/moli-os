@@ -439,7 +439,9 @@ impl Shared {
                     return Err(ST_COMMUNICATION);
                 }
                 let mode = self.state_text(mode).unwrap_or_default();
-                Ok(serde_json::json!(modes.target_of(self.climate_on(on), &mode)))
+                Ok(serde_json::json!(
+                    modes.target_of(self.climate_on(on), &mode)
+                ))
             }
             Bind::ArmTarget(point) => {
                 if self.offline(point) {

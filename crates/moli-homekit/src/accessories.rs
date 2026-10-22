@@ -717,17 +717,15 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
 #[allow(clippy::too_many_lines)] // one characteristic after the other
 /// The thermostat service of an air conditioner, and the keys of the
 /// points it takes over.
-fn climate_of<'a>(
-    device: &'a Device,
-    name: &str,
-    taken: &mut Vec<&'a str>,
-) -> Option<ServiceSpec> {
+fn climate_of<'a>(device: &'a Device, name: &str, taken: &mut Vec<&'a str>) -> Option<ServiceSpec> {
     let id = |key: &str| PointId::new(&device.id, key);
     let on = device.points.iter().find(|p| {
         p.semantic == Semantic::OnOff && writable(p) && p.kind == Kind::Binary && &*p.key == "on"
     })?;
     let (mode, values) = device.points.iter().find_map(|p| match &p.kind {
-        Kind::Enum { values } if &*p.key == "mode" && writable(p) && p.semantic != Semantic::Control => {
+        Kind::Enum { values }
+            if &*p.key == "mode" && writable(p) && p.semantic != Semantic::Control =>
+        {
             Some((p, values))
         }
         _ => None,
@@ -748,25 +746,27 @@ fn climate_of<'a>(
     // Targets HomeKit can pick among, in its numbering.
     let mut valid = vec![0];
     valid.extend((1..=3).filter(|t| modes.mode_of(*t).is_some()));
-    let temperature = |key: &str, perms, format_description: &'static str, kind, lo: f64, hi: f64| {
-        spec(
-            kind,
-            "float",
-            perms,
-            Bind::Point(
-                id(key),
-                Conv::Clamped { lo, hi },
-            ),
-            format_description,
-        )
-        .meta(Meta {
-            min: Some(lo),
-            max: Some(hi),
-            step: Some(if kind == C_TARGET_TEMPERATURE { 0.5 } else { 0.1 }),
-            unit: Some("celsius"),
-            ..Meta::default()
-        })
-    };
+    let temperature =
+        |key: &str, perms, format_description: &'static str, kind, lo: f64, hi: f64| {
+            spec(
+                kind,
+                "float",
+                perms,
+                Bind::Point(id(key), Conv::Clamped { lo, hi }),
+                format_description,
+            )
+            .meta(Meta {
+                min: Some(lo),
+                max: Some(hi),
+                step: Some(if kind == C_TARGET_TEMPERATURE {
+                    0.5
+                } else {
+                    0.1
+                }),
+                unit: Some("celsius"),
+                ..Meta::default()
+            })
+        };
     let chars = vec![
         name_char(name),
         spec(
@@ -1958,15 +1958,29 @@ mod tests {
             vec![
                 point("on", Kind::Binary, true, Semantic::OnOff),
                 point("mode", modes, true, Semantic::Other),
-                point("target_temperature", range(16.0, 30.0), true, Semantic::Config),
-                point("temperature", range(0.0, 50.0), false, Semantic::Temperature),
+                point(
+                    "target_temperature",
+                    range(16.0, 30.0),
+                    true,
+                    Semantic::Config,
+                ),
+                point(
+                    "temperature",
+                    range(0.0, 50.0),
+                    false,
+                    Semantic::Temperature,
+                ),
             ],
         );
         let c = catalog(std::slice::from_ref(&clim));
         // One service: no extra switch nor temperature sensor.
         assert_eq!(types(&c, 2), ["3E", "4A"]);
         assert_eq!(kinds_of(&clim.device), [Kinds::Climate]);
-        let kinds: Vec<_> = c.accessories[1].services[1].chars.iter().map(|ch| ch.kind).collect();
+        let kinds: Vec<_> = c.accessories[1].services[1]
+            .chars
+            .iter()
+            .map(|ch| ch.kind)
+            .collect();
         assert_eq!(kinds, ["23", "F", "33", "11", "35", "36"]);
         let m = ClimateModes::of(&["auto".into(), "froid".into(), "chaud".into()]);
         assert_eq!(m.target_of(true, "chaud"), 1);

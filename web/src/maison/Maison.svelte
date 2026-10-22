@@ -130,7 +130,7 @@
     {:else if page === 'equipements'}
       <Equipements />
     {:else if page === 'enceintes'}
-      <Enceintes />
+      <Enceintes {route} />
     {:else if page === 'plan'}
       <Plan />
     {:else if page === 'carte'}

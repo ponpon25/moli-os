@@ -5,7 +5,10 @@
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
   import PlayerCard from '../ui/PlayerCard.svelte';
+  import Immersion from '../ui/Immersion.svelte';
   import { has, list } from '../lib/speakers.js';
+
+  let { route = 'enceintes' } = $props();
 
   // Every Sonos room, and the groups they make. A group plays one thing:
   // its leader says what, the others follow.
@@ -69,6 +72,18 @@
       })
       .sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key));
   });
+
+  // Full screen on one group: its address is `#/enceintes/<group>`, so a
+  // tablet on a wall can open straight onto it.
+  const immersiveKey = $derived(route.split('/')[1] ? decodeURIComponent(route.split('/')[1]) : null);
+  const immersive = $derived(groups.find((g) => g.key === immersiveKey) ?? null);
+  const immerse = (key) => (location.hash = `#/enceintes/${encodeURIComponent(key)}`);
+  const leave = () => (location.hash = '#/enceintes');
+  // What to open when none is chosen: what plays, else the first.
+  const immerseDefault = () => {
+    const g = groups.find((x) => value(x.leader, 'playing') === true) ?? groups[0];
+    if (g) immerse(g.key);
+  };
 
   // ---- the arrangement: width, height and order of the tiles ----------------------
   const GAP = 20;
@@ -227,6 +242,7 @@
   });
   async function browse(what) {
     if (!lookup) return;
+    opened = null;
     submitted = `browse:${what}`;
     term = '';
     busy = true;
@@ -242,10 +258,28 @@
   async function runSearch() {
     const q = term.trim();
     if (!q || !lookup) return;
+    opened = null;
     submitted = q;
     busy = true;
     await act(`${lookup.leader}/search`, q, t('enceintes.rechercher'));
     busy = false;
+  }
+  // An album or a playlist opens onto its songs, as in Apple Music; « back »
+  // asks again for the shelf or the search it came from.
+  let opened = $state(null);
+  const openable = (hit) => (hit.kind === 'playlist' || hit.kind === 'album') && lookup && has(lookup.leader, 'detail');
+  async function openDetail(hit) {
+    if (!lookup) return;
+    opened = hit;
+    busy = true;
+    await act(`${lookup.leader}/detail`, `${hit.kind}:${hit.id}`, hit.title);
+    busy = false;
+  }
+  const songs = $derived(opened && lookup && value(lookup.leader, 'results_for') === `detail:${opened.kind}:${opened.id}` ? list(lookup.leader, 'results') : null);
+  async function closeDetail() {
+    opened = null;
+    if (submitted.startsWith('browse:')) await browse(submitted.slice(7));
+    else if (submitted) await runSearch();
   }
   const playHit = (hit, mode) =>
     !target
@@ -253,6 +287,7 @@
       : act(`${target.leader}/play`, JSON.stringify({ kind: hit.kind, id: hit.id, title: hit.title, mode }), t('enceintes.lancer', { name: hit.title }));
   const groupName = (g) => g.members.map((m) => nameOf(m.id)).join(' + ');
   function clearSearch() {
+    opened = null;
     term = '';
     submitted = '';
   }
@@ -265,9 +300,14 @@
       <h1 class="page-title">{t('enceintes.titre')}</h1>
       <p class="page-sub">{t('enceintes.sous_titre')}</p>
     </div>
+    <div class="head-actions">
+    {#if groups.length}
+      <button class="chip tune" onclick={immerseDefault}><Icon name="fullscreen" size={16} />{t('enceintes.immersion.titre')}</button>
+    {/if}
     <button class="chip tune" class:cool={customizing} aria-expanded={customizing} onclick={() => (customizing = !customizing)}>
       <Icon name="tune" size={16} />{t('enceintes.perso.titre')}
     </button>
+    </div>
   </header>
 
   {#if customizing}
@@ -318,7 +358,8 @@
               targetKey = e.currentTarget.value;
               savePref('enceintes-target', targetKey);
               // The answer lives on the speaker asked: ask the new one.
-              if (submitted.startsWith('browse:')) await browse(submitted.slice(7));
+              if (opened) await openDetail(opened);
+              else if (submitted.startsWith('browse:')) await browse(submitted.slice(7));
               else if (submitted) await runSearch();
             }} aria-label={t('enceintes.sur')}>
             <option value="" disabled>{t('enceintes.choisir')}</option>
@@ -343,7 +384,41 @@
           {/if}
         </div>
       {/if}
-      {#if busy}
+      {#if opened}
+        <div class="detail">
+          <button class="chip back" onclick={closeDetail}><Icon name="chevron-left" size={16} />{t('enceintes.retour')}</button>
+          <div class="head-detail">
+            <div class="art">{#if opened.art}<img src={opened.art.replace('240', '480')} alt="" referrerpolicy="no-referrer" />{/if}</div>
+            <div class="meta">
+              <h3 class="shelf-title">{opened.title}</h3>
+              {#if opened.subtitle}<span class="muted">{opened.subtitle}</span>{/if}
+              <span class="acts">
+                <button class="chip go" onclick={() => playHit(opened, 'now')}><Icon name="play" size={16} />{t('enceintes.lire_maintenant')}</button>
+                <button class="soft small" onclick={() => playHit(opened, 'next')} title={t('enceintes.lire_ensuite')} aria-label={t('enceintes.lire_ensuite')}><Icon name="queue-next" size={16} /></button>
+                <button class="soft small" onclick={() => playHit(opened, 'add')} title={t('enceintes.ajouter_file')} aria-label={t('enceintes.ajouter_file')}><Icon name="queue-add" size={16} /></button>
+              </span>
+            </div>
+          </div>
+          {#if busy}
+            <p class="muted small">{t('enceintes.recherche_en_cours')}</p>
+          {:else if songs}
+            <ol class="songs">
+              {#each songs as hit, i (hit.id + i)}
+                <li>
+                  <span class="num n">{i + 1}</span>
+                  <button class="row" onclick={() => playHit(hit, 'now')} title={t('enceintes.lire_maintenant')}>
+                    <span class="t"><b>{hit.title}</b>{#if hit.subtitle}<span class="muted small">{hit.subtitle}</span>{/if}</span>
+                  </button>
+                  <button class="soft small" onclick={() => playHit(hit, 'next')} title={t('enceintes.lire_ensuite')} aria-label={t('enceintes.lire_ensuite')}><Icon name="queue-next" size={16} /></button>
+                  <button class="soft small" onclick={() => playHit(hit, 'add')} title={t('enceintes.ajouter_file')} aria-label={t('enceintes.ajouter_file')}><Icon name="queue-add" size={16} /></button>
+                </li>
+              {:else}
+                <li class="muted">{t('enceintes.aucun_resultat')}</li>
+              {/each}
+            </ol>
+          {/if}
+        </div>
+      {:else if busy}
         <p class="muted small">{t('enceintes.recherche_en_cours')}</p>
       {:else if found}
         {#if shelf}<h3 class="shelf-title">{t(`enceintes.apple.${shelf}`)}</h3>{/if}
@@ -354,10 +429,11 @@
               {#each section.hits as hit (hit.kind + hit.id)}
                 <li>
                   <div class="art" class:round={hit.kind === 'artist'}>
+                    {#if openable(hit)}<button class="open" onclick={() => openDetail(hit)} aria-label={t('enceintes.ouvrir', { name: hit.title })}></button>{/if}
                     {#if hit.art}<img src={hit.art} alt="" loading="lazy" referrerpolicy="no-referrer" />{/if}
                     <button class="big" onclick={() => playHit(hit, 'now')} title={t('enceintes.lire_maintenant')} aria-label={t('enceintes.lire_maintenant')}><Icon name="play" size={26} /></button>
                   </div>
-                  <b>{hit.title}</b>
+                  {#if openable(hit)}<button class="name" onclick={() => openDetail(hit)}>{hit.title}</button>{:else}<b>{hit.title}</b>{/if}
                   {#if hit.subtitle}<span class="muted small">{hit.subtitle}</span>{/if}
                   {#if hit.kind !== 'station'}
                     <span class="acts">
@@ -396,7 +472,7 @@
             <span class="size">{sizing?.key === g.key ? `${sizing.w}×${sizing.rows}` : tile.w + (tile.rows ? `×${tile.rows}` : '')}</span>
           </div>
         {/if}
-      <PlayerCard members={g.members} {rooms} {look} groupKey={g.key} />
+      <PlayerCard members={g.members} {rooms} {look} groupKey={g.key} onimmerse={() => immerse(g.key)} />
         {#if customizing && cols > 1}
           <button class="grow" onpointerdown={(e) => startResize(e, g)} ondblclick={() => autoHeight(g)} title={t('enceintes.perso.redimensionner')} aria-label={t('enceintes.perso.redimensionner')}>
             <Icon name="resize" size={18} />
@@ -407,7 +483,17 @@
   </div>
 </div>
 
+{#if immersive}
+  <Immersion group={immersive} {groups} onpick={immerse} onclose={leave} />
+{/if}
+
 <style>
+  .head-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
   .enceintes {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -465,6 +551,8 @@
     display: grid;
     grid-template-columns: repeat(var(--cols, 12), minmax(0, 1fr));
     grid-auto-flow: row dense;
+    /* Each tile has its own height: pulling one never stretches its neighbour. */
+    align-items: start;
     gap: 20px;
   }
 
@@ -727,6 +815,133 @@
     margin-top: 6px;
   }
 
+  .cards .open {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border: 0;
+    background: none;
+    cursor: pointer;
+  }
+
+  .cards .big {
+    z-index: 2;
+  }
+
+  .cards .name {
+    margin-top: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-weight: 700;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .cards .name:hover {
+    text-decoration: underline;
+  }
+
+  .detail {
+    display: grid;
+    gap: 16px;
+  }
+
+  .detail .back {
+    justify-self: start;
+  }
+
+  .head-detail {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 20px;
+  }
+
+  .head-detail .art {
+    width: clamp(140px, 22cqw, 240px);
+    aspect-ratio: 1;
+    border-radius: 16px;
+    background: var(--surface-3);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+
+  .head-detail .art img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .head-detail .meta {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    flex: 1 1 240px;
+  }
+
+  .head-detail .acts {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  .songs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+  }
+
+  .songs li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border-radius: 12px;
+  }
+
+  .songs li:hover {
+    background: var(--surface-2);
+  }
+
+  .songs .n {
+    min-width: 2.4ch;
+    text-align: right;
+    color: var(--ink-3);
+  }
+
+  .songs .row {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    padding: 8px 6px;
+    cursor: pointer;
+  }
+
+  .songs .t {
+    display: grid;
+    min-width: 0;
+  }
+
+  .songs .t b,
+  .songs .t .small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .grow {
     position: absolute;
     right: 8px;
@@ -750,6 +965,10 @@
   }
 
   button.soft {
+    border: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
     width: var(--soft);
     height: var(--soft);
     background: var(--surface-2);

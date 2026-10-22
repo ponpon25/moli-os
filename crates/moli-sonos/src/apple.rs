@@ -135,6 +135,53 @@ impl AppleMusic {
         parse_library(&body)
     }
 
+    /// The songs of an album or a playlist (`kind`), as a person sees them
+    /// when they open it. A playlist of the library (`p.…`) is asked with the
+    /// person's own token.
+    pub(crate) async fn tracks(
+        &self,
+        kind: &str,
+        id: &str,
+        user_token: Option<&str>,
+    ) -> anyhow::Result<Vec<Hit>> {
+        if !clean(id) {
+            bail!("{}", moli_i18n::tr!("pilotes.sonos.lecture_inconnue"));
+        }
+        let storefront = &self.config.storefront;
+        let (path, own) = match kind {
+            "playlist" if id.starts_with("p.") => (
+                format!("/v1/me/library/playlists/{id}/tracks?limit=100&l=fr-FR"),
+                true,
+            ),
+            "playlist" => (
+                format!("/v1/catalog/{storefront}/playlists/{id}/tracks?limit=100&l=fr-FR"),
+                false,
+            ),
+            "album" => (
+                format!("/v1/catalog/{storefront}/albums/{id}/tracks?limit=100&l=fr-FR"),
+                false,
+            ),
+            _ => bail!("{}", moli_i18n::tr!("pilotes.sonos.lecture_inconnue")),
+        };
+        let token = self.token()?;
+        let mut headers: Vec<(&str, &str)> = Vec::new();
+        if own {
+            let user = user_token.context(moli_i18n::tr!("pilotes.sonos.apple_deconnecte"))?;
+            headers.push(("music-user-token", user));
+        }
+        let (status, body) = moli_net::https_get(HOST, &path, Some(&token), &headers).await?;
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            bail!("{}", moli_i18n::tr!("pilotes.sonos.apple_deconnecte"));
+        }
+        if !status.is_success() {
+            bail!(
+                "{}",
+                moli_i18n::tr!("pilotes.sonos.apple_refus", status = status.as_u16())
+            );
+        }
+        parse_tracks(&body)
+    }
+
     /// The songs an artist is best known for.
     pub(crate) async fn top_songs(&self, artist: &str) -> anyhow::Result<Vec<(String, String)>> {
         if !clean(artist) {
@@ -181,7 +228,7 @@ impl AppleMusic {
 // ---- the developer token ---------------------------------------------------
 
 /// Percent-encodes a query value.
-fn percent(text: &str) -> String {
+pub(crate) fn percent(text: &str) -> String {
     text.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
@@ -304,6 +351,57 @@ pub(crate) fn parse_library(body: &[u8]) -> anyhow::Result<Vec<Hit>> {
     // A page is not a catalogue: the first ones are enough.
     hits.truncate(60);
     Ok(hits)
+}
+
+/// The identifier of the Apple Music song a speaker plays, from its address
+/// (`x-sonos-http:song%3a123.mp4?sid=204…`).
+pub(crate) fn song_of(uri: &str) -> Option<String> {
+    if !uri.contains(&format!("sid={SERVICE}")) {
+        return None;
+    }
+    let rest = uri
+        .split_once("song%3a")
+        .or_else(|| uri.split_once("song:"))?
+        .1;
+    let id: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    (!id.is_empty()).then_some(id)
+}
+
+/// The songs of an album or playlist answer, each known by its catalogue
+/// identifier (what a Sonos plays); a song with none (an import) is left out.
+pub(crate) fn parse_tracks(body: &[u8]) -> anyhow::Result<Vec<Hit>> {
+    let json: Json = serde_json::from_slice(body).context("Apple's answer is not JSON")?;
+    Ok(json["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|song| {
+            let attributes = &song["attributes"];
+            let title = attributes["name"].as_str()?;
+            let id = attributes["playParams"]["catalogId"].as_str().or_else(|| {
+                song["id"]
+                    .as_str()
+                    .filter(|_| song["type"].as_str() == Some("songs"))
+            })?;
+            let subtitle = match (
+                attributes["artistName"].as_str(),
+                attributes["albumName"].as_str(),
+            ) {
+                (Some(artist), Some(album)) => Some(format!("{artist} · {album}")),
+                (Some(artist), None) => Some(artist.to_owned()),
+                _ => None,
+            };
+            Some(Hit {
+                kind: "song",
+                id: id.to_owned(),
+                title: title.to_owned(),
+                subtitle,
+                art: attributes["artwork"]["url"]
+                    .as_str()
+                    .map(|url| url.replace("{w}", "120").replace("{h}", "120")),
+            })
+        })
+        .collect())
 }
 
 /// The songs of a `top-songs` answer: identifier and name.
@@ -468,6 +566,28 @@ mod tests {
             "a library album is its catalogue twin, an upload has none, doubles are one"
         );
         assert_eq!(hits[1].subtitle.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn finds_the_apple_song_in_an_address() {
+        assert_eq!(
+            song_of("x-sonos-http:song%3a1234.mp4?sid=204&flags=8232&sn=13").as_deref(),
+            Some("1234")
+        );
+        assert_eq!(song_of("x-sonos-http:song%3a1234.mp4?sid=9"), None);
+        assert_eq!(song_of("x-file-cifs://nas/a.mp3"), None);
+    }
+
+    #[test]
+    fn reads_the_songs_of_a_playlist() {
+        let body = br#"{"data":[
+          {"id":"1","type":"songs","attributes":{"name":"Un","artistName":"A","albumName":"B"}},
+          {"id":"i.x","type":"library-songs","attributes":{"name":"Deux","artistName":"A","playParams":{"catalogId":"22"}}},
+          {"id":"i.y","type":"library-songs","attributes":{"name":"Import"}}]}"#;
+        let songs = parse_tracks(body).unwrap();
+        let seen: Vec<(&str, &str)> = songs.iter().map(|h| (h.kind, h.id.as_str())).collect();
+        assert_eq!(seen, [("song", "1"), ("song", "22")]);
+        assert_eq!(songs[0].subtitle.as_deref(), Some("A · B"));
     }
 
     #[test]

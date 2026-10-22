@@ -727,10 +727,13 @@ async fn the_alarm_obeys_the_phone_when_the_household_chose_so() {
     assert!(b.hub.approvals().is_empty(), "nothing is held");
 
     // The Home app writes the alarm as a timed write: prepare, then the write.
-    let write = json!({"characteristics": [{"aid": alarm_aid, "iid": target, "value": 3}], "pid": 77});
+    let write =
+        json!({"characteristics": [{"aid": alarm_aid, "iid": target, "value": 3}], "pid": 77});
     let (status, _) = s.json("PUT", "/characteristics", &write).await;
     assert_eq!(status, 470, "no prepare, no write");
-    let (status, _) = s.json("PUT", "/prepare", &json!({"ttl": 2000, "pid": 77})).await;
+    let (status, _) = s
+        .json("PUT", "/prepare", &json!({"ttl": 2000, "pid": 77}))
+        .await;
     assert_eq!(status, 200);
     let (status, _) = s.json("PUT", "/characteristics", &write).await;
     assert_eq!(status, 204);

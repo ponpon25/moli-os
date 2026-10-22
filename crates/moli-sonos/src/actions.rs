@@ -51,7 +51,15 @@ pub(crate) async fn library(host: &str) -> anyhow::Result<Vec<Item>> {
 pub(crate) enum Outcome {
     Done,
     Queue,
-    Results { query: String, json: String },
+    Results {
+        query: String,
+        json: String,
+    },
+    /// The lyrics of an Apple Music song, for whoever asked.
+    Lyrics {
+        song: String,
+        json: String,
+    },
 }
 
 /// One order to `room`. Playback orders go to the leader of its group.
@@ -182,6 +190,27 @@ pub(crate) async fn act(
             Ok(Outcome::Results {
                 query: format!("browse:{what}"),
                 json: serde_json::to_string(&hits)?,
+            })
+        }
+        ("detail", Value::Text(what)) => {
+            let apple = apple.context(moli_i18n::tr!("pilotes.sonos.apple_non_configure"))?;
+            // `kind:id`, as the dashboard knows what it opens.
+            let (kind, id) = what
+                .split_once(':')
+                .context(moli_i18n::tr!("pilotes.sonos.lecture_inconnue"))?;
+            let hits = apple.tracks(kind, id, user_token).await?;
+            Ok(Outcome::Results {
+                query: format!("detail:{what}"),
+                json: serde_json::to_string(&hits)?,
+            })
+        }
+        ("lyrics", Value::Text(ask)) => {
+            let ask: crate::lyrics::Ask =
+                serde_json::from_str(ask).context("lyrics: not a request")?;
+            let lines = crate::lyrics::fetch(&ask).await?;
+            Ok(Outcome::Lyrics {
+                song: ask.song,
+                json: serde_json::to_string(&lines)?,
             })
         }
         ("play", Value::Text(order)) => {

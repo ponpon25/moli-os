@@ -55,9 +55,9 @@
   const timed = $derived(!!lyrics?.length && lyrics.every((l) => typeof l.t === 'number'));
   const current = $derived.by(() => {
     if (!timed || pos == null) return -1;
-    let at = -1;
-    for (let i = 0; i < lyrics.length; i++) if (lyrics[i].t <= pos + 0.4) at = i;
-    return at;
+    let found = -1;
+    for (let i = 0; i < lyrics.length; i++) if (lyrics[i].t <= pos + shift) found = i;
+    return found;
   });
   $effect(() => {
     if (showLyrics && lyrics == null && asked !== song) {
@@ -74,17 +74,50 @@
     if (line) lyricsBox.scrollTo({ top: line.offsetTop - lyricsBox.clientHeight * 0.3, behavior: 'smooth' });
   });
 
-  // Karaoke: the sung line fills as it goes. The source times lines, not
-  // words, so the sweep is spread over the line (by its length, and never
-  // longer than the line lasts) rather than measured word by word.
+  // Karaoke: the sung line lights up word by word, like in Apple Music. The
+  // source times lines, not words, so each word gets a share of the line by
+  // its length, over the time the line takes (never longer than it lasts).
+  // A shift of the whole text can be set, kept on this device.
   const SPEED = 0.085;
-  function sweep(i) {
-    if (!timed || i !== current || pos == null) return 0;
+  let shift = $state(
+    (() => {
+      try {
+        return Number(localStorage.getItem('immersion-lyrics-shift')) || 0;
+      } catch {
+        return 0;
+      }
+    })(),
+  );
+  function nudge(delta) {
+    shift = delta === 0 ? 0 : Math.max(-20, Math.min(20, Math.round((shift + delta) * 10) / 10));
+    try {
+      localStorage.setItem('immersion-lyrics-shift', String(shift));
+    } catch {
+      /* not kept */
+    }
+  }
+  const at = $derived(pos == null ? null : pos + shift);
+  const parts = $derived(
+    (lyrics ?? []).map((line) => {
+      const words = line.text.split(/\s+/).filter(Boolean);
+      const weights = words.map((w) => Math.max(2, w.length));
+      const total = weights.reduce((a, b) => a + b, 0) || 1;
+      let from = 0;
+      return words.map((text, k) => {
+        const a = from / total;
+        from += weights[k];
+        return { text, a, b: from / total };
+      });
+    }),
+  );
+  function fraction(i) {
+    if (!timed || i !== current || at == null) return 0;
     const line = lyrics[i];
     const next = lyrics[i + 1]?.t ?? line.t + 6;
     const span = Math.min(Math.max(next - line.t, 0.8), Math.max(1.2, line.text.length * SPEED));
-    return Math.max(0, Math.min(1, (pos + 0.15 - line.t) / span)) * 100;
+    return Math.max(0, Math.min(1, (at - line.t) / span));
   }
+  const wordFill = (f, w) => Math.max(0, Math.min(1, (f - w.a) / (w.b - w.a))) * 100;
 
   // Volumes: one slider per room, behind a button.
   let volumes = $state(false);
@@ -177,7 +210,12 @@
         {:else}
           {#each lyrics as line, i (i)}
             {#if line.text}
-              <p class:now={i === current} class:near={timed && Math.abs(i - current) === 1} style:--p="{sweep(i)}%"><span class="k">{line.text}</span></p>
+              {#if timed && i === current}
+                {@const f = fraction(i)}
+                <p class="now">{#each parts[i] as w (w.a)}{@const d = wordFill(f, w)}<span class="w" class:sung={d >= 100} class:singing={d > 0 && d < 100} style:--w="{d}%">{w.text}</span>{' '}{/each}</p>
+              {:else}
+                <p class:now={i === current} class:near={timed && Math.abs(i - current) === 1}>{line.text}</p>
+              {/if}
             {:else}
               <p class="pause" class:now={i === current} aria-hidden="true"><i></i><i></i><i></i></p>
             {/if}
@@ -215,6 +253,15 @@
       {#if has(lead, 'lyrics')}
         <button class="soft" class:active={showLyrics} disabled={!canLyrics} onclick={() => (wantLyrics = !wantLyrics)} aria-pressed={showLyrics} aria-label={t('enceintes.paroles.titre')} title={t('enceintes.paroles.titre')}><Icon name="lyrics" size={24} /></button>
       {/if}
+      {#if showLyrics && timed}
+        <span class="shift" role="group" aria-label={t('enceintes.immersion.decalage')} title={t('enceintes.immersion.decalage')}>
+          <button class="soft small" onclick={() => nudge(-2)} aria-label={t('enceintes.immersion.plus_tard')} title={t('enceintes.immersion.plus_tard')}>«</button>
+          <button class="soft small" onclick={() => nudge(-0.5)} aria-label={t('enceintes.immersion.plus_tard')} title={t('enceintes.immersion.plus_tard')}>−</button>
+          <button class="num reset" onclick={() => nudge(0)} title={t('enceintes.immersion.reinitialiser')}>{shift > 0 ? '+' : ''}{shift.toFixed(1)} s</button>
+          <button class="soft small" onclick={() => nudge(0.5)} aria-label={t('enceintes.immersion.plus_tot')} title={t('enceintes.immersion.plus_tot')}>+</button>
+          <button class="soft small" onclick={() => nudge(2)} aria-label={t('enceintes.immersion.plus_tot')} title={t('enceintes.immersion.plus_tot')}>»</button>
+        </span>
+      {/if}
       <button class="soft" class:active={volumes} onclick={() => (volumes = !volumes)} aria-pressed={volumes} aria-label={t('enceintes.immersion.volumes')} title={t('enceintes.immersion.volumes')}><Icon name="volume-high" size={24} /></button>
     </div>
   </footer>
@@ -250,7 +297,7 @@
 </div>
 
 <style>
-  @property --p {
+  @property --w {
     syntax: '<percentage>';
     inherits: true;
     initial-value: 0%;
@@ -506,6 +553,7 @@
   .words {
     position: relative;
     height: 100%;
+    padding-right: 4%;
     max-height: 100%;
     overflow-y: auto;
     scrollbar-width: none;
@@ -540,21 +588,26 @@
     color: #fff;
     opacity: 1;
     filter: none;
-    transform: scale(1.04);
+    transform: scale(1.02);
   }
 
-  /* The fill that follows the singer (the whole line stays white when the
-     lyrics are not timed). */
-  .words p.now .k {
-    background: linear-gradient(90deg, #fff var(--p), rgb(255 255 255 / 42%) var(--p));
+  /* Each word fills as it is sung, with a soft edge; the word being sung
+     lifts a little and glows, then settles, white, like in Apple Music. */
+  .words p.now .w {
+    display: inline-block;
+    background: linear-gradient(90deg, #fff calc(var(--w) - 14%), rgb(255 255 255 / 40%) calc(var(--w) + 14%));
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
-    transition: --p 0.12s linear;
+    transition:
+      --w 0.12s linear,
+      transform 0.4s var(--ease),
+      filter 0.4s var(--ease);
   }
 
-  .words p.pause .k {
-    display: none;
+  .words p.now .w.singing {
+    transform: translateY(-0.06em) scale(1.05);
+    filter: drop-shadow(0 0 0.35em rgb(255 255 255 / 55%));
   }
 
   .words p.pause {
@@ -643,6 +696,27 @@
     align-items: center;
     justify-content: center;
     gap: clamp(8px, 2vw, 22px);
+  }
+
+  .shift {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--ink-2);
+  }
+
+  .shift .reset {
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .shift .num {
+    min-width: 4.4em;
+    text-align: center;
   }
 
   .gap {

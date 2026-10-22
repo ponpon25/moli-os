@@ -2,8 +2,6 @@
 //! lyrics, timed when it can): Apple keeps its own for itself. Only the
 //! song's name, artist, album and length leave the house, to that one host.
 
-use std::fmt::Write as _;
-
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -32,38 +30,82 @@ pub(crate) struct Line {
     pub text: String,
 }
 
-/// The lyrics of a song (empty: none known).
+/// The lyrics of a song (empty: none known). A song has many editions, each
+/// with its own timing: the timed lyrics of the edition whose length is the
+/// closest to the one playing (within a couple of seconds, and the same
+/// album first), else the plain text of any.
 pub(crate) async fn fetch(ask: &Ask) -> anyhow::Result<Vec<Line>> {
-    let by_name = format!(
-        "/api/get?track_name={}&artist_name={}",
+    let path = format!(
+        "/api/search?track_name={}&artist_name={}",
         percent(&ask.title),
         percent(&ask.artist)
     );
-    // The exact edition first (its album and length), then any of the song.
-    let mut exact = by_name.clone();
-    if !ask.album.is_empty() {
-        write!(exact, "&album_name={}", percent(&ask.album))?;
+    let mut answer = get(&path).await?;
+    // The service says when it is busy: once more, a moment later.
+    if answer.0 == 503 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        answer = get(&path).await?;
     }
-    if let Some(seconds) = ask.duration.filter(|s| *s > 0) {
-        write!(exact, "&duration={seconds}")?;
-    }
-    for path in [exact, by_name] {
-        let mut answer = get(&path).await?;
-        // The service says when it is busy: once more, a moment later.
-        if answer.0 == 503 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            answer = get(&path).await?;
+    match answer.0 {
+        404 => Ok(Vec::new()),
+        200..=299 => {
+            let found: Json = serde_json::from_slice(&answer.1)?;
+            match choose(&found, ask) {
+                Some(edition) => parse(edition.to_string().as_bytes()),
+                None => Ok(Vec::new()),
+            }
         }
-        match answer.0 {
-            404 => {}
-            200..=299 => return parse(&answer.1),
-            status => bail!(
-                "{}",
-                moli_i18n::tr!("pilotes.sonos.paroles_refus", status = status)
-            ),
-        }
+        status => bail!(
+            "{}",
+            moli_i18n::tr!("pilotes.sonos.paroles_refus", status = status)
+        ),
     }
-    Ok(Vec::new())
+}
+
+/// How far two lengths may be for the timing of one to be the other's.
+const SAME_EDITION: f64 = 2.0;
+
+/// The best edition among the search results, with its timing only when it is
+/// the playing one's.
+fn choose(found: &Json, ask: &Ask) -> Option<Json> {
+    #[allow(clippy::cast_precision_loss)]
+    let playing = ask.duration.filter(|s| *s > 0).map(|s| s as f64);
+    let gap = |edition: &Json| match (playing, edition["duration"].as_f64()) {
+        (Some(a), Some(b)) => (a - b).abs(),
+        _ => 0.0,
+    };
+    let same_album = |edition: &Json| {
+        !ask.album.is_empty()
+            && edition["albumName"]
+                .as_str()
+                .is_some_and(|a| a.eq_ignore_ascii_case(&ask.album))
+    };
+    let has = |edition: &Json, field: &str| {
+        edition[field]
+            .as_str()
+            .is_some_and(|t| !t.trim().is_empty())
+    };
+    let mut editions: Vec<&Json> = found
+        .as_array()?
+        .iter()
+        .filter(|e| e["instrumental"].as_bool() != Some(true))
+        .collect();
+    editions.sort_by(|a, b| {
+        gap(a)
+            .partial_cmp(&gap(b))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(same_album(b).cmp(&same_album(a)))
+    });
+    if let Some(timed) = editions
+        .iter()
+        .find(|e| has(e, "syncedLyrics") && gap(e) <= SAME_EDITION)
+    {
+        return Some((*timed).clone());
+    }
+    // No timing that fits: the words alone, from the nearest edition.
+    let mut plain = (*editions.iter().find(|e| has(e, "plainLyrics"))?).clone();
+    plain["syncedLyrics"] = Json::Null;
+    Some(plain)
 }
 
 async fn get(path: &str) -> anyhow::Result<(u16, Vec<u8>)> {
@@ -152,6 +194,31 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn picks_the_edition_of_the_playing_length() {
+        let ask = Ask {
+            song: "1".into(),
+            title: "T".into(),
+            artist: "A".into(),
+            album: "Album".into(),
+            duration: Some(184),
+        };
+        let found = serde_json::json!([
+            {"id": 1, "albumName": "Other", "duration": 192.0, "syncedLyrics": "[00:01.0] a", "plainLyrics": "a"},
+            {"id": 2, "albumName": "Album", "duration": 185.0, "syncedLyrics": "[00:02.0] b", "plainLyrics": "b"},
+            {"id": 3, "albumName": "Album (Explicit)", "duration": 184.0, "syncedLyrics": "[00:03.0] c", "plainLyrics": "c"}
+        ]);
+        assert_eq!(choose(&found, &ask).unwrap()["id"], 3);
+        // No edition of that length: the plain words of the nearest, untimed.
+        let far = Ask {
+            duration: Some(150),
+            ..ask
+        };
+        let words = choose(&found, &far).unwrap();
+        assert_eq!(words["id"], 3);
+        assert!(words["syncedLyrics"].is_null());
     }
 
     #[test]

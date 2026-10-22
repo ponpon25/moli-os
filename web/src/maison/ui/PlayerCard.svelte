@@ -4,6 +4,7 @@
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import Marquee from './Marquee.svelte';
+  import { createPosition } from '../lib/position.svelte.js';
 
   /** A speaker card: what plays in a room (or a group of rooms), its buttons
    *  and volumes. `members`: the rooms, the one that leads first. `rooms`: all
@@ -25,19 +26,8 @@
   const ambient = $derived(shown && look.ambient);
 
   // The progress bar moves every second, not every time the house speaks.
-  let now = $state(Date.now());
-  $effect(() => {
-    const timer = setInterval(() => (now = Date.now()), 1000);
-    return () => clearInterval(timer);
-  });
-  // The position was told at some moment: while it plays, it moves on.
-  const pos = $derived.by(() => {
-    const p = value(lead, 'position');
-    if (typeof p !== 'number' || !duration) return null;
-    const told = since(lead, 'position') ?? now;
-    const moved = playing ? Math.max(0, (now - told) / 1000) : 0;
-    return Math.min(duration, p + moved);
-  });
+  const clock = createPosition(() => lead, () => playing, () => duration, 1000);
+  const pos = $derived(clock.pos);
 
   // Lyrics: only for what Apple Music plays; asked once per song, shown timed
   // (the line being sung is lit) when Apple times them.

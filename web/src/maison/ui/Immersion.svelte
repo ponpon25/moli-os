@@ -5,6 +5,7 @@
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import Marquee from './Marquee.svelte';
+  import { createPosition } from '../lib/position.svelte.js';
 
   /** Full-screen player for one room or group: the cover, the lyrics, the
    *  buttons. `group`: what is shown; `groups`: all the groups (to switch). */
@@ -28,14 +29,8 @@
   const coverUrl = $derived(cover ? `/api/devices/${lead}/cover?v=${encodeURIComponent(cover)}` : null);
   const shown = $derived(coverUrl && !coverFailed[cover] && title);
 
-  // The position was told at some moment: while it plays, it moves on.
-  let now = $state(Date.now());
-  const pos = $derived.by(() => {
-    const p = value(lead, 'position');
-    if (typeof p !== 'number' || !duration) return null;
-    const told = since(lead, 'position') ?? now;
-    return Math.min(duration, p + (playing ? Math.max(0, (now - told) / 1000) : 0));
-  });
+  const clock = createPosition(() => lead, () => playing, () => duration, 100);
+  const pos = $derived(clock.pos);
 
   // Lyrics, only for what Apple Music plays: asked once per song.
   const song = $derived(value(lead, 'apple_song'));
@@ -148,12 +143,10 @@
     else if (e.key === 'ArrowLeft' && has(lead, 'skip') && steerable(src)) act(`${lead}/skip`, 'previous', t('enceintes.precedent'));
   }
   onMount(() => {
-    const tick = setInterval(() => (now = Date.now()), 100);
     wake();
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
-      clearInterval(tick);
       clearTimeout(timer);
       document.body.style.overflow = previous;
     };

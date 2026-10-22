@@ -62,6 +62,7 @@
   "enceintes.immersion.plus_tot": "Paroles plus tôt",
   "enceintes.immersion.plus_tard": "Paroles plus tard",
   "enceintes.immersion.reinitialiser": "Remettre à zéro",
+  "enceintes.immersion.defilement": "Défilement automatique des paroles",
   "enceintes.retour": "Retour",
   "enceintes.ouvrir": "Ouvrir {name}",
   "enceintes.aucun_resultat": "Rien trouvé.",

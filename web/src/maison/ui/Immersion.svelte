@@ -69,6 +69,31 @@
     if (line) lyricsBox.scrollTo({ top: line.offsetTop - lyricsBox.clientHeight * 0.3, behavior: 'smooth' });
   });
 
+  // Words without timing: nothing says which line is sung, so the text
+  // can slide along with the track (on or off, kept on this device).
+  let follow = $state(
+    (() => {
+      try {
+        return localStorage.getItem('lyrics-follow') !== 'off';
+      } catch {
+        return true;
+      }
+    })(),
+  );
+  function toggleFollow() {
+    follow = !follow;
+    try {
+      localStorage.setItem('lyrics-follow', follow ? 'on' : 'off');
+    } catch {
+      /* not kept */
+    }
+  }
+  $effect(() => {
+    if (!follow || timed || !lyricsBox || !lyrics?.length || pos == null || !duration) return;
+    const room = lyricsBox.scrollHeight - lyricsBox.clientHeight;
+    lyricsBox.scrollTop = room * Math.min(1, Math.max(0, pos / duration));
+  });
+
   // Karaoke: the sung line lights up word by word, like in Apple Music. The
   // source times lines, not words, so each word gets a share of the line by
   // its length, over the time the line takes (never longer than it lasts).
@@ -245,6 +270,9 @@
       <span class="gap" aria-hidden="true"></span>
       {#if has(lead, 'lyrics')}
         <button class="soft" class:active={showLyrics} disabled={!canLyrics} onclick={() => (wantLyrics = !wantLyrics)} aria-pressed={showLyrics} aria-label={t('enceintes.paroles.titre')} title={t('enceintes.paroles.titre')}><Icon name="lyrics" size={24} /></button>
+      {/if}
+      {#if showLyrics && lyrics?.length && !timed}
+        <button class="soft" class:active={follow} onclick={toggleFollow} aria-pressed={follow} aria-label={t('enceintes.immersion.defilement')} title={t('enceintes.immersion.defilement')}><Icon name="chevron-down" size={26} /></button>
       {/if}
       {#if showLyrics && timed}
         <span class="shift" role="group" aria-label={t('enceintes.immersion.decalage')} title={t('enceintes.immersion.decalage')}>

@@ -20,19 +20,31 @@ export function createPosition(lead, playing, duration, every = 500) {
     const timer = setInterval(() => (now = Date.now()), every);
     return () => clearInterval(timer);
   });
-  // What the hub told, and when.
+  // Where it stands by our own count, now.
+  const shown = () =>
+    anchor.p == null ? null : anchor.p + (playing() ? Math.max(0, (Date.now() - anchor.at) / 1000) : 0);
+  // What the hub told, and when. A speaker tells whole seconds, so a position
+  // a little behind ours is rounding, not a step back: it is not followed.
   $effect(() => {
     const p = value(lead(), 'position');
     const at = since(lead(), 'position');
-    anchor = { p: typeof p === 'number' ? p : null, at: at ?? Date.now() };
+    untrack(() => {
+      const here = shown();
+      if (typeof p === 'number' && here != null && p <= here && here - p < 1.2) return;
+      anchor = { p: typeof p === 'number' ? p : null, at: at ?? Date.now() };
+    });
   });
-  // Seen to start playing: count from now, from where it stood.
+  // Seen to start playing: count from now, from where it stood. Seen to
+  // pause: stay where it was shown.
   $effect(() => {
     const is = playing();
-    if (is && was === false) {
-      const p = untrack(() => anchor.p);
-      if (p != null) anchor = { p, at: Date.now() };
-    }
+    untrack(() => {
+      if (anchor.p != null) {
+        if (is && was === false) anchor = { p: anchor.p, at: Date.now() };
+        // It was playing until now: its count runs up to this moment.
+        else if (!is && was === true) anchor = { p: anchor.p + Math.max(0, (Date.now() - anchor.at) / 1000), at: Date.now() };
+      }
+    });
     was = is;
   });
 

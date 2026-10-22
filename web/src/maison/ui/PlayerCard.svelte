@@ -56,6 +56,18 @@
   $effect(() => {
     if (lyricsOpen && !canLyrics) lyricsOpen = false;
   });
+  // Words without timing: the text slides along with the track.
+  const follow = (() => {
+    try {
+      return localStorage.getItem('lyrics-follow') !== 'off';
+    } catch {
+      return true;
+    }
+  })();
+  $effect(() => {
+    if (!follow || timed || !lyricsBox || !lyrics?.length || pos == null || !duration) return;
+    lyricsBox.scrollTop = (lyricsBox.scrollHeight - lyricsBox.clientHeight) * Math.min(1, Math.max(0, pos / duration));
+  });
   // The lit line stays in the middle of the box (the page itself never moves).
   $effect(() => {
     if (current < 0 || !lyricsBox) return;

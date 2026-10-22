@@ -74,6 +74,18 @@
     if (line) lyricsBox.scrollTo({ top: line.offsetTop - lyricsBox.clientHeight * 0.3, behavior: 'smooth' });
   });
 
+  // Karaoke: the sung line fills as it goes. The source times lines, not
+  // words, so the sweep is spread over the line (by its length, and never
+  // longer than the line lasts) rather than measured word by word.
+  const SPEED = 0.085;
+  function sweep(i) {
+    if (!timed || i !== current || pos == null) return 0;
+    const line = lyrics[i];
+    const next = lyrics[i + 1]?.t ?? line.t + 6;
+    const span = Math.min(Math.max(next - line.t, 0.8), Math.max(1.2, line.text.length * SPEED));
+    return Math.max(0, Math.min(1, (pos + 0.15 - line.t) / span)) * 100;
+  }
+
   // Volumes: one slider per room, behind a button.
   let volumes = $state(false);
   let dragging = $state({});
@@ -103,7 +115,7 @@
     else if (e.key === 'ArrowLeft' && has(lead, 'skip') && steerable(src)) act(`${lead}/skip`, 'previous', t('enceintes.precedent'));
   }
   onMount(() => {
-    const tick = setInterval(() => (now = Date.now()), 500);
+    const tick = setInterval(() => (now = Date.now()), 100);
     wake();
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -165,7 +177,7 @@
         {:else}
           {#each lyrics as line, i (i)}
             {#if line.text}
-              <p class:now={i === current} class:near={timed && Math.abs(i - current) === 1}>{line.text}</p>
+              <p class:now={i === current} class:near={timed && Math.abs(i - current) === 1} style:--p="{sweep(i)}%"><span class="k">{line.text}</span></p>
             {:else}
               <p class="pause" class:now={i === current} aria-hidden="true"><i></i><i></i><i></i></p>
             {/if}
@@ -238,6 +250,12 @@
 </div>
 
 <style>
+  @property --p {
+    syntax: '<percentage>';
+    inherits: true;
+    initial-value: 0%;
+  }
+
   .immersion {
     --ink: #fff;
     --ink-2: rgb(255 255 255 / 80%);
@@ -486,6 +504,7 @@
   }
 
   .words {
+    position: relative;
     height: 100%;
     max-height: 100%;
     overflow-y: auto;
@@ -522,6 +541,20 @@
     opacity: 1;
     filter: none;
     transform: scale(1.04);
+  }
+
+  /* The fill that follows the singer (the whole line stays white when the
+     lyrics are not timed). */
+  .words p.now .k {
+    background: linear-gradient(90deg, #fff var(--p), rgb(255 255 255 / 42%) var(--p));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    transition: --p 0.12s linear;
+  }
+
+  .words p.pause .k {
+    display: none;
   }
 
   .words p.pause {

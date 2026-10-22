@@ -129,19 +129,27 @@
             {#if playing}<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>{/if}
             {t(`enceintes.source.${src}`)}
           </span>
+        {:else}
+          <span class="eyebrow ghost" aria-hidden="true">&nbsp;</span>
         {/if}
         {#if title}
           <h3><Marquee text={title} /></h3>
-          {#if value(lead, 'artist')}<p class="sub"><Marquee text={`${value(lead, 'artist')}${value(lead, 'album') ? ` · ${value(lead, 'album')}` : ''}`} /></p>{/if}
         {:else if playing}
           <!-- Playing, the speaker has not said what yet: not « nothing ». -->
           <h3>{t('enceintes.lecture_en_cours')}</h3>
         {:else}
           <h3 class="muted">{t('salon.enceinte.rien')}</h3>
         {/if}
-        {#if look.sections.progress && duration && pos != null}
-          <div class="progress" aria-hidden="true"><span style:width="{Math.min(100, (pos / duration) * 100)}%"></span></div>
-          <p class="times num"><span>{mmss(pos)}</span><span>{mmss(duration)}</span></p>
+        <!-- The line under the title keeps its place too (nothing to say: blank). -->
+        <p class="sub" class:ghost={!(title && value(lead, 'artist'))}>
+          {#if title && value(lead, 'artist')}<Marquee text={`${value(lead, 'artist')}${value(lead, 'album') ? ` · ${value(lead, 'album')}` : ''}`} />{:else}&nbsp;{/if}
+        </p>
+        <!-- The bar's place is always kept (hidden when the source has none: AirPlay,
+             radio), so the tile never moves when a track starts or changes. -->
+        {#if look.sections.progress}
+          {@const known = duration && pos != null}
+          <div class="progress" class:ghost={!known} aria-hidden="true"><span style:width="{known ? Math.min(100, (pos / duration) * 100) : 0}%"></span></div>
+          <p class="times num" class:ghost={!known}><span>{known ? mmss(pos) : '0:00'}</span><span>{known ? mmss(duration) : '0:00'}</span></p>
         {/if}
       </div>
     </div>
@@ -401,6 +409,9 @@
   }
 
   .eyebrow {
+    display: block;
+    height: 1.4em;
+    line-height: 1.4;
     font-size: 12px;
     font-weight: 650;
     letter-spacing: 0.06em;
@@ -418,6 +429,10 @@
     background: var(--surface-3);
     margin-top: 12px;
     overflow: hidden;
+  }
+
+  .ghost {
+    visibility: hidden;
   }
 
   .progress span {
@@ -656,6 +671,7 @@
   }
 
   .lyrics {
+    position: relative;
     margin-top: 14px;
     max-height: clamp(160px, 26cqw, 320px);
     overflow-y: auto;

@@ -15,6 +15,7 @@
 //! person Cloudflare Access let in through the tunnel).
 
 mod access;
+mod alexa_home;
 mod assets;
 mod assistant;
 mod automations;
@@ -52,6 +53,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 
 pub use access::AccessConfig;
+pub use alexa_home::{AlexaConfig, INSTANCE as ALEXA_INSTANCE, TOKEN as ALEXA_TOKEN};
 pub use plan::image_name_ok as plan_image_name_ok;
 
 /// A JSON request is small: orders, labels, a graph, a conversation turn.
@@ -133,6 +135,8 @@ pub struct Options {
     pub weather: Option<moli_weather::Weather>,
     /// The HomeKit bridge, when `[homekit]` is configured.
     pub homekit: Option<moli_homekit::HomeKit>,
+    /// The Alexa Smart Home skill, when `[alexa]` is configured.
+    pub alexa: Option<AlexaConfig>,
 }
 
 /// Builds the complete HTTP application. Live streams end when `shutdown`
@@ -283,6 +287,7 @@ fn people(
             .iter()
             .map(std::net::IpAddr::to_canonical)
             .collect(),
+        alexa: options.alexa.clone(),
     };
     (Arc::new(humans), gate, persons)
 }
@@ -323,6 +328,7 @@ pub fn router(hub: Hub, shutdown: CancellationToken, options: &Options) -> Route
         .merge(device_routes())
         .route("/api/media/{name}", get(rest::media))
         .route("/api/command", post(rest::command))
+        .route("/api/alexa", post(alexa_home::directive))
         .route("/api/ambiances", get(rest::ambiances))
         .route("/api/ambiance", post(rest::ambiance))
         .route("/api/labels/{id}", put(rest::set_label))
@@ -393,6 +399,7 @@ pub fn router(hub: Hub, shutdown: CancellationToken, options: &Options) -> Route
         .layer(Extension(assistant::Moli(options.assistant.clone())))
         .layer(Extension(automations::Autos(options.automations.clone())))
         .layer(Extension(phones::PhonesGate(options.phones.clone())))
+        .layer(Extension(alexa_home::AlexaGate(options.alexa.clone())))
         .layer(Extension(humans))
         .layer(Extension(persons))
         .layer(DefaultBodyLimit::max(BODY))

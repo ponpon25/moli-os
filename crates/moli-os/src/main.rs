@@ -357,7 +357,14 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
         start_brains(&config, &hub, energy.as_ref(), history.as_ref(), &cancel).await?;
     let homekit = start_homekit(&config, &hub, &cancel, &mut tasks).await;
     let surfaces = moli_api::Options {
-        allowed_hosts: config.server.allowed_hosts.clone(),
+        // The name given to Amazon is one Moli is reached by.
+        allowed_hosts: config
+            .server
+            .allowed_hosts
+            .iter()
+            .cloned()
+            .chain(config.alexa.as_ref().and_then(|a| a.host.clone()))
+            .collect(),
         trusted_proxies: config.server.trusted_proxies.clone(),
         ui_pin,
         history,
@@ -373,6 +380,7 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
         machines: gates.machines,
         weather: weather(&config),
         homekit,
+        alexa: config.alexa.clone(),
     };
     // Client addresses matter: human sessions are bound to them.
     axum::serve(

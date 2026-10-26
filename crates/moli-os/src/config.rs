@@ -58,6 +58,10 @@ pub struct Config {
     /// the encrypted store, never here.
     #[serde(default)]
     pub homekit: Option<moli_homekit::Config>,
+    /// The Alexa Smart Home skill (absent: Alexa does not reach Moli). Its
+    /// shared token lives in the encrypted store (`alexa-skill/token`).
+    #[serde(default)]
+    pub alexa: Option<moli_api::AlexaConfig>,
 }
 
 /// Where and when agents need a human's approval. Edited by humans only:

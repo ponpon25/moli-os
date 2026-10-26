@@ -43,6 +43,9 @@ pub(crate) enum Via {
     Visitor,
     /// From the Internet, a person signed in with their password.
     Person,
+    /// The Alexa skill's relay (AWS Lambda), with the shared token: it
+    /// reaches one route only (`/api/alexa`), where the token is checked.
+    Alexa,
 }
 
 /// What [`identify`] needs: the Access verifier, and whether this house is
@@ -54,6 +57,8 @@ pub(crate) struct Gate {
     pub(crate) people: Arc<People>,
     /// Reverse proxies of the home network, trusted to name the client.
     pub(crate) proxies: Arc<[IpAddr]>,
+    /// The Alexa skill (`[alexa]`): its route, and the name only it answers on.
+    pub(crate) alexa: Option<crate::alexa_home::AlexaConfig>,
 }
 
 /// What a guest may reach: the dashboard, what it reads of its rooms (the
@@ -163,6 +168,7 @@ impl Caller {
             Via::Access { .. } => "access",
             Via::Outside => "outside",
             Via::Phone => "phone",
+            Via::Alexa => "alexa",
             Via::Visitor => "visitor",
             Via::Person => "person",
         }
@@ -327,6 +333,27 @@ pub(crate) async fn identify(
         _ => None,
     };
     let mut caller = classify(peer, request.headers(), email, &gate.proxies);
+    // The name given to Amazon answers the skill's route, nothing else.
+    let host = header(request.headers(), "host").unwrap_or_default();
+    if crate::alexa_home::is_skill_host(gate.alexa.as_ref(), host)
+        && request.uri().path() != "/api/alexa"
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    // The skill's relay carries the shared token (checked by the route).
+    if caller.via == Via::Outside
+        && gate.alexa.is_some()
+        && request.uri().path() == "/api/alexa"
+        && request
+            .headers()
+            .contains_key(axum::http::header::AUTHORIZATION)
+    {
+        caller = Caller {
+            key: "alexa".to_owned(),
+            via: Via::Alexa,
+            person: None,
+        };
+    }
     // A phone's report carries its own token (checked by the route): the
     // one way in without the home network or Cloudflare Access.
     if caller.via == Via::Outside

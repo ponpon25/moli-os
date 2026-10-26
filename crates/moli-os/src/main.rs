@@ -329,19 +329,7 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
     // History first: it must be listening before drivers publish anything.
     let (history, recorder) = start_history(&config, &hub, &cancel)?.unzip();
     // Energy too: a reading missed is energy filed in the wrong hour.
-    let (energy, metering) = match &config.energy {
-        Some(energy) => {
-            let (energy, task) = moli_energy::Energy::start(
-                &hub,
-                &config.server.data_dir.join("energy.db"),
-                energy.clone(),
-                cancel.clone(),
-            )
-            .context("cannot open the energy database")?;
-            (Some(energy), Some(task))
-        }
-        None => (None, None),
-    };
+    let (energy, metering) = start_energy(&config, &hub, &cancel)?.unzip();
 
     let (mut tasks, gates) = spawn_drivers(&config, &hub, &cancel)?;
     tasks.extend(spawn_house_drivers(&config, &hub, energy.as_ref(), &cancel));
@@ -367,27 +355,7 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
         .map(moli_api::UiPin::new);
     let (assistant, automations, automating) =
         start_brains(&config, &hub, energy.as_ref(), history.as_ref(), &cancel).await?;
-    let homekit = match &config.homekit {
-        Some(options) => match moli_homekit::start(
-            hub.clone(),
-            &config.server.data_dir,
-            options.clone(),
-            cancel.clone(),
-        )
-        .await
-        {
-            Ok((bridge, task)) => {
-                tasks.push(task);
-                Some(bridge)
-            }
-            // A bridge that cannot start must not stop the house.
-            Err(e) => {
-                tracing::error!(error = %e, "homekit: the bridge did not start");
-                None
-            }
-        },
-        None => None,
-    };
+    let homekit = start_homekit(&config, &hub, &cancel, &mut tasks).await;
     let surfaces = moli_api::Options {
         allowed_hosts: config.server.allowed_hosts.clone(),
         ui_pin,
@@ -824,6 +792,52 @@ fn print_profile(compiled: &moli_profile::Compiled, file: Option<&moli_profile::
 
 /// Every 15 s: held orders nobody decided on expire; last known values are
 /// flushed (only when changed) every minute.
+fn start_energy(
+    config: &Config,
+    hub: &Hub,
+    cancel: &CancellationToken,
+) -> anyhow::Result<Option<(moli_energy::Energy, tokio::task::JoinHandle<()>)>> {
+    let Some(energy) = &config.energy else {
+        return Ok(None);
+    };
+    let started = moli_energy::Energy::start(
+        hub,
+        &config.server.data_dir.join("energy.db"),
+        energy.clone(),
+        cancel.clone(),
+    )
+    .context("cannot open the energy database")?;
+    Ok(Some(started))
+}
+
+/// The HomeKit bridge, its task added to `tasks`.
+async fn start_homekit(
+    config: &Config,
+    hub: &Hub,
+    cancel: &CancellationToken,
+    tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+) -> Option<moli_homekit::HomeKit> {
+    let options = config.homekit.as_ref()?;
+    match moli_homekit::start(
+        hub.clone(),
+        &config.server.data_dir,
+        options.clone(),
+        cancel.clone(),
+    )
+    .await
+    {
+        Ok((bridge, task)) => {
+            tasks.push(task);
+            Some(bridge)
+        }
+        // A bridge that cannot start must not stop the house.
+        Err(e) => {
+            tracing::error!(error = %e, "homekit: the bridge did not start");
+            None
+        }
+    }
+}
+
 fn housekeeping(hub: &Hub, cancel: &CancellationToken) -> tokio::task::JoinHandle<()> {
     let (hub, cancel) = (hub.clone(), cancel.clone());
     tokio::spawn(async move {

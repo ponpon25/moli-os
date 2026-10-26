@@ -378,13 +378,12 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
     let Some(username) = ctx.secret(USERNAME) else {
         return park(ctx, missing(ctx)).await;
     };
-    let device = match ctx.secret(DEVICE) {
-        Some(device) => device,
-        None => {
-            let fresh = api::random_hex(16);
-            ctx.store_secret(DEVICE, &fresh).await?;
-            fresh
-        }
+    let device = if let Some(device) = ctx.secret(DEVICE) {
+        device
+    } else {
+        let fresh = api::random_hex(16);
+        ctx.store_secret(DEVICE, &fresh).await?;
+        fresh
     };
     let mut client = Client::new(&config.country, &username, &device);
 

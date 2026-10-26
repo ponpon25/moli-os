@@ -234,7 +234,7 @@ pub fn random_hex(n: usize) -> String {
         let mut hasher = state.build_hasher();
         hasher.write_u64(counter);
         hasher.write_u64(now_millis());
-        out.push_str(&format!("{:016x}", hasher.finish()));
+        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{:016x}", hasher.finish()));
         counter += 1;
     }
     out.truncate(n);
@@ -764,12 +764,8 @@ impl Client {
             let msg = status["msg"].as_str().unwrap_or("refused");
             if status["error"]["exceptionsNumber"]
                 .as_str()
-                .and_then(|n| n.parse::<u32>().ok())
-                .or_else(|| {
-                    status["error"]["exceptionsNumber"]
-                        .as_u64()
-                        .map(|n| n as u32)
-                })
+                .and_then(|n| n.parse::<u64>().ok())
+                .or_else(|| status["error"]["exceptionsNumber"].as_u64())
                 .is_some_and(|n| n > 0)
             {
                 format!("{msg} (open zones)")

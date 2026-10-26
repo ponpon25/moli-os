@@ -75,9 +75,9 @@ qui est au bout du fil (`Caller`) :
 | `via` | Quand | Clé de session (`Caller::key`) |
 |---|---|---|
 | `local` | client en boucle locale, **sans** en-tête Cloudflare | l'adresse |
-| `lan` | adresse privée, lien local ou ULA (IPv4 mappée ramenée en IPv4) | l'adresse |
+| `lan` | adresse privée, lien local ou ULA (IPv4 mappée ramenée en IPv4), sans en-tête de relais ; ou, venue d'un proxy déclaré (`[server] trusted_proxies`), dont le client nommé (dernière entrée de `X-Forwarded-For`, sinon `X-Real-IP`) est une telle adresse | l'adresse (celle du client pour un proxy déclaré) |
 | `access` | requête venue par le tunnel (en-têtes `cf-ray` / `cf-connecting-ip` **depuis la machine elle-même**) **et** assertion `Cf-Access-Jwt-Assertion` valide : signature RS256 vérifiée contre les clés publiques de l'équipe (`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`, rafraîchies au plus une fois par minute, gardées si Cloudflare est injoignable), audience = l'application, émetteur = l'équipe, non expirée (60 s de tolérance), e-mail présent | `access:<e-mail>` |
-| `outside` | tout le reste : tunnel sans assertion valide, adresse publique, appareil du réseau qui imite Cloudflare. **Refusé (403) sur toutes les routes.** | `cf:<ip>` ou l'adresse réelle |
+| `outside` | tout le reste : tunnel sans assertion valide, adresse publique, appareil du réseau qui imite Cloudflare, requête relayée (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`) par un proxy non déclaré, client Internet nommé par un proxy déclaré. **Refusé (403) sur toutes les routes.** | `cf:<ip>`, l'adresse du client nommé par un proxy déclaré, ou l'adresse réelle |
 
 Le tunnel se termine sur la machine elle-même : sans assertion valide, une requête venue
 par Cloudflare est une **inconnue**, jamais `local` ni `cli`. Sans `[server.access]`

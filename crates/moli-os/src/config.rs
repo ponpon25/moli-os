@@ -123,6 +123,11 @@ pub struct Server {
     /// (DNS-rebinding guard on every surface).
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
+    /// Reverse proxies of the home network (a NAS…): a request they relay
+    /// is judged by the client they name (`X-Forwarded-For`). Any other
+    /// relayed request is a stranger's.
+    #[serde(default)]
+    pub trusted_proxies: Vec<std::net::IpAddr>,
     /// Days of history kept (0 = no history).
     #[serde(default = "default_history_days")]
     pub history_days: u32,
@@ -160,6 +165,7 @@ impl Default for Server {
             data_dir: default_data_dir(),
             worker_threads: default_workers(),
             allowed_hosts: Vec::new(),
+            trusted_proxies: Vec::new(),
             history_days: default_history_days(),
             access: None,
             language: default_language(),

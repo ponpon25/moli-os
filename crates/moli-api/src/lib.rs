@@ -96,6 +96,9 @@ impl Household {
 pub struct Options {
     /// Host names (or IPs) this instance is reached by, besides localhost.
     pub allowed_hosts: Vec<String>,
+    /// Reverse proxies of the home network (`[server] trusted_proxies`):
+    /// a request they relay is judged by the client they name.
+    pub trusted_proxies: Vec<std::net::IpAddr>,
     /// PIN that opens a human session in the dashboard. `None`: nobody is
     /// recognized as human, so guarded orders can only wait (safe default).
     pub ui_pin: Option<UiPin>,
@@ -275,6 +278,11 @@ fn people(
         access: access.map(Arc::new),
         demo: options.demo,
         people: persons.clone(),
+        proxies: options
+            .trusted_proxies
+            .iter()
+            .map(std::net::IpAddr::to_canonical)
+            .collect(),
     };
     (Arc::new(humans), gate, persons)
 }

@@ -52,6 +52,8 @@ pub(crate) struct Gate {
     pub(crate) access: Option<Arc<Verifier>>,
     pub(crate) demo: bool,
     pub(crate) people: Arc<People>,
+    /// Reverse proxies of the home network, trusted to name the client.
+    pub(crate) proxies: Arc<[IpAddr]>,
 }
 
 /// What a guest may reach: the dashboard, what it reads of its rooms (the
@@ -174,9 +176,9 @@ fn through_cloudflare(headers: &HeaderMap) -> bool {
     headers.contains_key("cf-ray") || headers.contains_key("cf-connecting-ip")
 }
 
-/// A proxy on this very machine (a reverse proxy, `tailscale serve`) would
-/// make everyone look local, hence trusted: a request that says it was
-/// relayed is a stranger's.
+/// A proxy (on this very machine, `tailscale serve`, or another of the
+/// network) would make everyone look local, hence trusted: a request that
+/// says it was relayed is a stranger's, unless a trusted proxy relayed it.
 fn relayed(headers: &HeaderMap) -> bool {
     [
         "forwarded",
@@ -186,6 +188,22 @@ fn relayed(headers: &HeaderMap) -> bool {
     ]
     .iter()
     .any(|h| headers.contains_key(*h))
+}
+
+/// The client a trusted proxy names: the last `X-Forwarded-For` entry
+/// (the one the proxy added: those before it, the client may have
+/// written), else `X-Real-IP`.
+fn forwarded_client(headers: &HeaderMap) -> Option<IpAddr> {
+    let last = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .rfind(|v| !v.is_empty());
+    last.or_else(|| header(headers, "x-real-ip"))
+        .and_then(|ip| ip.parse::<IpAddr>().ok())
+        .map(|ip| ip.to_canonical())
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -208,9 +226,36 @@ fn is_home(ip: IpAddr) -> bool {
 }
 
 /// `access`: the e-mail of a verified Access assertion, if any.
-pub(crate) fn classify(peer: IpAddr, headers: &HeaderMap, access: Option<String>) -> Caller {
+/// `proxies`: the trusted reverse proxies of the home network.
+pub(crate) fn classify(
+    peer: IpAddr,
+    headers: &HeaderMap,
+    access: Option<String>,
+    proxies: &[IpAddr],
+) -> Caller {
     // `::ffff:192.168.0.20` is the home network too.
     let mapped = peer.to_canonical();
+    if !through_cloudflare(headers) && proxies.contains(&mapped) {
+        // Judged by the client it names: the home network stays at home,
+        // the Internet stays outside (and keyed by its own address).
+        return match forwarded_client(headers) {
+            Some(client) if is_home(client) && !client.is_loopback() => Caller {
+                via: Via::Lan,
+                key: client.to_string(),
+                person: None,
+            },
+            Some(client) => Caller {
+                via: Via::Outside,
+                key: client.to_string(),
+                person: None,
+            },
+            None => Caller {
+                via: Via::Outside,
+                key: mapped.to_string(),
+                person: None,
+            },
+        };
+    }
     if through_cloudflare(headers) {
         // The tunnel ends on this very machine: only from there are
         // Cloudflare's headers Cloudflare's. Keys never come from a header
@@ -238,7 +283,8 @@ pub(crate) fn classify(peer: IpAddr, headers: &HeaderMap, access: Option<String>
             },
         };
     }
-    let via = if mapped.is_loopback() && relayed(headers) {
+    let via = if relayed(headers) {
+        // Relayed by a proxy nobody declared: whoever is behind it.
         Via::Outside
     } else if mapped.is_loopback() {
         Via::Loopback
@@ -280,7 +326,7 @@ pub(crate) async fn identify(
         },
         _ => None,
     };
-    let mut caller = classify(peer, request.headers(), email);
+    let mut caller = classify(peer, request.headers(), email, &gate.proxies);
     // A phone's report carries its own token (checked by the route): the
     // one way in without the home network or Cloudflare Access.
     if caller.via == Via::Outside
@@ -415,29 +461,35 @@ mod tests {
 
     #[test]
     fn the_home_network_is_the_household() {
-        let lan = classify("192.168.0.20".parse().unwrap(), &HeaderMap::new(), None);
+        let lan = classify(
+            "192.168.0.20".parse().unwrap(),
+            &HeaderMap::new(),
+            None,
+            &[],
+        );
         assert_eq!(lan.via, Via::Lan);
         assert_eq!(lan.key, "192.168.0.20");
         assert!(lan.is_household() && !lan.is_local_machine());
-        let local = classify("127.0.0.1".parse().unwrap(), &HeaderMap::new(), None);
+        let local = classify("127.0.0.1".parse().unwrap(), &HeaderMap::new(), None, &[]);
         assert!(local.is_local_machine());
         let mapped = classify(
             "::ffff:192.168.0.20".parse().unwrap(),
             &HeaderMap::new(),
             None,
+            &[],
         );
         assert_eq!(mapped.via, Via::Lan);
         assert_eq!(mapped.key, "192.168.0.20");
-        let ula = classify("fd00::1".parse().unwrap(), &HeaderMap::new(), None);
+        let ula = classify("fd00::1".parse().unwrap(), &HeaderMap::new(), None, &[]);
         assert_eq!(ula.via, Via::Lan);
-        let public = classify("8.8.8.8".parse().unwrap(), &HeaderMap::new(), None);
+        let public = classify("8.8.8.8".parse().unwrap(), &HeaderMap::new(), None, &[]);
         assert_eq!(public.via, Via::Outside);
         assert!(!public.is_household());
         // A proxy on this machine would make everyone local: relayed is a stranger.
         for relay in ["x-forwarded-for", "forwarded", "tailscale-user-login"] {
             let mut headers = HeaderMap::new();
             headers.insert(relay, "100.64.0.7".parse().unwrap());
-            let relayed = classify("127.0.0.1".parse().unwrap(), &headers, None);
+            let relayed = classify("127.0.0.1".parse().unwrap(), &headers, None, &[]);
             assert_eq!(relayed.via, Via::Outside, "{relay}");
             assert!(!relayed.is_household() && !relayed.is_local_machine());
         }
@@ -500,6 +552,7 @@ mod tests {
             "192.168.0.30".parse().unwrap(),
             &cf,
             Some("moi@example.org".into()),
+            &[],
         );
         assert_eq!(
             posing.via,
@@ -513,11 +566,50 @@ mod tests {
     }
 
     #[test]
+    fn a_trusted_proxy_is_judged_by_its_client() {
+        let proxy: IpAddr = "192.168.0.10".parse().unwrap();
+        let proxies = [proxy];
+        // The household through the home's reverse proxy stays at home.
+        let home = headers(&[("x-forwarded-for", "192.168.0.42")]);
+        let lan = classify(proxy, &home, None, &proxies);
+        assert_eq!(lan.via, Via::Lan);
+        assert_eq!(lan.key, "192.168.0.42");
+        // The Internet through it is outside, keyed by its own address,
+        // even when it wrote a home address first.
+        let internet = headers(&[("x-forwarded-for", "192.168.0.42, 203.0.113.5")]);
+        let outside = classify(proxy, &internet, None, &proxies);
+        assert_eq!(outside.via, Via::Outside);
+        assert_eq!(outside.key, "203.0.113.5");
+        assert!(!outside.is_household());
+        // Without a client named: a stranger.
+        assert_eq!(
+            classify(proxy, &HeaderMap::new(), None, &proxies).via,
+            Via::Outside
+        );
+        // X-Real-IP when there is no X-Forwarded-For.
+        let real = headers(&[("x-real-ip", "203.0.113.6")]);
+        assert_eq!(classify(proxy, &real, None, &proxies).key, "203.0.113.6");
+        // A loopback client named by the proxy is not this machine.
+        let looped = headers(&[("x-forwarded-for", "127.0.0.1")]);
+        assert_eq!(classify(proxy, &looped, None, &proxies).via, Via::Outside);
+    }
+
+    #[test]
+    fn a_proxy_nobody_declared_is_a_stranger() {
+        // A reverse proxy of the network, not declared: the Internet behind
+        // it would look like the home network.
+        let relayed = headers(&[("x-forwarded-for", "203.0.113.5")]);
+        let caller = classify("192.168.0.10".parse().unwrap(), &relayed, None, &[]);
+        assert_eq!(caller.via, Via::Outside);
+        assert_eq!(caller.key, "192.168.0.10");
+    }
+
+    #[test]
     fn the_tunnel_is_trusted_only_with_a_verified_person() {
         // The tunnel ends on this machine: without proof, a stranger, and
         // never the CLI.
         let cf = headers(&[("cf-ray", "8c…-CDG"), ("cf-connecting-ip", "203.0.113.7")]);
-        let stranger = classify("127.0.0.1".parse().unwrap(), &cf, None);
+        let stranger = classify("127.0.0.1".parse().unwrap(), &cf, None, &[]);
         assert_eq!(stranger.via, Via::Outside);
         assert_eq!(stranger.key, "cf:203.0.113.7");
         assert!(!stranger.is_household() && !stranger.is_local_machine());
@@ -525,6 +617,7 @@ mod tests {
             "127.0.0.1".parse().unwrap(),
             &cf,
             Some("moi@example.org".into()),
+            &[],
         );
         assert_eq!(
             owner.via,

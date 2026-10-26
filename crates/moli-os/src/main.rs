@@ -358,6 +358,7 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
     let homekit = start_homekit(&config, &hub, &cancel, &mut tasks).await;
     let surfaces = moli_api::Options {
         allowed_hosts: config.server.allowed_hosts.clone(),
+        trusted_proxies: config.server.trusted_proxies.clone(),
         ui_pin,
         history,
         bench_path: Some(config.server.data_dir.join("bench.json")),

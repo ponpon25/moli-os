@@ -2,8 +2,8 @@
 
 - API JointSpace en HTTPS 1926, authentification digest (vérifiée sur l'exemple de la
   RFC 2617), Wake-on-LAN pour allumer.
-- Origine : rien de noté. Les identifiants d'appairage viennent d'ailleurs (le pilote
-  n'appaire pas) ; `pilotes.md` : « à vérifier, probablement repris de HA ».
+- Appairage JointSpace par le pilote (`src/pair.rs`) : points `pairing` (demande un code,
+  écran allumé) puis `pin` (le code affiché) ; les identifiants vont au coffre.
 - Pas de fixture : aucune réponse de la télé gardée dans les tests.
 - ⚠️ Identité = l'adresse `host` : un changement d'IP créerait un nouvel appareil.
 - **Côté Android** (`moli-androidtv`, module `android.rs`) :
@@ -19,5 +19,7 @@
     (refusé tout de suite, file vidée à chaque connexion).
 - Vérifié en vrai le 4 oct. (sonde en lecture) sur une Philips Google TV : elle accepte le
   certificat de HA, dit allumée et le volume ; Cast répond et donne le même programme que HA.
-- Reste : l'appairage JointSpace ; une identité stable (numéro de série) ; appairer Android
+- Vérifié en vrai le 26 oct. : appairage par code et allumage depuis la veille profonde
+  (Wake-on-LAN puis `powerstate = On`).
+- Reste : une identité stable (numéro de série) ; appairer Android
   TV Remote depuis Moli (port 6467, code à l'écran) pour une télé que HA n'a pas connue.

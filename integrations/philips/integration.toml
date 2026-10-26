@@ -17,8 +17,9 @@ ssdp = []
 ports = [1926, 6466, 8009]
 
 [needs]
-# JointSpace pairing credentials; `cert`, `atv_pin`, `cast_pin` are written
-# by the driver itself. Optional: `atv_cert` / `atv_key` (PEM), an Android TV
+# JointSpace pairing credentials (written by the driver when it pairs the
+# TV: `pairing` then `pin` points); `cert`, `atv_pin`, `cast_pin` are
+# written by the driver itself. Optional: `atv_cert` / `atv_key` (PEM), an Android TV
 # Remote pairing (Home Assistant's `.storage/androidtv_remote_*.pem`), to
 # open apps and know the one on screen.
 secrets = ["username", "password"]

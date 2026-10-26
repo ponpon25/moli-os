@@ -5,6 +5,7 @@
 //! the remote's keys while it is up (JointSpace when it is not).
 
 mod android;
+mod pair;
 
 use std::time::Duration;
 
@@ -695,15 +696,23 @@ async fn first_pin(config: &Config, ctx: &DriverCtx) -> anyhow::Result<String> {
 }
 
 async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
-    let (Some(username), Some(password)) = (ctx.secret(USERNAME), ctx.secret(PASSWORD)) else {
-        ctx.wait_for(moli_i18n::tr!(
-            "pilotes.philips.identifiants_manquants",
-            instance = ctx.instance(),
-            username = USERNAME,
-            password = PASSWORD
-        ));
-        ctx.cancelled().await;
-        return Ok(());
+    let (username, password) = match (ctx.secret(USERNAME), ctx.secret(PASSWORD)) {
+        (Some(username), Some(password)) => (username, password),
+        // Not paired yet: the driver pairs it, a person giving the code.
+        _ if ctx.can_store_secrets() => match pair::pair(config, ctx).await? {
+            Some(credentials) => credentials,
+            None => return Ok(()),
+        },
+        _ => {
+            ctx.wait_for(moli_i18n::tr!(
+                "pilotes.philips.identifiants_manquants",
+                instance = ctx.instance(),
+                username = USERNAME,
+                password = PASSWORD
+            ));
+            ctx.cancelled().await;
+            return Ok(());
+        }
     };
     let pin = match ctx.secret(CERT) {
         Some(pin) => pin,

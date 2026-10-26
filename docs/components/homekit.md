@@ -41,11 +41,13 @@ penser à retirer l'ancien « Moli » de l'app Maison.
 
 ## Choisir ce que HomeKit voit
 
-La carte propose :
+Dans *Réglages → Intégrations* :
 
-- une **politique par défaut** : *tout, sauf ce que je décoche*, ou *rien, sauf ce que je coche* ;
-- un **interrupteur par appareil** (liste filtrable). Un choix qui diffère du défaut est une
-  exception, qu'on peut annuler (↺).
+- le tableau **Assistants vocaux** (commun à HomeKit et Alexa) : une case par appareil et par
+  assistant (liste filtrable), et le **nom vocal**, celui que HomeKit et Alexa entendent (vide : le
+  nom de l'appareil dans Moli). Un choix qui diffère du défaut est une exception ;
+- la carte **HomeKit** : la **politique par défaut** (*tout, sauf ce que je décoche*, ou *rien, sauf
+  ce que je coche*) et l'appairage.
 
 Le choix vit dans `data/homekit.json` (pas dans `moli.toml`) et se règle **par un humain** (session
 avec code) : c'est ce qui sort de la maison. Décocher un appareil le **retire** du pont : il disparaît
@@ -238,4 +240,5 @@ flux en cours, image), `rtp.rs` (repaquetisation H.264, rapport d'émetteur), `s
 `bigint.rs`, `crypto.rs`, `tlv.rs`, `http.rs`, `mdns.rs`, `store.rs`, `setup.rs`. Côté réseau :
 `moli-net/src/rtsp.rs` (client RTSP/RTSPS) et `h264.rs` ; côté runtime : `moli-runtime/src/media.rs`
 (`LiveSource`, `LiveStream`, `Hub::camera_live`) ; côté pilote : `moli-unifi/src/lib.rs`. Côté API : `moli-api/src/homekit.rs`.
-Côté tableau de bord : `web/src/maison/ui/HomeKitCard.svelte`.
+Côté tableau de bord : `web/src/maison/ui/HomeKitCard.svelte` (appairage, politique) et
+`web/src/maison/ui/VoiceDevices.svelte` (le tableau commun avec Alexa).

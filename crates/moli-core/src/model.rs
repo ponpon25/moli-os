@@ -43,12 +43,27 @@ pub struct Label {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room: Option<String>,
+    /// The name said to a voice assistant (HomeKit, Alexa), when it differs
+    /// from the dashboard's: « Télé » for a TV labelled by its model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
 }
 
 impl Label {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.name.is_none() && self.room.is_none()
+        self.name.is_none() && self.room.is_none() && self.voice.is_none()
+    }
+
+    /// The name a voice assistant knows the device by: its voice name, else
+    /// its name, else `native`.
+    #[must_use]
+    pub fn spoken<'a>(&'a self, native: &'a str) -> &'a str {
+        [self.voice.as_deref(), self.name.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|n| !n.trim().is_empty())
+            .unwrap_or(native)
     }
 }
 

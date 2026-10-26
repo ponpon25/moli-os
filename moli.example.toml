@@ -96,7 +96,8 @@ base_topic = "zigbee2mqtt"
 # local_listen = "127.0.0.1:10300"              # Whisper (Wyoming), repli de l'écoute ; "" = aucun
 
 # Pont HomeKit : Moli apparaît dans l'app Maison de l'iPhone (accessoire « pont »).
-# Les appareils montrés se règlent un par un dans le tableau de bord (Système).
+# Les appareils montrés et leur nom vocal se règlent dans le tableau de bord
+# (Réglages → Intégrations).
 # Le code d'appairage vit dans le coffre chiffré (MOLI_MASTER_KEY obligatoire),
 # jamais ici. Le conteneur doit être en `network_mode: host` (annonce mDNS).
 # [homekit]
@@ -104,3 +105,10 @@ base_topic = "zigbee2mqtt"
 # port = 51827
 # alarm_direct = true       # armer/désarmer depuis Maison sans approbation (défaut : retenu)
 # address = "192.168.0.x"   # seulement si la route par défaut n'est pas la bonne
+
+# Skill Alexa « maison connectée » (tools/alexa-skill/README.md) : le nom public par lequel
+# Amazon joint Moli, derrière le reverse proxy ; sur ce nom, seul /api/alexa répond. Le jeton
+# partagé vit dans le coffre (secrets set alexa-skill token). Les appareils montrés et leur nom
+# vocal se règlent dans le tableau de bord (Réglages → Intégrations).
+# [alexa]
+# host = "alexa.example.org"

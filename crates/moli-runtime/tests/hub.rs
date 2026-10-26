@@ -216,7 +216,8 @@ async fn labels_persist_and_reload() {
             &device,
             LabelPatch {
                 name: Some("  Prise bureau ".into()),
-                room: None
+                room: None,
+                voice: None,
             },
             Origin::Mcp,
             None,
@@ -225,7 +226,8 @@ async fn labels_persist_and_reload() {
             &device,
             LabelPatch {
                 name: None,
-                room: Some("Bureau".into())
+                room: Some("Bureau".into()),
+                voice: None,
             },
             Origin::Mcp,
             None,
@@ -342,6 +344,7 @@ async fn into_room(hub: &Hub, room: &str) {
     let patch = LabelPatch {
         name: None,
         room: Some(room.into()),
+        voice: None,
     };
     hub.set_label(&"fake:plug1".into(), patch, Origin::Ui, None)
         .await
@@ -456,6 +459,7 @@ async fn agents_cannot_relabel_their_way_out_of_a_protected_room() {
     let escape = LabelPatch {
         name: None,
         room: Some("Grenier".into()),
+        voice: None,
     };
     let refused = hub
         .set_label(&"fake:plug1".into(), escape.clone(), Origin::Mcp, None)
@@ -465,6 +469,7 @@ async fn agents_cannot_relabel_their_way_out_of_a_protected_room() {
     let rename = LabelPatch {
         name: Some("Veilleuse".into()),
         room: None,
+        voice: None,
     };
     hub.set_label(&"fake:plug1".into(), rename, Origin::Mcp, None)
         .await
@@ -999,6 +1004,7 @@ async fn agents_name_but_never_rename() {
     let name = |n: &str| LabelPatch {
         name: Some(n.into()),
         room: None,
+        voice: None,
     };
     // Naming a device nobody named: allowed (onboarding), cleaned and bounded.
     let named = hub

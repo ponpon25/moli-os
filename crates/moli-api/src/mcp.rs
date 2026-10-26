@@ -297,6 +297,7 @@ impl MoliMcp {
         let patch = LabelPatch {
             name: args.name,
             room: args.room,
+            voice: None,
         };
         match self
             .hub

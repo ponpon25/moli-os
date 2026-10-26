@@ -11,9 +11,9 @@ enceinte → Alexa (Amazon) → AWS Lambda (ce dossier) → https://alexa.exampl
 
 - **Moli** fait tout le protocole (Smart Home API v3, `crates/moli-api/src/alexa_home.rs`) :
   découverte, état, ordres. La Lambda ne fait que relayer, avec un jeton partagé.
-- **Ce qu'Alexa voit** : chaque point `on_off` inscriptible devient un appareil, avec la
-  luminosité, la couleur et la température de blanc d'une lampe, le volume et la sourdine d'une
-  télé. Catégorie : télé (volume), lampe, prise (puissance mesurée) ou interrupteur.
+- **Ce qu'Alexa voit** : chaque point `on_off` inscriptible des appareils choisis devient un
+  appareil, avec la luminosité, la couleur et la température de blanc d'une lampe, le volume et la
+  sourdine d'une télé. Catégorie : télé (volume), lampe, prise (puissance mesurée) ou interrupteur.
 - **La garde s'applique** : un ordre d'Alexa part en origine `api`, acteur `alexa`, comme ceux de
   HomeKit. Retenu (pièce protégée, heures calmes, machine), il est dit fait à Alexa et attend
   l'approbation dans le tableau de bord.
@@ -31,8 +31,14 @@ trusted_proxies = ["192.168.1.x"]
 
 [alexa]
 host = "alexa.example.org"          # ajouté de lui-même aux noms autorisés
-# devices = ["hue:…", "tele:…"]     # facultatif : seulement ceux-là (défaut : tous)
 ```
+
+Les appareils qu'Alexa voit et le nom qu'elle entend se règlent dans le tableau de bord,
+*Réglages → Intégrations*, tableau **Assistants vocaux** (commun avec HomeKit). Par défaut : tous
+les vrais appareils, pas les interrupteurs virtuels des assistants (`helpers`, une présence par
+exemple). Le **nom vocal** (« Télé » pour une télé nommée par son modèle) vaut pour Alexa et
+HomeKit ; vide, c'est le nom de l'appareil dans Moli. Après un changement : « Alexa, découvre mes
+appareils ».
 
 Le jeton partagé, tiré au hasard et rangé dans le coffre, jamais tapé ni affiché :
 

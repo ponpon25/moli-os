@@ -6,18 +6,31 @@
 //! phone's report; on the name given to Amazon (`[alexa] host`), nothing
 //! else answers.
 //!
+//! Which devices Alexa sees is chosen in the dashboard (Réglages →
+//! Intégrations), kept in `alexa.json` next to the other data: by default
+//! every real device, not the helpers (virtual switches such as a
+//! presence). The name Alexa hears is the device's voice name.
+//!
 //! An order goes to the hub as origin `api`, actor « alexa »: the guard
 //! applies, as for HomeKit (held in a protected room or at quiet hours,
 //! told to Alexa as done, approved in the dashboard).
 
+use std::collections::BTreeMap;
+use std::path::{Path as FsPath, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
 use axum::Extension;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use moli_core::{InstanceId, Kind, Origin, PointId, PointSpec, Semantic, Value};
-use moli_runtime::{CommandError, DeviceView, Hub};
-use serde::Deserialize;
+use moli_runtime::{CommandError, DeviceView, DriverView, Hub};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
+
+use crate::caller::Caller;
+use crate::session::Sessions;
 
 /// Where the shared token lives: `moli-os secrets set alexa-skill token`.
 pub const INSTANCE: &str = "alexa-skill";
@@ -32,13 +45,93 @@ pub struct AlexaConfig {
     /// on it, only `/api/alexa` answers.
     #[serde(default)]
     pub host: Option<String>,
-    /// The devices Alexa sees (ids); empty: every device it has a place for.
+}
+
+/// The skill as the API sees it: its settings, the household's choice of
+/// devices, the last directive received.
+#[derive(Debug)]
+pub(crate) struct Alexa {
+    config: AlexaConfig,
+    path: Option<PathBuf>,
+    /// Per-device choices that depart from the default.
+    choices: Mutex<BTreeMap<String, bool>>,
+    /// When Amazon last reached Moli (ms), 0: never since start.
+    last: AtomicU64,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct Saved {
     #[serde(default)]
-    pub devices: Vec<String>,
+    exceptions: BTreeMap<String, bool>,
+}
+
+impl Alexa {
+    /// The choices are read from `alexa.json` in `data_dir`; none: every
+    /// device follows the default.
+    pub(crate) fn open(config: AlexaConfig, data_dir: Option<&FsPath>) -> Self {
+        let path = data_dir.map(|d| d.join("alexa.json"));
+        let saved: Saved = path
+            .as_deref()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|bytes| match serde_json::from_slice(&bytes) {
+                Ok(saved) => Some(saved),
+                Err(e) => {
+                    tracing::error!(error = %e, "alexa: alexa.json unreadable, defaults used");
+                    None
+                }
+            })
+            .unwrap_or_default();
+        Self {
+            config,
+            path,
+            choices: Mutex::new(saved.exceptions),
+            last: AtomicU64::new(0),
+        }
+    }
+
+    fn exposed(&self, view: &DeviceView, drivers: &[DriverView]) -> bool {
+        let id = view.device.id.as_str();
+        self.choices
+            .lock()
+            .expect("alexa choices")
+            .get(id)
+            .copied()
+            .unwrap_or_else(|| by_default(view, drivers))
+    }
+
+    /// A device's own choice; `None` goes back to the default.
+    fn choose(&self, id: &str, default: bool, exposed: Option<bool>) -> std::io::Result<()> {
+        let mut choices = self.choices.lock().expect("alexa choices");
+        match exposed {
+            Some(choice) if choice != default => {
+                choices.insert(id.to_owned(), choice);
+            }
+            _ => {
+                choices.remove(id);
+            }
+        }
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        let bytes = serde_json::to_vec_pretty(&Saved {
+            exceptions: choices.clone(),
+        })
+        .map_err(std::io::Error::other)?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, bytes)?;
+        std::fs::rename(&tmp, path)
+    }
+}
+
+/// Without a choice: every real device, not a helper's virtual switch.
+fn by_default(view: &DeviceView, drivers: &[DriverView]) -> bool {
+    !drivers
+        .iter()
+        .any(|d| d.instance == view.device.instance && d.kind == "helpers")
 }
 
 #[derive(Clone)]
-pub(crate) struct AlexaGate(pub(crate) Option<AlexaConfig>);
+pub(crate) struct AlexaGate(pub(crate) Option<Arc<Alexa>>);
 
 /// Whether `host` (a `Host` header, port or not) is the name given to Amazon.
 pub(crate) fn is_skill_host(config: Option<&AlexaConfig>, host: &str) -> bool {
@@ -57,11 +150,11 @@ pub(crate) fn is_skill_host(config: Option<&AlexaConfig>, host: &str) -> bool {
 /// `POST /api/alexa`: one directive, relayed by the skill's Lambda.
 pub(crate) async fn directive(
     State(hub): State<Hub>,
-    Extension(AlexaGate(config)): Extension<AlexaGate>,
+    Extension(AlexaGate(alexa)): Extension<AlexaGate>,
     headers: HeaderMap,
     axum::Json(request): axum::Json<Json>,
 ) -> Response {
-    let Some(config) = config else {
+    let Some(alexa) = alexa else {
         return (StatusCode::NOT_FOUND, "alexa is not configured").into_response();
     };
     let expected = hub.secret(&InstanceId::from(INSTANCE), TOKEN);
@@ -74,7 +167,110 @@ pub(crate) async fn directive(
         tracing::warn!("alexa: token refused");
         return (StatusCode::UNAUTHORIZED, "token refused").into_response();
     }
-    axum::Json(handle(&hub, &config, &request).await).into_response()
+    alexa.last.store(moli_core::now_ms(), Ordering::Relaxed);
+    axum::Json(handle(&hub, &alexa, &request).await).into_response()
+}
+
+fn refuse(status: StatusCode, message: &str) -> Response {
+    (status, axum::Json(json!({ "error": message }))).into_response()
+}
+
+/// `GET /api/integrations/alexa`: the skill's state and every device Alexa
+/// has a place for, with the names Alexa hears and whether it is shown.
+pub(crate) async fn settings(
+    State(hub): State<Hub>,
+    Extension(AlexaGate(alexa)): Extension<AlexaGate>,
+) -> Response {
+    let Some(alexa) = alexa else {
+        return axum::Json(json!({ "enabled": false })).into_response();
+    };
+    let snapshot = hub.snapshot();
+    let all = endpoints(&snapshot.devices, |_| true);
+    let mut devices: Vec<Json> = Vec::new();
+    for view in &snapshot.devices {
+        let names: Vec<&str> = all
+            .iter()
+            .filter(|e| e.view.device.id == view.device.id)
+            .map(|e| e.name.as_str())
+            .collect();
+        if names.is_empty() {
+            continue;
+        }
+        let id = view.device.id.as_str();
+        let default = by_default(view, &snapshot.drivers);
+        let exception = alexa
+            .choices
+            .lock()
+            .expect("alexa choices")
+            .contains_key(id);
+        devices.push(json!({
+            "id": id,
+            "names": names,
+            "exposed": alexa.exposed(view, &snapshot.drivers),
+            "default": default,
+            "exception": exception,
+        }));
+    }
+    let last = alexa.last.load(Ordering::Relaxed);
+    axum::Json(json!({
+        "enabled": true,
+        "host": alexa.config.host,
+        "token": hub.secret(&InstanceId::from(INSTANCE), TOKEN).is_some(),
+        "last": (last > 0).then_some(last),
+        "devices": devices,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Choice {
+    exposed: Option<bool>,
+}
+
+/// `PUT /api/integrations/alexa/{id}` `{ exposed: true | false | null }`
+/// (`null`: back to the default). A person's (code): it decides what
+/// Amazon sees.
+pub(crate) async fn choose(
+    State(hub): State<Hub>,
+    Extension(AlexaGate(alexa)): Extension<AlexaGate>,
+    Extension(humans): Extension<Arc<Sessions>>,
+    caller: Caller,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    axum::Json(body): axum::Json<Choice>,
+) -> Response {
+    let Some(alexa) = alexa else {
+        return refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &moli_i18n::tr!("serveur.alexa.absent"),
+        );
+    };
+    if !humans.is_human(&headers, &caller.key) {
+        return refuse(
+            StatusCode::FORBIDDEN,
+            &moli_i18n::tr!("serveur.alexa.humain"),
+        );
+    }
+    let snapshot = hub.snapshot();
+    let Some(view) = snapshot
+        .devices
+        .iter()
+        .find(|v| v.device.id.as_str() == id)
+        .filter(|v| !endpoints(std::slice::from_ref(*v), |_| true).is_empty())
+    else {
+        return refuse(
+            StatusCode::NOT_FOUND,
+            &moli_i18n::tr!("serveur.alexa.appareil_inconnu"),
+        );
+    };
+    let default = by_default(view, &snapshot.drivers);
+    if let Err(e) = alexa.choose(&id, default, body.exposed) {
+        tracing::error!(error = %e, "alexa: cannot write alexa.json");
+        return refuse(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+    tracing::info!(device = %id, exposed = ?body.exposed, "alexa: a device's choice changed");
+    axum::Json(json!({ "id": id, "exposed": body.exposed.unwrap_or(default) })).into_response()
 }
 
 /// Compared through their digests: no early exit on the first difference.
@@ -89,14 +285,14 @@ fn token_matches(expected: Option<&str>, given: Option<&str>) -> bool {
     digest(expected).as_ref() == digest(given).as_ref()
 }
 
-async fn handle(hub: &Hub, config: &AlexaConfig, request: &Json) -> Json {
+async fn handle(hub: &Hub, alexa: &Alexa, request: &Json) -> Json {
     let directive = &request["directive"];
     let head = &directive["header"];
     let namespace = head["namespace"].as_str().unwrap_or_default();
     let name = head["name"].as_str().unwrap_or_default();
     let correlation = head["correlationToken"].as_str();
-    let views = hub.snapshot().devices;
-    let endpoints = endpoints(&views, config);
+    let snapshot = hub.snapshot();
+    let endpoints = endpoints(&snapshot.devices, |v| alexa.exposed(v, &snapshot.drivers));
     match (namespace, name) {
         ("Alexa.Discovery", "Discover") => discovery(&endpoints),
         ("Alexa.Authorization", "AcceptGrant") => json!({
@@ -182,13 +378,10 @@ fn tag(key: &str) -> &str {
     key
 }
 
-fn endpoints<'a>(views: &'a [DeviceView], config: &AlexaConfig) -> Vec<Endpoint<'a>> {
+fn endpoints(views: &[DeviceView], shown: impl Fn(&DeviceView) -> bool) -> Vec<Endpoint<'_>> {
     let mut out = Vec::new();
-    for view in views {
+    for view in views.iter().filter(|v| shown(v)) {
         let device = &view.device;
-        if !config.devices.is_empty() && !config.devices.iter().any(|d| d == device.id.as_str()) {
-            continue;
-        }
         let writable = |p: &&PointSpec| p.access.write;
         let switches: Vec<&PointSpec> = device
             .points
@@ -200,11 +393,7 @@ fn endpoints<'a>(views: &'a [DeviceView], config: &AlexaConfig) -> Vec<Endpoint<
             .collect();
         let single = switches.len() == 1;
         let has_power = device.points.iter().any(|p| p.semantic == Semantic::Power);
-        let base = view
-            .label
-            .name
-            .clone()
-            .unwrap_or_else(|| device.native_name.to_string());
+        let base = view.label.spoken(&device.native_name).trim().to_owned();
         for on in &switches {
             // The device's own on/off (a TV's power) carries its name and
             // its volume; the others (its Ambilight) are named after it.
@@ -716,12 +905,32 @@ mod tests {
     fn the_skill_host_alone_is_restricted() {
         let config = AlexaConfig {
             host: Some("alexa.example.org".into()),
-            devices: Vec::new(),
         };
         assert!(is_skill_host(Some(&config), "alexa.example.org"));
         assert!(is_skill_host(Some(&config), "ALEXA.example.org:443"));
         assert!(!is_skill_host(Some(&config), "moli.example.org"));
         assert!(!is_skill_host(None, "alexa.example.org"));
+    }
+
+    #[test]
+    fn choices_are_kept_and_only_when_they_differ() {
+        let dir = std::env::temp_dir().join(format!("moli-alexa-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let alexa = Alexa::open(AlexaConfig::default(), Some(&dir));
+        alexa.choose("hue:a", true, Some(false)).unwrap();
+        alexa.choose("hue:b", true, Some(true)).unwrap();
+        let again = Alexa::open(AlexaConfig::default(), Some(&dir));
+        let kept = again.choices.lock().unwrap().clone();
+        assert_eq!(kept, BTreeMap::from([("hue:a".to_owned(), false)]));
+        again.choose("hue:a", true, None).unwrap();
+        assert!(
+            Alexa::open(AlexaConfig::default(), Some(&dir))
+                .choices
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

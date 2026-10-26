@@ -208,6 +208,8 @@ fn house_routes(humans: &Arc<session::Sessions>, options: &Options) -> Router<Hu
             "/api/integrations/apple-music/developer-token",
             get(integrations::apple_developer_token),
         )
+        .route("/api/integrations/alexa", get(alexa_home::settings))
+        .route("/api/integrations/alexa/{id}", put(alexa_home::choose))
         .route("/api/homekit", get(homekit::status))
         .route("/api/homekit/policy", put(homekit::set_policy))
         .route("/api/homekit/devices/{id}", put(homekit::set_device))
@@ -399,7 +401,15 @@ pub fn router(hub: Hub, shutdown: CancellationToken, options: &Options) -> Route
         .layer(Extension(assistant::Moli(options.assistant.clone())))
         .layer(Extension(automations::Autos(options.automations.clone())))
         .layer(Extension(phones::PhonesGate(options.phones.clone())))
-        .layer(Extension(alexa_home::AlexaGate(options.alexa.clone())))
+        .layer(Extension(alexa_home::AlexaGate(options.alexa.clone().map(
+            |config| {
+                let data_dir = options
+                    .home_path
+                    .as_deref()
+                    .and_then(std::path::Path::parent);
+                Arc::new(alexa_home::Alexa::open(config, data_dir))
+            },
+        ))))
         .layer(Extension(humans))
         .layer(Extension(persons))
         .layer(DefaultBodyLimit::max(BODY))

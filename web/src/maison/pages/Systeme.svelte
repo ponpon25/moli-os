@@ -3,6 +3,7 @@
   import Icon from '../ui/Icon.svelte';
   import TuyaCloudKeys from '../ui/TuyaCloudKeys.svelte';
   import HomeKitCard from '../ui/HomeKitCard.svelte';
+  import VoiceDevices from '../ui/VoiceDevices.svelte';
   import AssistantSettings from '../ui/AssistantSettings.svelte';
   import AssistantExchanges from '../ui/AssistantExchanges.svelte';
   import AlexaAccount from '../ui/AlexaAccount.svelte';
@@ -229,10 +230,11 @@
         <AssistantSettings />
         <AssistantExchanges />
       {:else if section === 'integrations'}
-        <OlvidCard />
-        <AlexaAccount />
-        <TuyaCloudKeys />
+        <VoiceDevices />
         <HomeKitCard />
+        <AlexaAccount />
+        <OlvidCard />
+        <TuyaCloudKeys />
       {:else}
         <p class="page-sub">{t('systeme.page.sous_titre')}</p>
         <section class="card health">

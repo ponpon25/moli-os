@@ -91,6 +91,7 @@ async fn bedroom(dir: &std::path::Path) -> Hub {
     let patch = LabelPatch {
         name: None,
         room: Some("Chambre".into()),
+        voice: None,
     };
     hub.set_label(&"fake:lamp".into(), patch, Origin::Ui, None)
         .await

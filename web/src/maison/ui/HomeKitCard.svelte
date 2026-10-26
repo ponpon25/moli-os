@@ -5,12 +5,11 @@
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
 
-  /** Moli as a HomeKit bridge: which devices the Home app sees, and the
-   *  setup code to add Moli there. What leaves the house is a person's
-   *  choice (code asked); the setup code is shown to a person only. */
+  /** Moli as a HomeKit bridge: the setup code to add Moli to the Home app,
+   *  and the default for devices nobody chose (the choice itself is in the
+   *  voice assistants' table). The setup code is shown to a person only. */
   let state = $state(null);
   let open = $state(false);
-  let filter = $state('');
   let busy = $state(false);
 
   async function load() {
@@ -24,12 +23,6 @@
   onMount(load);
 
   const status = $derived(state?.status);
-  const devices = $derived(state?.devices ?? []);
-  const shown = $derived.by(() => {
-    const q = filter.trim().toLowerCase();
-    if (!q) return devices;
-    return devices.filter((d) => `${d.name} ${d.room ?? ''} ${d.id}`.toLowerCase().includes(q));
-  });
   const qr = $derived.by(() => {
     if (!status?.setup_uri) return '';
     const code = qrcode(0, 'M');
@@ -67,15 +60,6 @@
 
   const setPolicy = (policy) =>
     write('PUT', '/api/homekit/policy', { policy }, t('systeme.homekit.titre'), () => setPolicy(policy));
-
-  const setDevice = (d, exposed) =>
-    write(
-      'PUT',
-      `/api/homekit/devices/${encodeURIComponent(d.id)}`,
-      { exposed },
-      d.name,
-      () => setDevice(d, exposed),
-    );
 
   async function unpair() {
     if (!confirm(t('systeme.homekit.reinitialiser_confirme'))) return;
@@ -150,36 +134,6 @@
         <p class="warn">{t('systeme.homekit.trop')}</p>
       {/if}
 
-      <input
-        class="filter"
-        type="search"
-        placeholder={t('systeme.homekit.filtrer')}
-        bind:value={filter}
-        spellcheck="false"
-        autocomplete="off"
-      />
-
-      <ul class="devices">
-        {#each shown as d (d.id)}
-          <li class:off={!d.exposed}>
-            <label>
-              <input type="checkbox" checked={d.exposed && !d.protected} disabled={busy || d.protected} onchange={(e) => setDevice(d, e.currentTarget.checked)} />
-              <span class="name">{d.name}</span>
-            </label>
-            {#if d.room}<span class="muted room">{d.room}</span>{/if}
-            <span class="kinds">
-              {#each d.kinds as k (k)}<span class="chip">{t('systeme.homekit.type.' + k)}</span>{/each}
-              {#if d.absent}<span class="chip warm">{t('systeme.homekit.absent')}</span>{/if}
-              {#if d.protected}<span class="chip warm" title={t('systeme.homekit.protegee_aide')}>{t('systeme.homekit.protegee')}</span>{/if}
-            </span>
-            {#if d.exception}
-              <button class="link" disabled={busy} title={t('systeme.homekit.suivre_defaut')} onclick={() => setDevice(d, null)}>↺</button>
-            {/if}
-          </li>
-        {:else}
-          <li class="muted">{t('systeme.homekit.aucun')}</li>
-        {/each}
-      </ul>
       <small class="muted">{t('systeme.homekit.garde')}</small>
     {/if}
   </section>
@@ -310,83 +264,16 @@
     font-size: 13px;
   }
 
-  .filter {
-    font: inherit;
-    font-size: 14px;
-    padding: 9px 12px;
-    border-radius: var(--r-sm);
-    border: 1px solid var(--line);
-    background: var(--surface);
-    color: var(--ink);
-  }
 
-  .devices {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    max-height: 420px;
-    overflow: auto;
-    display: grid;
-    gap: 2px;
-  }
 
-  .devices li {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-    padding: 6px 8px;
-    border-radius: var(--r-sm);
-  }
 
-  .devices li:hover {
-    background: var(--surface);
-  }
 
-  .devices li.off .name {
-    color: var(--ink-2);
-    text-decoration: line-through;
-  }
 
-  .devices label {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex: 1;
-    min-width: 180px;
-    cursor: pointer;
-  }
 
-  .room {
-    font-size: 12px;
-  }
 
-  .kinds {
-    display: flex;
-    gap: 4px;
-    flex-wrap: wrap;
-  }
 
-  .chip {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: var(--surface);
-    color: var(--ink-2);
-  }
 
-  .chip.warm {
-    background: var(--warm-soft);
-    color: var(--warm-ink);
-  }
 
-  .link {
-    border: 0;
-    background: none;
-    color: var(--ink-2);
-    cursor: pointer;
-    font-size: 16px;
-  }
 
   small {
     font-size: 12px;

@@ -151,6 +151,8 @@ pub struct LabelPatch {
     pub name: Option<String>,
     #[serde(default)]
     pub room: Option<String>,
+    #[serde(default)]
+    pub voice: Option<String>,
 }
 
 /// Longest name or room a label may hold: a label is read by people, by
@@ -177,6 +179,7 @@ impl LabelPatch {
         Label {
             name: merge(self.name, current.name),
             room: merge(self.room, current.room),
+            voice: merge(self.voice, current.voice),
         }
     }
 }
@@ -1064,6 +1067,10 @@ impl Hub {
                 .is_some_and(|l| l.name.is_some())
         {
             return Some(moli_i18n::tr!("serveur.garde.renommer_humain"));
+        }
+        // What a voice assistant answers to is the household's word.
+        if origin != Origin::Household && patch.voice.is_some() {
+            return Some(moli_i18n::tr!("serveur.garde.nom_vocal_humain"));
         }
         patch.room.as_ref()?;
         let rooms = self.rooms_of(device);

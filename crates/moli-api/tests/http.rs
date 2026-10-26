@@ -613,6 +613,7 @@ async fn guest_house(name: &str, more: impl FnOnce(&mut moli_api::Options)) -> G
         let room = LabelPatch {
             name: None,
             room: Some(room.into()),
+            voice: None,
         };
         hub.set_label(&device.into(), room, moli_core::Origin::Ui, None)
             .await
@@ -892,6 +893,7 @@ async fn a_guest_follows_its_rooms_only_live() {
     let room = moli_runtime::LabelPatch {
         name: None,
         room: Some(GUEST_ROOM.into()),
+        voice: None,
     };
     house
         .hub

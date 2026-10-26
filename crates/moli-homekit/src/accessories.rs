@@ -1018,11 +1018,7 @@ pub struct Entry {
 
 impl Entry {
     pub fn new(device: Arc<Device>, label: &Label, live: bool) -> Self {
-        let name = label
-            .name
-            .as_deref()
-            .filter(|n| !n.trim().is_empty())
-            .unwrap_or(&device.native_name);
+        let name = label.spoken(&device.native_name);
         // HAP names stay short and plain.
         let name: String = name.trim().chars().take(64).collect();
         Self {
@@ -1920,6 +1916,7 @@ mod tests {
             &Label {
                 name: Some("Salon".into()),
                 room: None,
+                voice: None,
             },
             false,
         );

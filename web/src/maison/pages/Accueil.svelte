@@ -16,6 +16,7 @@
   import { catalogue, showTile, isClim, isDev, available } from '../lib/tiles.svelte.js';
   import DeviceCard from '../ui/DeviceCard.svelte';
   import SensorCard from '../ui/SensorCard.svelte';
+  import SmokeCard from '../ui/SmokeCard.svelte';
   import SpeakerCard from '../ui/SpeakerCard.svelte';
   import PlayerCard from '../ui/PlayerCard.svelte';
   import { has } from '../lib/speakers.js';
@@ -23,7 +24,7 @@
   import PrinterCard from '../ui/PrinterCard.svelte';
   import PaperPrinterCard from '../ui/PaperPrinterCard.svelte';
   import Remote from '../ui/Remote.svelte';
-  import { deviceKind } from '../lib/home.svelte.js';
+  import { deviceKind, isSmoke } from '../lib/home.svelte.js';
   import { isPaperPrinter } from '../lib/paper.js';
 
   const cfg = $derived(home.config ?? {});
@@ -470,6 +471,8 @@
         <Remote tv={tile.device} speaker={speaker} />
       {:else if kind === 'printer'}
         {#if isPaperPrinter(d)}<PaperPrinterCard id={tile.device} />{:else}<PrinterCard id={tile.device} />{/if}
+      {:else if isSmoke(d)}
+        <SmokeCard id={tile.device} name={tile.label} />
       {:else}
         <DeviceCard id={tile.device} name={tile.label} />
       {/if}

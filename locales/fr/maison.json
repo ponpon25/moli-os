@@ -307,5 +307,9 @@
   "maison.equipements.interface": "Appairage et réglages",
   "maison.equipements.interface_de": "Ouvrir l’interface de {name}",
   "maison.equipements.pont_vide": "Aucun équipement pour l’instant",
-  "maison.equipements.pont_vide_aide": "L’appairage se fait dans son interface ; les équipements apparaissent ici ensuite."
+  "maison.equipements.pont_vide_aide": "L’appairage se fait dans son interface ; les équipements apparaissent ici ensuite.",
+  "maison.equipements.ranger": "Ranger",
+  "maison.equipements.par_source": "Par source",
+  "maison.equipements.par_room": "Par pièce",
+  "maison.equipements.sans_piece": "Sans pièce"
 }

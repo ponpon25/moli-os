@@ -307,5 +307,9 @@
   "maison.equipements.interface": "Pairing and settings",
   "maison.equipements.interface_de": "Open the {name} interface",
   "maison.equipements.pont_vide": "No device yet",
-  "maison.equipements.pont_vide_aide": "Pairing happens in its interface; devices show up here afterwards."
+  "maison.equipements.pont_vide_aide": "Pairing happens in its interface; devices show up here afterwards.",
+  "maison.equipements.ranger": "Group",
+  "maison.equipements.par_source": "By source",
+  "maison.equipements.par_room": "By room",
+  "maison.equipements.sans_piece": "No room"
 }

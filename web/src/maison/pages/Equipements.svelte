@@ -1,5 +1,5 @@
 <script>
-  import { hub, roomList, roomOf, nameOf, deviceKind, hidden, reachable, roomNamed, home } from '../lib/home.svelte.js';
+  import { hub, roomList, roomOf, nameOf, deviceKind, hidden, reachable, roomNamed, home, driverName, isSmoke } from '../lib/home.svelte.js';
   import { layout, addRoom, setDeviceRoom, setDeviceName } from '../lib/layout.svelte.js';
   import { catalogue, showTile, available, deviceOnDashboard, showDevice } from '../lib/tiles.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
@@ -30,6 +30,8 @@
 
   let query = $state('');
   let filter = $state('all');
+  /** grouped by where they come from (`source`) or where they are (`room`) */
+  let by = $state('source');
   /** the device getting a brand new room */
   let creating = $state(null);
   let draft = $state('');
@@ -45,6 +47,11 @@
   const source = (d) => d.id.split(':')[0];
   /** A bridge's own interface (Zigbee2MQTT…), for what Moli does not do: pairing, device settings. */
   const webOf = (src) => hub.drivers?.find((x) => x.instance === src)?.web;
+  /** « Zigbee », not « z2m »: the catalog's name for where they come from. */
+  const sourceName = (src) => {
+    const driver = hub.drivers?.find((x) => x.instance === src);
+    return driver && driver.kind !== '?' ? driverName(driver) : src;
+  };
   const norm = (s) => String(s ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
   const devices = $derived(
@@ -63,19 +70,22 @@
     );
   });
 
-  /** Grouped by where they come from (hue, tuya…), the largest first. */
+  /** Grouped by where they come from (Zigbee, Hue…), the largest first, or
+   *  by room in the alphabet, the ones in no room last. */
   const groups = $derived.by(() => {
-    const by = new Map();
+    const map = new Map();
     for (const x of shown) {
-      const k = source(x.d);
-      if (!by.has(k)) by.set(k, []);
-      by.get(k).push(x);
+      const k = by === 'room' ? (x.room ?? '') : source(x.d);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(x);
     }
-    return [...by.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+    const list = [...map.entries()];
+    if (by === 'room') return list.sort((a, b) => (!a[0]) - (!b[0]) || a[0].localeCompare(b[0]));
+    return list.sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
   });
 
   /** Bridges with an interface but no device yet: where pairing starts. */
-  const bridges = $derived((hub.drivers ?? []).filter((x) => x.web && !groups.some(([src]) => src === x.instance)));
+  const bridges = $derived(by === 'room' ? [] : (hub.drivers ?? []).filter((x) => x.web && !devices.some((d) => source(d.d) === x.instance)));
 
   const unplaced = $derived(devices.filter((x) => !x.room).length);
 
@@ -132,6 +142,11 @@
         </button>
       {/each}
     </div>
+    <div class="chips by" role="radiogroup" aria-label={t('maison.equipements.ranger')}>
+      {#each ['source', 'room'] as b (b)}
+        <button role="radio" aria-checked={by === b} class:on={by === b} onclick={() => (by = b)}>{t(`maison.equipements.par_${b}`)}</button>
+      {/each}
+    </div>
   </div>
 
   {#if filter === 'all' && !query}
@@ -155,13 +170,13 @@
   {#each groups as [src, list] (src)}
     <section class="group">
       <h2>
-        {src} <small>{list.length}</small>
-        {#if webOf(src)}<a class="web" href={webOf(src)} target="_blank" rel="noopener noreferrer" title={t('maison.equipements.interface_de', { name: src })}>{t('maison.equipements.interface')} ↗</a>{/if}
+        {by === 'room' ? src || t('maison.equipements.sans_piece') : sourceName(src)} <small>{list.length}</small>
+        {#if by === 'source' && webOf(src)}<a class="web" href={webOf(src)} target="_blank" rel="noopener noreferrer" title={t('maison.equipements.interface_de', { name: sourceName(src) })}>{t('maison.equipements.interface')} ↗</a>{/if}
       </h2>
       <ul>
         {#each list as x (x.d.id)}
           <li class:off={!reachable(x.d.id)}>
-            <span class="glyph"><Icon name={KIND_ICON[x.kind] ?? 'info'} size={20} /></span>
+            <span class="glyph"><Icon name={isSmoke(x.d) ? 'smoke-detector' : (KIND_ICON[x.kind] ?? 'info')} size={20} /></span>
             <span class="who">
               {#if renaming === x.d.id}
                 <!-- svelte-ignore a11y_autofocus -->
@@ -217,8 +232,8 @@
     {#each bridges as b (b.instance)}
       <section class="group">
         <h2>
-          {b.instance} <small>0</small>
-          <a class="web" href={b.web} target="_blank" rel="noopener noreferrer" title={t('maison.equipements.interface_de', { name: b.instance })}>{t('maison.equipements.interface')} ↗</a>
+          {driverName(b)} <small>0</small>
+          <a class="web" href={b.web} target="_blank" rel="noopener noreferrer" title={t('maison.equipements.interface_de', { name: driverName(b) })}>{t('maison.equipements.interface')} ↗</a>
         </h2>
         <ul>
           <li>
@@ -297,6 +312,10 @@
     background: var(--surface-2);
     color: var(--ink-3);
     cursor: pointer;
+  }
+
+  .chips.by {
+    margin-left: auto;
   }
 
   .chips button.on {

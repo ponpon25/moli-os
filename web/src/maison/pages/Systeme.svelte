@@ -1,6 +1,7 @@
 <script>
   import { onMount, tick } from 'svelte';
   import Icon from '../ui/Icon.svelte';
+  import { kindWord, driverName } from '../lib/home.svelte.js';
   import TuyaCloudKeys from '../ui/TuyaCloudKeys.svelte';
   import HomeKitCard from '../ui/HomeKitCard.svelte';
   import VoiceDevices from '../ui/VoiceDevices.svelte';
@@ -126,11 +127,6 @@
   };
 
   // ---- words ------------------------------------------------------------------
-  // Driver kinds: their name and description are in the catalog
-  // (systeme.pilotes.<kind>.nom / .desc); a kind not listed shows as it is.
-  const KINDS = ['z2m', 'hue', 'tuya', 'reolink', 'sonos', 'helpers', 'philips', 'frigate', 'bambu', 'tapo', 'igd', 'presence', 'telegram', 'phones', 'profile'];
-  const kindWord = (kind, part) => (KINDS.includes(kind) ? t(`systeme.pilotes.${kind}.${part}`) : null);
-  const driverName = (d) => (d.kind === 'profile' ? d.instance.charAt(0).toUpperCase() + d.instance.slice(1) : (kindWord(d.kind, 'nom') ?? d.kind));
 
   // Bricks: their icon here, their description in the catalog (systeme.briques.<id>.desc).
   const BRICKS = { guard: 'shield', history: 'history', energy: 'bolt', automations: 'robot', assistant: 'sparkles', cameras: 'cctv' };

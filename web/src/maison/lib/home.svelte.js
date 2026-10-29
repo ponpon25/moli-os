@@ -142,6 +142,15 @@ export function doorOpen(id) {
 
 export const leak = (id) => value(id, 'water_leak') === true || value(id, 'watersensor_state') === 'alarm';
 
+// Driver kinds: their name and description are in the catalog
+// (systeme.pilotes.<kind>.nom / .desc); a kind not listed shows as it is.
+const KINDS = ['z2m', 'hue', 'tuya', 'reolink', 'sonos', 'helpers', 'philips', 'frigate', 'bambu', 'tapo', 'igd', 'presence', 'telegram', 'phones', 'profile'];
+export const kindWord = (kind, part) => (KINDS.includes(kind) ? t(`systeme.pilotes.${kind}.${part}`) : null);
+export const driverName = (d) => (d.kind === 'profile' ? d.instance.charAt(0).toUpperCase() + d.instance.slice(1) : (kindWord(d.kind, 'nom') ?? d.kind));
+
+/** A smoke detector, whatever else it reports. */
+export const isSmoke = (d) => d?.points.some((p) => p.key === 'smoke') ?? false;
+
 export const motion = (id) => value(id, 'occupancy') === true || value(id, 'pir') === 'pir';
 
 /** A sensor's battery (not a phone's: it charges). */

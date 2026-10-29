@@ -1,5 +1,5 @@
 <script>
-  import { home, device, deviceKind, nameOf } from '../lib/home.svelte.js';
+  import { home, device, deviceKind, nameOf, isSmoke } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import LightTile from '../ui/LightTile.svelte';
   import ClimateCard from '../ui/ClimateCard.svelte';
@@ -7,6 +7,7 @@
   import CoverTile from '../ui/CoverTile.svelte';
   import SpeakerCard from '../ui/SpeakerCard.svelte';
   import SensorCard from '../ui/SensorCard.svelte';
+  import SmokeCard from '../ui/SmokeCard.svelte';
   import WeatherCard from './WeatherCard.svelte';
 
   /** Any device, shown the way it is used. */
@@ -35,6 +36,8 @@
   <div class="card tight"><LightTile {id} name={title} dimmer /></div>
 {:else if kind === 'plug'}
   <div class="card tight"><LightTile {id} name={title} icon="flash" /></div>
+{:else if isSmoke(d)}
+  <SmokeCard {id} name={title} />
 {:else}
   <SensorCard {id} name={title} />
 {/if}

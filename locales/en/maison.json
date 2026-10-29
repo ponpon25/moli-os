@@ -328,7 +328,7 @@
   "maison.rfx.rien_encore": "Nothing yet…",
   "maison.rfx.fois": "{n} times",
   "maison.rfx.signal": "Signal: {n} of 4",
-  "maison.rfx.note": "« Not read by Moli »: the transceiver hears it, Moli cannot use it yet. A code that changes with every press is a rolling code (most recent gates): it cannot be replayed.",
+  "maison.rfx.note": "« Not read by Moli »: the transceiver hears it, Moli cannot use it yet. An undecoded signal makes a new line each time (its bytes vary a little): to tell whether it is your remote, listen one minute without touching anything, then press the same button several times, a few seconds apart, and compare the times. A code that changes with every press is a rolling code (most recent gates): it cannot be replayed.",
   "maison.rfx.protocoles": "Protocols listened to",
   "maison.rfx.protocoles_aide": "Those kept in the transceiver's memory. Listening to everything does not change them: they come back after the 5 minutes.",
   "maison.rfx.etat.known": "In Moli",

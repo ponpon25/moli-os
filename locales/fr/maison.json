@@ -328,7 +328,7 @@
   "maison.rfx.rien_encore": "Rien pour l'instant…",
   "maison.rfx.fois": "{n} fois",
   "maison.rfx.signal": "Signal : {n} sur 4",
-  "maison.rfx.note": "« Non lu par Moli » : la clé l'entend, Moli ne sait pas encore s'en servir. Un code qui change à chaque appui est un code tournant (la plupart des portails récents) : il ne pourra pas être reproduit.",
+  "maison.rfx.note": "« Non lu par Moli » : la clé l'entend, Moli ne sait pas encore s'en servir. Un signal non décodé fait une ligne à chaque fois (ses octets varient un peu) : pour savoir si c'est ta télécommande, écoute d'abord une minute sans rien toucher, puis appuie plusieurs fois sur le même bouton, quelques secondes entre chaque appui, et compare les heures. Un code qui change à chaque appui est un code tournant (la plupart des portails récents) : il ne pourra pas être reproduit.",
   "maison.rfx.protocoles": "Protocoles écoutés",
   "maison.rfx.protocoles_aide": "Ceux gardés dans la mémoire de la clé. L'écoute de tout ne les change pas : ils reviennent à la fin des 5 minutes.",
   "maison.rfx.etat.known": "Dans Moli",

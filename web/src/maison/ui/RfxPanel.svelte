@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { device, value, act, pending, home, relative, num } from '../lib/home.svelte.js';
-  import { t } from '../../lib/i18n.svelte.js';
+  import { t, locale } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
 
   /** The 433 MHz transceiver's own page: what it is, what it listens to,
@@ -49,6 +49,8 @@
     undecoded: 'flask',
     other: 'info',
   };
+  // To the second: which line came with which press.
+  const seconds = (ts) => new Date(ts).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const bars = (rssi) => Math.max(1, Math.min(4, Math.round((rssi / 15) * 4)));
 </script>
 
@@ -100,7 +102,7 @@
               <span class="meta">
                 <span class="chip {h.standing}">{t(`maison.rfx.etat.${h.standing}`)}</span>
                 <small class="num">
-                  {t('maison.rfx.fois', { n: num(h.count, 0) })} · {relative(h.last, Math.max(home.now, clock))}
+                  {t('maison.rfx.fois', { n: num(h.count, 0) })} · <span title={relative(h.last, Math.max(home.now, clock))}>{seconds(h.last)}</span>
                   <span class="bars" aria-label={t('maison.rfx.signal', { n: bars(h.rssi) })}>
                     {#each [1, 2, 3, 4] as b (b)}<i class:lit={b <= bars(h.rssi)} style="height: {b * 25}%"></i>{/each}
                   </span>

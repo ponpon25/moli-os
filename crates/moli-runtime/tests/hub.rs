@@ -1105,3 +1105,58 @@ async fn oversized_orders_are_refused_and_journaled_without_their_bulk() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Forgets a device it published in an earlier run (never published in this one).
+struct Forgetter;
+
+impl Driver for Forgetter {
+    fn kind(&self) -> &'static str {
+        "fake"
+    }
+
+    fn run<'a>(&'a self, ctx: &'a mut DriverCtx) -> BoxFuture<'a, anyhow::Result<()>> {
+        Box::pin(async move {
+            for id in ctx.known_devices() {
+                ctx.remove_device(&id);
+            }
+            ctx.ready();
+            ctx.cancelled().await;
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_device_from_an_earlier_run_can_be_removed() {
+    let dir = std::env::temp_dir().join(format!("moli-forget-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("state.json");
+    std::fs::write(&path, r#"{"fake:old":{"power":{"value":42,"ts":1000}}}"#).unwrap();
+    let hub = Hub::new(HubOptions {
+        state_path: Some(path.clone()),
+        ..HubOptions::default()
+    })
+    .unwrap();
+    let mut events = hub.subscribe();
+    let cancel = CancellationToken::new();
+    spawn_driver(
+        &hub,
+        InstanceId::from("fake"),
+        Arc::new(Forgetter),
+        cancel.clone(),
+    );
+    wait_running(&hub).await;
+
+    // Said removed (the HomeKit bridge forgets it), and gone from the cache.
+    let mut said = false;
+    while let Ok(event) = events.try_recv() {
+        said |=
+            matches!(&event, Event::DeviceRemoved { device } if device.to_string() == "fake:old");
+    }
+    assert!(said, "removal announced");
+    assert!(hub.persist_state().await.unwrap());
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("fake:old"));
+
+    cancel.cancel();
+    let _ = std::fs::remove_dir_all(dir);
+}

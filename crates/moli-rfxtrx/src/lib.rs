@@ -126,6 +126,23 @@ impl Rfxtrx {
     }
 }
 
+impl Rfxtrx {
+    /// A device of an earlier run this configuration no longer shows.
+    fn stale(&self, native: &str) -> bool {
+        if self.declared.values().any(|s| s.id == native) {
+            return false;
+        }
+        match frame::parse_code(native) {
+            Some(code) => {
+                !self.config.auto_add
+                    || self.ignored.contains(&code)
+                    || self.declared.contains_key(&code)
+            }
+            None => true,
+        }
+    }
+}
+
 impl Driver for Rfxtrx {
     fn kind(&self) -> &'static str {
         "rfxtrx"
@@ -204,6 +221,35 @@ async fn answer(
     }
 }
 
+/// Reset, status (in the logs), receiver on.
+async fn start(port: &AsyncFd<OwnedFd>, framer: &mut Framer, path: &str) -> anyhow::Result<()> {
+    send(port, &frame::RESET).await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    termios::tcflush(port.get_ref(), QueueSelector::IFlush)?;
+    send(port, &frame::GET_STATUS).await?;
+    let Some(Frame::Status(status)) = answer(port, framer, Duration::from_secs(5), |f| {
+        matches!(f, Frame::Status(_))
+    })
+    .await?
+    else {
+        bail!("no answer from the transceiver on {path}");
+    };
+    let protocols: Vec<String> = status
+        .protocols
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    tracing::info!(
+        "rfxtrx: {} firmware {} ({}), protocols {}",
+        status.frequency,
+        status.firmware,
+        status.firmware_type,
+        protocols.join(" "),
+    );
+    send(port, &frame::START_RECEIVER).await?;
+    Ok(())
+}
+
 async fn run(this: &Rfxtrx, ctx: &mut DriverCtx) -> anyhow::Result<()> {
     // Not plugged (or not passed to the container): say so, look again.
     let port = loop {
@@ -224,30 +270,7 @@ async fn run(this: &Rfxtrx, ctx: &mut DriverCtx) -> anyhow::Result<()> {
         }
     };
     let mut framer = Framer::default();
-    send(&port, &frame::RESET).await?;
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    termios::tcflush(port.get_ref(), QueueSelector::IFlush)?;
-    send(&port, &frame::GET_STATUS).await?;
-    let Some(Frame::Status(status)) = answer(&port, &mut framer, Duration::from_secs(5), |f| {
-        matches!(f, Frame::Status(_))
-    })
-    .await?
-    else {
-        bail!("no answer from the transceiver on {}", this.config.port);
-    };
-    let protocols: Vec<String> = status
-        .protocols
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    tracing::info!(
-        "rfxtrx: {} firmware {} ({}), protocols {}",
-        status.frequency,
-        status.firmware,
-        status.firmware_type,
-        protocols.join(" "),
-    );
-    send(&port, &frame::START_RECEIVER).await?;
+    start(&port, &mut framer, &this.config.port).await?;
 
     let offline_after = Duration::from_secs(this.config.offline_after.saturating_mul(60));
     // When each sensor last spoke, and whether it was said online since.
@@ -260,6 +283,17 @@ async fn run(this: &Rfxtrx, ctx: &mut DriverCtx) -> anyhow::Result<()> {
         // only after a whole `offline_after`.
         seen.insert(id, (Instant::now(), false));
         known.insert(code);
+    }
+    // What earlier runs published and this one will not: a sensor no
+    // longer declared, a code now ignored or given a stable id. Gone from
+    // Moli, from the HomeKit bridge, from the state cache.
+    for id in ctx.known_devices() {
+        let native = id.to_string();
+        let native = native.split_once(':').map_or("", |(_, n)| n);
+        if this.stale(native) {
+            tracing::debug!("rfxtrx: {id} removed (no longer declared nor heard)");
+            ctx.remove_device(&id);
+        }
     }
     // Each kind of module heard but not read, said once.
     let mut unread: HashSet<(u8, u8)> = HashSet::new();
@@ -488,6 +522,22 @@ mod tests {
         assert!(config("ignore = [\"oups\"]").is_err());
         assert!(config("offline_after = 1").is_err());
         assert!(config("unknown = 1").is_err());
+    }
+
+    #[test]
+    fn forgets_what_it_no_longer_shows() {
+        let r = config(
+            "ignore = [\"50-06-3c0a\"]\n\
+             [[sensor]]\nid = \"salon\"\ncode = \"52-01-1a2b\"\n",
+        )
+        .unwrap();
+        assert!(!r.stale("salon"));
+        assert!(r.stale("52-01-1a2b"), "now under its stable id");
+        assert!(r.stale("50-06-3c0a"), "ignored");
+        assert!(r.stale("garage"), "no longer declared");
+        assert!(!r.stale("52-01-9999"), "added when heard");
+        let r = config("auto_add = false").unwrap();
+        assert!(r.stale("52-01-9999"));
     }
 
     #[test]

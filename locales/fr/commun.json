@@ -275,5 +275,6 @@
   "commun.thermo.vingt_quatre": "dernières 24 h",
   "commun.thermo.attente": "En attente d'une première mesure",
   "commun.thermo.courbe": "La température des dernières 24 heures",
-  "commun.thermo.depuis": "depuis {time}"
+  "commun.thermo.depuis": "depuis {time}",
+  "commun.thermo.releve": "Dernier relevé à {time}"
 }

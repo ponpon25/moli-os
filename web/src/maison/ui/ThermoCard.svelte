@@ -36,10 +36,25 @@
       /* next round */
     }
   }
+  // When it last spoke: the hub dates each reading, even an unchanged one
+  // (which the event stream does not repeat), so it is asked every minute.
+  let heard = $state(0);
+  async function ping() {
+    try {
+      const res = await fetch(`/api/devices/${encodeURIComponent(id)}`);
+      if (!res.ok) return;
+      const v = await res.json();
+      heard = Math.max(0, ...Object.values(v.state ?? {}).map((s) => s.ts ?? 0));
+    } catch {
+      /* next round */
+    }
+  }
   onMount(() => {
     load();
+    ping();
     const timer = setInterval(load, 5 * 60_000);
-    return () => clearInterval(timer);
+    const pinger = setInterval(ping, 60_000);
+    return () => (clearInterval(timer), clearInterval(pinger));
   });
 
   // What is drawn: the history, then the live value up to now.
@@ -191,7 +206,7 @@
   // An SVG id: no colon nor slash.
   const gradient = $derived(`thermo-${id.replace(/[^a-z0-9_-]/gi, '_')}`);
 
-  const last = $derived(Math.max(0, ...(d?.points ?? []).map((p) => since(id, p.key) ?? 0)));
+  const last = $derived(Math.max(heard, ...(d?.points ?? []).map((p) => since(id, p.key) ?? 0)));
 </script>
 
 <section class="card thermo" class:off={!online} style="--h: {hue}">
@@ -202,10 +217,13 @@
       {#if battery}<span class="pill alert"><Icon name="battery-low" size={14} />{t('commun.thermo.pile')}</span>{/if}
       {#if !online}
         <span class="pill"><Icon name="offline" size={14} />{t('commun.thermo.hors_ligne', { when: relative(last, home.now) })}</span>
-      {:else if bars}
+      {:else}
+        {#if last}<span class="ago" title={t('commun.thermo.releve', { time: clock(last) })}>{relative(last, home.now)}</span>{/if}
+        {#if bars}
         <span class="bars" title={t('commun.thermo.signal', { n: bars })} aria-label={t('commun.thermo.signal', { n: bars })}>
           {#each [1, 2, 3, 4] as b (b)}<i class:lit={b <= bars} style="height: {b * 25}%"></i>{/each}
         </span>
+        {/if}
       {/if}
     </div>
   </header>
@@ -355,6 +373,13 @@
   .pill.alert {
     background: var(--alert-soft);
     color: var(--alert);
+  }
+
+  .ago {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-3);
+    white-space: nowrap;
   }
 
   .bars {

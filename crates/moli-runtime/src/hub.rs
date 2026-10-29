@@ -1418,14 +1418,21 @@ impl Hub {
     pub(crate) fn remove_device(&self, id: &DeviceId) {
         let removed = {
             let mut model = self.write();
-            model.states.remove(id);
+            // A device remembered from a previous run (its last values) but
+            // not published in this one goes too: the surfaces that kept it
+            // (the HomeKit bridge) forget it, and so does the state cache.
+            let remembered =
+                model.states.remove(id).is_some() | model.restored.remove(id).is_some();
+            if remembered {
+                self.0.state_dirty.store(true, Ordering::Release);
+            }
             model.availability.remove(id);
             model.snapshots.remove(id);
             model.covers.remove(id);
             model.live.remove(id);
             model.talk.remove(id);
             model.printers.remove(id);
-            model.devices.remove(id).is_some()
+            model.devices.remove(id).is_some() || remembered
         };
         self.0
             .images

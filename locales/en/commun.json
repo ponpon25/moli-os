@@ -275,5 +275,6 @@
   "commun.thermo.vingt_quatre": "last 24 h",
   "commun.thermo.attente": "Waiting for a first reading",
   "commun.thermo.courbe": "The temperature over the last 24 hours",
-  "commun.thermo.depuis": "since {time}"
+  "commun.thermo.depuis": "since {time}",
+  "commun.thermo.releve": "Last reading at {time}"
 }

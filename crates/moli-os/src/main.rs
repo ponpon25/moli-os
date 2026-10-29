@@ -952,6 +952,17 @@ fn spawn_house_drivers(
             cancel.clone(),
         ));
     }
+    if !config.garages.is_empty() {
+        tasks.push(spawn_driver(
+            hub,
+            InstanceId::from(moli_garage::INSTANCE),
+            Arc::new(moli_garage::Garage::new(
+                hub.clone(),
+                config.garages.clone(),
+            )),
+            cancel.clone(),
+        ));
+    }
     if let Some(energy) = energy {
         tasks.push(spawn_driver(
             hub,

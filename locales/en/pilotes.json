@@ -587,5 +587,14 @@
   "pilotes.rfxtrx.firmware": "Firmware",
   "pilotes.rfxtrx.protocoles": "Protocols listened to",
   "pilotes.zwave.marche": "On",
-  "pilotes.zwave.niveau": "Level"
+  "pilotes.zwave.niveau": "Level",
+  "pilotes.garage.modele": "Garage door",
+  "pilotes.garage.etat": "Position",
+  "pilotes.garage.commande": "Open or close",
+  "pilotes.garage.impulsion": "Press",
+  "pilotes.garage.supposee": "Assumed position",
+  "pilotes.garage.acteur": "door {name}",
+  "pilotes.garage.inconnue": "unknown door",
+  "pilotes.garage.ordre_inconnu": "unknown order for a garage door",
+  "pilotes.garage.course": "Travel time"
 }

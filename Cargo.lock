@@ -1317,6 +1317,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-garage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-core",
+ "moli-i18n",
+ "moli-runtime",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "moli-helpers"
 version = "0.1.0"
 dependencies = [
@@ -1541,6 +1553,7 @@ dependencies = [
  "moli-energy",
  "moli-esphome",
  "moli-frigate",
+ "moli-garage",
  "moli-helpers",
  "moli-history",
  "moli-hitachi",

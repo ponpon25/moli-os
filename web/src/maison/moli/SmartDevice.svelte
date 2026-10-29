@@ -9,6 +9,7 @@
   import SensorCard from '../ui/SensorCard.svelte';
   import SmokeCard from '../ui/SmokeCard.svelte';
   import ThermoCard from '../ui/ThermoCard.svelte';
+  import GarageCard from '../ui/GarageCard.svelte';
   import WeatherCard from './WeatherCard.svelte';
 
   /** Any device, shown the way it is used. */
@@ -25,6 +26,8 @@
   <WeatherCard />
 {:else if kind === 'camera'}
   <CameraTile {id} name={title ?? cam?.name ?? nameOf(id)} refresh={cam?.refresh ?? 10} battery={cam?.battery} onopen={() => (location.hash = '#/cameras')} />
+{:else if kind === 'garage'}
+  <GarageCard {id} name={title} />
 {:else if kind === 'climate'}
   <ClimateCard {id} name={title ?? nameOf(id)} />
 {:else if kind === 'speaker'}

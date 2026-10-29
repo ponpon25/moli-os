@@ -152,6 +152,10 @@ pub enum Semantic {
     WaterLeak,
     Smoke,
     Tamper,
+    /// A garage door: its state (`closed`, `opening`, `open`, `closing`,
+    /// `stopped`) when read, where it should go (`open`, `closed`) when
+    /// written.
+    GarageDoor,
     Config,
     /// An order to a machine at work (pause or cancel a print): an agent
     /// asking gets a human's approval first.

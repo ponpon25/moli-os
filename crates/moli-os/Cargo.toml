@@ -41,6 +41,7 @@ moli-lights.workspace = true
 moli-presence.workspace = true
 moli-rfxtrx.workspace = true
 moli-zwave.workspace = true
+moli-garage.workspace = true
 moli-telegram.workspace = true
 moli-olvid.workspace = true
 moli-phones.workspace = true

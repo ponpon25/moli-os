@@ -44,6 +44,10 @@ const SVC_LEAK: &str = "83";
 const SVC_SMOKE: &str = "87";
 const SVC_SECURITY: &str = "7E";
 const SVC_THERMOSTAT: &str = "4A";
+const SVC_GARAGE: &str = "41";
+const C_DOOR_CURRENT: &str = "E";
+const C_DOOR_TARGET: &str = "32";
+const C_OBSTRUCTION: &str = "24";
 const SVC_CAMERA: &str = "110";
 const SVC_MICROPHONE: &str = "112";
 const SVC_SPEAKER: &str = "113";
@@ -114,6 +118,7 @@ pub enum Kinds {
     Climate,
     /// Live video (a camera of its own, apart from the device's sensors).
     Camera,
+    GarageDoor,
 }
 
 impl Kinds {
@@ -132,6 +137,7 @@ impl Kinds {
             Self::Alarm => "alarm",
             Self::Climate => "climate",
             Self::Camera => "camera",
+            Self::GarageDoor => "garage_door",
         }
     }
 }
@@ -267,6 +273,11 @@ pub enum Conv {
     Detected,
     /// Lux, never below HAP's minimum of 0.0001.
     Lux,
+    /// A door's position (`open`, `closed`, `opening`, `closing`,
+    /// `stopped`) ⇄ HAP's 0–4.
+    DoorCurrent,
+    /// Where a door goes (`open`, `closed`) ⇄ HAP's 0–1.
+    DoorTarget,
     /// A number HAP bounds (a temperature in °C, a humidity in %).
     Clamped {
         lo: f64,
@@ -451,6 +462,53 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
             ],
         });
         kinds.push(Kinds::Alarm);
+    }
+
+    // A garage door: its position (read) and where it goes (written).
+    let door = |write: bool| {
+        device.points.iter().find(|p| {
+            p.semantic == Semantic::GarageDoor
+                && writable(p) == write
+                && matches!(p.kind, Kind::Enum { .. })
+        })
+    };
+    if let (Some(state), Some(target)) = (door(false), door(true)) {
+        services.push(ServiceSpec {
+            kind: SVC_GARAGE,
+            chars: vec![
+                name_char(name),
+                spec(
+                    C_DOOR_CURRENT,
+                    "uint8",
+                    READ_NOTIFY,
+                    Bind::Point(id(&state.key), Conv::DoorCurrent),
+                    "Current Door State",
+                )
+                .meta(Meta {
+                    valid_values: Some(vec![0, 1, 2, 3, 4]),
+                    ..Meta::default()
+                }),
+                spec(
+                    C_DOOR_TARGET,
+                    "uint8",
+                    READ_WRITE_NOTIFY,
+                    Bind::Point(id(&target.key), Conv::DoorTarget),
+                    "Target Door State",
+                )
+                .meta(Meta {
+                    valid_values: Some(vec![0, 1]),
+                    ..Meta::default()
+                }),
+                spec(
+                    C_OBSTRUCTION,
+                    "bool",
+                    READ_NOTIFY,
+                    Bind::Static(json!(false)),
+                    "Obstruction Detected",
+                ),
+            ],
+        });
+        kinds.push(Kinds::GarageDoor);
     }
 
     // An air conditioner: a writable on/off, a `mode` choice and a target
@@ -1075,8 +1133,21 @@ impl Catalog {
     ) -> Self {
         let mut accessories = vec![bridge(bridge_name)];
         let mut chosen: Vec<(u64, &Entry, Vec<ServiceSpec>)> = Vec::new();
+        // A relay that a garage door stands for is the door, not a switch.
+        let behind_doors: Vec<&moli_core::DeviceId> = entries
+            .iter()
+            .filter(|e| {
+                e.device
+                    .points
+                    .iter()
+                    .any(|p| p.semantic == Semantic::GarageDoor)
+            })
+            .filter(|e| exposed(&e.key()))
+            .flat_map(|e| e.device.members.iter())
+            .collect();
         let mut candidates: Vec<(String, &Entry)> = entries
             .iter()
+            .filter(|e| e.camera || !behind_doors.contains(&&e.device.id))
             .map(|e| (e.key(), e))
             .filter(|(key, _)| exposed(key))
             .collect();
@@ -1437,6 +1508,8 @@ pub fn to_hap(conv: Conv, value: &Value) -> Option<Json> {
         Conv::Clamped { lo, hi } => json!(value.as_f64()?.clamp(lo, hi)),
         Conv::Contact => json!(i64::from(!as_bool(value)?)),
         Conv::Detected => json!(i64::from(as_bool(value)?)),
+        Conv::DoorCurrent => json!(DOOR_CURRENT.iter().position(|w| Some(*w) == text(value))?),
+        Conv::DoorTarget => json!(DOOR_TARGET.iter().position(|w| Some(*w) == text(value))?),
         Conv::Lux => json!(value.as_f64()?.clamp(0.0001, 100_000.0)),
     })
 }
@@ -1466,7 +1539,23 @@ pub fn from_hap(conv: Conv, json: &Json) -> Option<Value> {
         }
         Conv::Int => Some(Value::Int(json.as_f64()?.round() as i64)),
         Conv::Lux | Conv::Clamped { .. } => Some(Value::Float(json.as_f64()?)),
-        Conv::Contact | Conv::Detected => None,
+        Conv::Contact | Conv::Detected | Conv::DoorCurrent => None,
+        Conv::DoorTarget => {
+            let i = usize::try_from(json.as_i64()?).ok()?;
+            DOOR_TARGET.get(i).map(|w| Value::from(*w))
+        }
+    }
+}
+
+/// HAP's door positions, in their order (`CurrentDoorState`).
+const DOOR_CURRENT: [&str; 5] = ["open", "closed", "opening", "closing", "stopped"];
+/// HAP's door targets, in their order (`TargetDoorState`).
+const DOOR_TARGET: [&str; 2] = ["open", "closed"];
+
+fn text(value: &Value) -> Option<&str> {
+    match value {
+        Value::Text(t) => Some(t),
+        _ => None,
     }
 }
 
@@ -1627,6 +1716,57 @@ mod tests {
         let kinds: Vec<_> = light.chars.iter().map(|ch| ch.kind).collect();
         assert_eq!(kinds, ["23", "25", "8", "CE", "13", "2F"]);
         assert_eq!(kinds_of(&lamp.device), [Kinds::Light]);
+    }
+
+    #[test]
+    fn a_garage_door_is_a_door_and_its_relay_is_gone() {
+        let words = |list: &[&str]| Kind::Enum {
+            values: list.iter().map(|w| (*w).into()).collect(),
+        };
+        let relay = view(
+            "relay",
+            vec![point("switch", Kind::Binary, true, Semantic::OnOff)],
+        );
+        let mut door = view(
+            "door",
+            vec![
+                point(
+                    "state",
+                    words(&["closed", "opening", "open", "closing", "stopped"]),
+                    false,
+                    Semantic::GarageDoor,
+                ),
+                point(
+                    "target",
+                    words(&["open", "closed"]),
+                    true,
+                    Semantic::GarageDoor,
+                ),
+                point("press", Kind::Binary, true, Semantic::Other),
+            ],
+        );
+        Arc::make_mut(&mut door.device).members = vec![relay.device.id.clone()];
+        let c = catalog(&[relay, door]);
+        // The bridge and the door only: the relay is behind it.
+        assert_eq!(c.accessories.len(), 2);
+        assert_eq!(types(&c, 2), ["3E", "41"]);
+        assert_eq!(
+            to_hap(Conv::DoorCurrent, &Value::from("opening")),
+            Some(json!(2))
+        );
+        assert_eq!(
+            to_hap(Conv::DoorCurrent, &Value::from("closed")),
+            Some(json!(1))
+        );
+        assert_eq!(
+            to_hap(Conv::DoorTarget, &Value::from("open")),
+            Some(json!(0))
+        );
+        assert_eq!(
+            from_hap(Conv::DoorTarget, &json!(1)),
+            Some(Value::from("closed"))
+        );
+        assert_eq!(from_hap(Conv::DoorTarget, &json!(7)), None);
     }
 
     #[test]

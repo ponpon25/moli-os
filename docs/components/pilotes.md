@@ -71,7 +71,7 @@ Le hub l'appelle quand une surface demande une image : rien n'est récupéré po
 
 ```toml
 [[driver]]
-id = "enceinte"         # non vide, sans ':' ni '/', unique ; réservés : core, assistant, automations
+id = "enceinte"         # non vide, sans ':' ni '/', unique ; réservés : core, assistant, automations, lumieres, portes
 kind = "sonos"          # z2m, zwave, hue, tuya, reolink, sonos, philips, frigate, bambu, tapo, igd, rfxtrx, helpers, profile
 # enabled = false       # désactive l'instance sans la supprimer
 
@@ -499,6 +499,25 @@ pièces ; il commande ensuite les membres en origine `system` (journal : `lumina
   donne déjà l'état complet : la voie locale n'apporterait que l'indépendance d'internet, au prix d'un
   serveur TLS parlant RSA/CBC (rustls ne sait pas le faire, à vérifier avec le vrai ClientHello du module) et d'un réappairage après chaque panne.
 - Non couvert : minuteries, programmes, consommation, lamelles en écriture, mode vacances.
+
+## `portes` (interne) : portes de garage (`crates/moli-garage`)
+
+- **Couvre** : une porte de garage à un seul bouton (une impulsion ouvre, ferme, arrête, repart dans l'autre sens), commandée par un relais à contact sec sur le bouton du moteur (un Qubino Flush 1D Relay en Z-Wave, par exemple), avec ou sans capteur d'ouverture.
+- **Configuration** (`moli.toml`, comme les luminaires ; instance `portes`, réservée) :
+
+```toml
+[[garage]]
+id = "garage"                       # l'appareil est portes:garage
+name = "Porte de garage"
+room = "Garage"
+relay = "zwave:…/switch"            # le point marche/arrêt du relais
+# contact = "z2m:…/contact"         # un capteur sur la porte (vrai = fermée)
+travel = 20                          # secondes d'un bout à l'autre (3 à 180)
+```
+
+- **Points** : `state` (`closed`, `opening`, `open`, `closing`, `stopped` ; sens `garage_door`), `target` (`open`/`closed`, écrit ; sens `garage_door`), `press` (une impulsion), `assumed` (vrai sans capteur), `travel` (s).
+- **Logique** (`Belief`, testée) : chaque impulsion fait avancer le cycle fermée → ouverture → arrêtée → fermeture → arrêtée → ouverture ; une cible demande autant d'impulsions qu'il faut (jusqu'à trois, 1,5 s d'écart) ; un trajet finit après `travel`. Le relais qui se ferme sans qu'on l'ait demandé (bouton mural branché sur le module) compte comme un appui ; l'écho de nos propres impulsions (4 s) non. Un relais resté fermé est rouvert après 1,5 s (le Qubino s'éteint seul en 500 ms). Avec un capteur, sa parole gagne (fermé = fermée ; ouvert alors qu'elle était fermée = ouverture).
+- **Surfaces** : carte « porte de garage » du dashboard (porte dessinée à la vitesse de la course, glisser pour ouvrir ou fermer, Arrêter d'un toucher), **Porte de garage** dans HomeKit (son relais n'y est plus montré seul). Pas de garde particulière : choix de la maison.
 
 ## `zwave` : Z-Wave via Z-Wave JS UI (`crates/moli-zwave`)
 

@@ -17,6 +17,7 @@
   import DeviceCard from '../ui/DeviceCard.svelte';
   import SensorCard from '../ui/SensorCard.svelte';
   import ThermoCard from '../ui/ThermoCard.svelte';
+  import GarageCard from '../ui/GarageCard.svelte';
   import SmokeCard from '../ui/SmokeCard.svelte';
   import SpeakerCard from '../ui/SpeakerCard.svelte';
   import PlayerCard from '../ui/PlayerCard.svelte';
@@ -457,6 +458,8 @@
           <div class="card-head"><h2><Icon name="cctv" size={18} />{tile.label}</h2></div>
           <CameraTile id={tile.device} name={tile.label} refresh={15} />
         </section>
+      {:else if kind === 'garage'}
+        <GarageCard id={tile.device} name={tile.label} />
       {:else if kind === 'plug'}
         <LightTile id={tile.device} name={tile.label} icon="power" />
       {:else if kind === 'cover'}

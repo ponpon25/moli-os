@@ -8,6 +8,7 @@
   import { newAlert } from '../lib/auto.svelte.js';
 
   const KIND_ICON = {
+    garage: 'gate',
     light: 'light',
     group: 'light-group',
     plug: 'power',

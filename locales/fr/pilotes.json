@@ -587,5 +587,14 @@
   "pilotes.rfxtrx.firmware": "Firmware",
   "pilotes.rfxtrx.protocoles": "Protocoles écoutés",
   "pilotes.zwave.marche": "Marche",
-  "pilotes.zwave.niveau": "Niveau"
+  "pilotes.zwave.niveau": "Niveau",
+  "pilotes.garage.modele": "Porte de garage",
+  "pilotes.garage.etat": "Position",
+  "pilotes.garage.commande": "Ouvrir ou fermer",
+  "pilotes.garage.impulsion": "Impulsion",
+  "pilotes.garage.supposee": "Position supposée",
+  "pilotes.garage.acteur": "porte {name}",
+  "pilotes.garage.inconnue": "porte inconnue",
+  "pilotes.garage.ordre_inconnu": "ordre inconnu pour une porte de garage",
+  "pilotes.garage.course": "Durée de course"
 }

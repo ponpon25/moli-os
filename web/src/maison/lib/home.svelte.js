@@ -285,6 +285,7 @@ export function deviceKind(d) {
   if (!d) return 'unknown';
   if (has(d, 'progress') && has(d, 'nozzle_temperature')) return 'printer';
   if (d.camera) return 'camera';
+  if (d.points.some((p) => p.semantic === 'garage_door')) return 'garage';
   if (has(d, 'target_temperature')) return 'climate';
   if (has(d, 'key', true)) return 'tv';
   if (has(d, 'playing', true) && has(d, 'volume')) return 'speaker';

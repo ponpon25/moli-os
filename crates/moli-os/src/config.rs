@@ -47,6 +47,10 @@ pub struct Config {
     /// (D12). Moli runs them as instance `lumieres`.
     #[serde(default, rename = "fixture")]
     pub fixtures: Vec<moli_lights::Fixture>,
+    /// Garage doors: a relay on the motor's button, as a door. Moli runs
+    /// them as instance `portes`.
+    #[serde(default, rename = "garage")]
+    pub garages: Vec<moli_garage::Door>,
     /// The home's own assistant (absent: no conversation in the dashboard).
     /// Its API key: `moli-os secrets set assistant api_key`.
     #[serde(default)]
@@ -335,6 +339,7 @@ impl Config {
                 "automations",
                 moli_energy::points::INSTANCE,
                 moli_lights::INSTANCE,
+                moli_garage::INSTANCE,
                 moli_api::PEOPLE_INSTANCE,
             ]
             .contains(&driver.id.as_str())
@@ -355,6 +360,7 @@ impl Config {
                 .map_err(|e| anyhow::anyhow!("[energy] {e}"))?;
         }
         moli_lights::check(&self.fixtures).map_err(|e| anyhow::anyhow!("[[fixture]] {e}"))?;
+        moli_garage::check(&self.garages).map_err(|e| anyhow::anyhow!("[[garage]] {e}"))?;
         Ok(())
     }
 }

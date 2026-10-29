@@ -38,6 +38,7 @@ moli-automation = { path = "crates/moli-automation" }
 moli-helpers = { path = "crates/moli-helpers" }
 moli-lights = { path = "crates/moli-lights" }
 moli-presence = { path = "crates/moli-presence" }
+moli-rfxtrx = { path = "crates/moli-rfxtrx" }
 moli-telegram = { path = "crates/moli-telegram" }
 moli-olvid = { path = "crates/moli-olvid" }
 moli-i18n = { path = "crates/moli-i18n" }
@@ -77,6 +78,8 @@ rmcp = { version = "3.5", features = ["server", "macros", "transport-streamable-
 opus-rs = "0.1"
 rumqttc = { version = "0.25", default-features = false }
 rust-embed = "8"
+# The RFXtrx serial port (termios), without unsafe code.
+rustix = { version = "1", default-features = false, features = ["std", "fs", "termios"] }
 schemars = "1"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"

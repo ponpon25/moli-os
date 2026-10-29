@@ -918,6 +918,7 @@ const KINDS: &[&str] = &[
     "tuya",
     "helpers",
     "presence",
+    "rfxtrx",
     "telegram",
     "olvid",
     "phones",
@@ -1096,6 +1097,9 @@ fn build_driver(
             config.options.clone().try_into().with_context(context)?,
         )),
         "presence" => Arc::new(moli_presence::Presence::new(
+            config.options.clone().try_into().with_context(context)?,
+        )?),
+        "rfxtrx" => Arc::new(moli_rfxtrx::Rfxtrx::new(
             config.options.clone().try_into().with_context(context)?,
         )?),
         "phones" => Arc::new(

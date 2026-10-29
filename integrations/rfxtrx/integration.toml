@@ -1,0 +1,28 @@
+[integration]
+id = "rfxtrx"
+name = "Capteurs 433 MHz (RFXCOM RFXtrx433)"
+brands = ["RFXCOM", "Oregon Scientific", "La Crosse", "TFA", "Viking", "Rubicson"]
+models = ["RFXtrx433", "RFXtrx433E", "RFXtrx433XL"]
+# A USB serial port (FTDI), 38 400 bauds: nothing on the network.
+transport = "serial"
+driver = "rfxtrx"
+crate = "moli-rfxtrx"
+
+[discovery]
+mdns = []
+ssdp = []
+ports = []
+
+[needs]
+secrets = []
+vars = []
+# Every option has a default (port /dev/rfxtrx, sensors added when heard).
+options = []
+
+[origin]
+reused = "protocole série du SDK RFXtrx de RFXCOM (types 0x50, 0x51, 0x52, 0x54), comme l'intégration rfxtrx de HA"
+author = "agent"
+
+# Replayed by the crate's tests (crates/moli-rfxtrx/src/frame.rs).
+[[fixture]]
+file = "fixtures/frames.txt"

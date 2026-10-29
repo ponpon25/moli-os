@@ -72,7 +72,7 @@ Le hub l'appelle quand une surface demande une image : rien n'est récupéré po
 ```toml
 [[driver]]
 id = "enceinte"         # non vide, sans ':' ni '/', unique ; réservés : core, assistant, automations
-kind = "sonos"          # z2m, hue, tuya, reolink, sonos, philips, frigate, bambu, tapo, igd, helpers, profile
+kind = "sonos"          # z2m, hue, tuya, reolink, sonos, philips, frigate, bambu, tapo, igd, rfxtrx, helpers, profile
 # enabled = false       # désactive l'instance sans la supprimer
 
 [driver.options]        # s'applique au [[driver]] qui précède ; clés inconnues refusées
@@ -500,6 +500,31 @@ pièces ; il commande ensuite les membres en origine `system` (journal : `lumina
   serveur TLS parlant RSA/CBC (rustls ne sait pas le faire, à vérifier avec le vrai ClientHello du module) et d'un réappairage après chaque panne.
 - Non couvert : minuteries, programmes, consommation, lamelles en écriture, mode vacances.
 
+## `rfxtrx` : capteurs 433 MHz (`crates/moli-rfxtrx`)
+
+- **Couvre** : les sondes de température, d'humidité et de pression sur 433 MHz (Oregon Scientific, La Crosse, TFA, Viking, Rubicson…) par un RFXCOM RFXtrx433 en USB. Lecture seule.
+- **Protocole** : port série 38 400 bauds (termios par `rustix`, sans `unsafe`), trames préfixées par leur longueur (SDK RFXtrx). Au démarrage : remise à zéro, `get status` (fréquence, firmware et protocoles écoutés, dans les journaux), `start receiver`. Types lus : `0x50` température, `0x51` humidité, `0x52` température + humidité, `0x54` + pression. Les autres types sont nommés une fois dans les journaux. Les protocoles écoutés restent ceux gardés par la clé (Moli ne les change pas).
+- **Configuration** :
+
+```toml
+[[driver]]
+id = "rfxtrx"
+kind = "rfxtrx"
+[driver.options]            # tout est facultatif
+# port = "/dev/rfxtrx"       # défaut : le nom donné par le compose
+# auto_add = true            # défaut : une sonde entendue devient un appareil
+# ignore = ["52-01-9999"]    # la station météo du voisin
+# offline_after = 30         # minutes sans trame avant « hors ligne »
+# [[driver.options.sensor]]  # un id stable (Oregon : nouveau code à chaque changement de piles)
+# id = "salon"
+# code = "52-01-1a2b"
+# name = "Salon"
+```
+
+- **Identité** : le code sur l'air `<type>-<sous-type>-<id>` (dans la description de l'appareil), ou l'`id` d'une sonde déclarée. Après un changement de piles, seul `code` change : l'appareil et son historique restent.
+- **Points** : `temperature`, `humidity`, `pressure` selon le type, `battery_low` (niveau 0), `rssi` (0 à 15). Hors ligne après `offline_after` minutes sans trame. Clé absente : `waiting` avec la raison, nouvel essai toutes les 30 s ; clé débranchée : erreur, le superviseur relance.
+- **Tests** : `src/frame.rs` sur une capture réelle `integrations/rfxtrx/fixtures/frames.txt` (état d'un RFXtrx433E, deux sondes Oregon), découpage du flux, températures négatives ; `src/lib.rs` : options.
+
 ## `profile` : profils déclaratifs (`crates/moli-profile`)
 
 Un seul pilote générique pour tout appareil HTTP décrit en TOML. Voir [profils.md](profils.md).
@@ -546,6 +571,7 @@ ni pièce native). Il ne déplace jamais rien. Sans argument : plan à blanc ; `
 | `phones` | `moli-phones` | rapports HTTP de l'appli (jeton) | `notify` (notification) | iPhone (appli Moli) |
 | `telegram` | `moli-telegram` | HTTPS, API des bots | `notify` (message) | oui (API des bots) |
 | `hitachi` | `moli-hitachi` | REST + WebSocket STOMP du compte airCloud Go (cloud) | oui : marche, mode, consigne, vitesse | pas encore (cibles : RAK-DJ25RHAE, RAK-DJ35RHAE) |
+| `rfxtrx` | `moli-rfxtrx` | série USB 38 400 bauds (SDK RFXtrx) | non | RFXtrx433E, sondes Oregon THGN132 |
 | `profile` | `moli-profile` | HTTP/HTTPS GET, Meross signé | oui si le profil déclare `[[write]]` (Daikin) | Daikin BRP069 (lecture), Meross EM06, Open-Meteo, Tempo, iopool EcO (voir [profils.md](profils.md#les-profils-du-catalogue)) |
 | `helpers` | `moli-helpers` | aucun (valeurs gardées par Moli) | oui | sans objet |
 | `lumieres` (interne) | `moli-lights` | aucun (lit et commande d'autres appareils via le hub) | oui | ampoules Hue derrière un relais |

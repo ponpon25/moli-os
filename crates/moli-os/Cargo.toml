@@ -39,6 +39,7 @@ moli-demo.workspace = true
 jiff.workspace = true
 moli-lights.workspace = true
 moli-presence.workspace = true
+moli-rfxtrx.workspace = true
 moli-telegram.workspace = true
 moli-olvid.workspace = true
 moli-phones.workspace = true

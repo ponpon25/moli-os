@@ -571,5 +571,13 @@
   "pilotes.hitachi.dernier_ordre": "Last order",
   "pilotes.hitachi.ordre_en_echec": "Last order failed",
   "pilotes.hitachi.ordre_envoye": "sending to Hitachi…",
-  "pilotes.hitachi.ordre_pris": "accepted by Hitachi"
+  "pilotes.hitachi.ordre_pris": "accepted by Hitachi",
+  "pilotes.rfxtrx.absent": "RFXtrx transceiver not found at {port} ({cause}): plug it in and pass it to the container (`devices:` in the compose file), Moli retries every 30 s",
+  "pilotes.rfxtrx.lecture_seule": "433 MHz sensors take no commands",
+  "pilotes.rfxtrx.temperature": "Temperature",
+  "pilotes.rfxtrx.humidite": "Humidity",
+  "pilotes.rfxtrx.pression": "Pressure",
+  "pilotes.rfxtrx.pile_faible": "Low battery",
+  "pilotes.rfxtrx.signal": "Signal",
+  "pilotes.rfxtrx.sonde": "{brand} sensor {id}"
 }

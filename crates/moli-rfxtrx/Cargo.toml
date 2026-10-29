@@ -1,0 +1,23 @@
+[package]
+name = "moli-rfxtrx"
+description = "Moli OS RFXtrx: 433 MHz temperature and humidity sensors through an RFXCOM RFXtrx433 on USB (local, read-only)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+moli-core.workspace = true
+moli-i18n.workspace = true
+moli-runtime.workspace = true
+rustix.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
+
+[lints]
+workspace = true

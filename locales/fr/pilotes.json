@@ -571,5 +571,13 @@
   "pilotes.hitachi.dernier_ordre": "Dernier ordre",
   "pilotes.hitachi.ordre_en_echec": "Dernier ordre en échec",
   "pilotes.hitachi.ordre_envoye": "envoi à Hitachi…",
-  "pilotes.hitachi.ordre_pris": "pris en compte par Hitachi"
+  "pilotes.hitachi.ordre_pris": "pris en compte par Hitachi",
+  "pilotes.rfxtrx.absent": "clé RFXtrx introuvable sur {port} ({cause}) : la brancher et la passer au conteneur (`devices:` du compose), Moli réessaie toutes les 30 s",
+  "pilotes.rfxtrx.lecture_seule": "les capteurs 433 MHz ne se commandent pas",
+  "pilotes.rfxtrx.temperature": "Température",
+  "pilotes.rfxtrx.humidite": "Humidité",
+  "pilotes.rfxtrx.pression": "Pression",
+  "pilotes.rfxtrx.pile_faible": "Pile faible",
+  "pilotes.rfxtrx.signal": "Signal",
+  "pilotes.rfxtrx.sonde": "Sonde {brand} {id}"
 }

@@ -3,8 +3,8 @@
   import Icon from '../ui/Icon.svelte';
   import Orb from '../moli/Orb.svelte';
   import Editor from '../auto/Editor.svelte';
-  import { home, note, relative } from '../lib/home.svelte.js';
-  import { api, asHuman, pending, liveRuns, newAlert, CATALOG, CANCELLED } from '../lib/auto.svelte.js';
+  import { home, hub, note, relative, nameOf, roomOf, device } from '../lib/home.svelte.js';
+  import { api, asHuman, pending, liveRuns, newAlert, nodeText, splitPoint, CATALOG, CANCELLED } from '../lib/auto.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
 
   /** « The n8n of the house »: what runs by itself, and a way to ask for
@@ -99,35 +99,132 @@
 
   const triggerIcon = (a) => CATALOG[a.graph.nodes.find((n) => CATALOG[n.type]?.family === 'trigger')?.type]?.icon ?? 'robot';
   const AUTHOR = { assistant: 'Moli', import: 'HA' };
+  const isTrigger = (n) => CATALOG[n.type]?.family === 'trigger';
+
+  /** An alert: one trigger about one device, then only messages. Shown
+   *  with the device, in a line; anything else is a scenario. */
+  function alertOf(a) {
+    const triggers = a.graph.nodes.filter(isTrigger);
+    const rest = a.graph.nodes.filter((n) => !isTrigger(n));
+    if (triggers.length !== 1 || !rest.length || rest.some((n) => n.type !== 'notify')) return null;
+    const trigger = triggers[0];
+    const id = trigger.device || splitPoint(trigger.point ?? '')[0];
+    if (!id || !hub.devices[id]) return null;
+    const suffix = ` · ${nameOf(id)}`;
+    return {
+      device: id,
+      trigger,
+      label: a.name.endsWith(suffix) ? a.name.slice(0, -suffix.length) : a.name,
+      channels: [...new Set(rest.flatMap((n) => n.channels ?? ['maison']))],
+    };
+  }
+
+  // What an alert watches, by the point it reads.
+  const ALERT_ICON = { smoke: 'fire', water_leak: 'water', watersensor_state: 'water', test: 'check', battery: 'battery-low', battery_percentage: 'battery-low', battery_low: 'battery-low', contact: 'door-open', doorcontact_state: 'door-open', occupancy: 'motion', motion: 'motion', doorbell: 'bell', temperature: 'thermometer', humidity: 'humidity' };
+  const alertIcon = (al) => ALERT_ICON[splitPoint(al.trigger.point ?? '')[1]] ?? CATALOG[al.trigger.type]?.icon ?? 'bell';
+
+  // Where the words go, as the house calls it.
+  const messengers = $derived(Object.values(hub.devices).filter((d) => d.points.some((p) => p.key === 'notify' && p.access?.write)));
+  const CHANNEL_ICON = { telegram: 'send', maison: 'home', voix: 'speaker', telephone: 'phone' };
+  const channelName = (c) =>
+    c === 'telegram' && messengers.length ? messengers.map((d) => nameOf(d.id)).join(', ') : t(`automatismes.inspecteur.canal.${c}`);
+
+  const alertGroups = $derived.by(() => {
+    const by = new Map();
+    for (const item of mine) {
+      const al = alertOf(item.automation);
+      if (!al) continue;
+      if (!by.has(al.device)) by.set(al.device, []);
+      by.get(al.device).push({ item, al });
+    }
+    return [...by.entries()].map(([id, items]) => ({ id, items }));
+  });
+  const scenarios = $derived(mine.filter((i) => !alertOf(i.automation)));
+
+  /** A scenario in a few words: what starts it, what it does. */
+  function gist(a) {
+    const when = a.graph.nodes.filter(isTrigger).map(nodeText).join(` ${t('automatismes.texte.ou')} `);
+    const does = [];
+    const devices = new Set();
+    for (const n of a.graph.nodes) {
+      if ((n.type === 'set' || n.type === 'toggle') && n.point) {
+        const id = splitPoint(n.point)[0];
+        if (!devices.has(id)) {
+          devices.add(id);
+          does.push({ icon: 'tune', text: nameOf(id) });
+        }
+      }
+    }
+    const said = a.graph.nodes.filter((n) => n.type === 'notify');
+    for (const c of new Set(said.flatMap((n) => n.channels ?? ['maison']))) does.push({ icon: CHANNEL_ICON[c] ?? 'bell', text: channelName(c) });
+    return { when, does, steps: a.graph.nodes.length };
+  }
+
+  /** the item whose « … » menu is open */
+  let menu = $state(null);
+
+  async function remove(item) {
+    menu = null;
+    const a = item.automation;
+    if (!confirm(t('automatismes.editeur.supprimer_question', { nom: a.name }))) return;
+    try {
+      await asHuman(t('automatismes.editeur.supprimer_label', { nom: a.name }), () => api.remove(a.id));
+      note(t('automatismes.editeur.supprime'));
+    } catch (err) {
+      if (err.message !== CANCELLED) note(err.message, 'error');
+    }
+    refresh();
+  }
 </script>
 
+{#snippet more(item)}
+  {@const a = item.automation}
+  <div class="more">
+    <button class="dots" onclick={(e) => (e.stopPropagation(), (menu = menu === a.id ? null : a.id))} aria-label={t('automatismes.liste.actions', { nom: a.name })} aria-expanded={menu === a.id}><Icon name="dots" size={18} /></button>
+    {#if menu === a.id}
+      <div class="menu" role="menu">
+        <a role="menuitem" href="#/automatismes/{a.id}"><Icon name="pencil" size={16} />{t('automatismes.liste.modifier')}</a>
+        <button role="menuitem" class="danger" onclick={() => remove(item)}><Icon name="trash" size={16} />{t('automatismes.editeur.supprimer')}</button>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet sw(item)}
+  <button class="switch" class:on={item.live} onclick={() => toggle(item)} aria-label={item.live ? t('automatismes.liste.couper') : t('automatismes.liste.activer')} aria-pressed={item.live}><i></i></button>
+{/snippet}
+
+{#snippet last(item)}
+  {#if item.last_run}
+    <span class="last" title={relative(item.last_run.started, home.now)}><i class="dot {item.last_run.status}"></i>{relative(item.last_run.started, home.now)}</span>
+  {/if}
+{/snippet}
+
 {#snippet tile(item)}
-          {@const a = item.automation}
+  {@const a = item.automation}
   {@const state = stateOf(item)}
-  {@const st = state[0]}
-  {@const label = state[1]}
-  <article class="card auto {st}">
+  {@const g = gist(a)}
+  <article class="card auto {state[0]}" title={item.summary}>
     <a class="open" href="#/automatismes/{a.id}" aria-label={t('automatismes.liste.ouvrir', { nom: a.name })}></a>
     <div class="head">
       <span class="ic"><Icon name={triggerIcon(a)} size={20} /></span>
       <h3>{a.name}</h3>
-      <button class="switch" class:on={item.live} onclick={() => toggle(item)} aria-label={item.live ? t('automatismes.liste.couper') : t('automatismes.liste.activer')} aria-pressed={item.live}><i></i></button>
+      {@render sw(item)}
+      {@render more(item)}
     </div>
-    <p class="summary">{item.summary}</p>
+    <p class="when">{g.when}</p>
     <footer>
-      <span class="pill {st}">{label}</span>
+      {#each g.does as x, i (i)}<span class="chip"><Icon name={x.icon} size={13} />{x.text}</span>{/each}
+      <span class="chip muted">{t('automatismes.liste.etapes', { count: g.steps })}</span>
+      {#if state[0] !== 'live'}<span class="pill {state[0]}">{state[1]}</span>{/if}
       {#if AUTHOR[a.author]}<span class="pill">{AUTHOR[a.author]}</span>{/if}
       {#if item.protected?.length}<span class="pill lock"><Icon name="lock" size={12} />{item.protected.join(', ')}</span>{/if}
-      <span class="last muted">
-        {#if item.last_run}
-          <i class="dot {item.last_run.status}"></i>{t(item.last_run.dry ? 'automatismes.liste.essai_quand' : 'automatismes.liste.a_tourne', { quand: relative(item.last_run.started, home.now) })}
-        {:else}
-          {t('automatismes.liste.jamais')}
-        {/if}
-      </span>
+      {@render last(item)}
     </footer>
   </article>
 {/snippet}
+
+<svelte:window onclick={() => (menu = null)} />
 
 {#if sub}
   <Editor id={sub} />
@@ -144,7 +241,7 @@
       <button disabled={!ask.trim() || drafting}>{drafting ? t('automatismes.moli_dessine') : t('automatismes.liste.creer')}</button>
     </form>
 
-    <section class="ideas" aria-label={t('automatismes.liste.idees')}>
+    <section class="ideas" class:compact={mine.length > 0} aria-label={t('automatismes.liste.idees')}>
       <button class="alert" onclick={() => newAlert()}>
         <span class="i"><Icon name="bell" size={20} /></span>
         <b>{t('automatismes.alerte.titre')}</b>
@@ -164,11 +261,46 @@
 
     {#if list?.length}
       <h2 class="section">{t('automatismes.liste.section')} <span class="muted">{t('automatismes.liste.actifs', { count: list.filter((i) => i.live).length, total: mine.length })}</span></h2>
-      {#if mine.length}
-        <div class="grid">
-          {#each mine as item (item.automation.id)}{@render tile(item)}{/each}
+      {#if alertGroups.length}
+        <h3 class="sub"><Icon name="bell" size={16} />{t('automatismes.liste.alertes')}</h3>
+        <div class="alerts">
+          {#each alertGroups as group (group.id)}
+            {@const d = device(group.id)}
+            <section class="card watch">
+              <header>
+                <h4>{nameOf(group.id)}{#if roomOf(d)}<small>{roomOf(d)}</small>{/if}</h4>
+                <button class="add" onclick={() => newAlert(group.id)} aria-label={t('automatismes.liste.ajouter_alerte', { nom: nameOf(group.id) })}><Icon name="plus" size={16} /></button>
+              </header>
+              <ul>
+                {#each group.items as { item, al } (item.automation.id)}
+                  {@const st = stateOf(item)[0]}
+                  <li class={st} title={item.summary}>
+                    <a class="open" href="#/automatismes/{item.automation.id}" aria-label={t('automatismes.liste.ouvrir', { nom: item.automation.name })}></a>
+                    <span class="ic"><Icon name={alertIcon(al)} size={17} /></span>
+                    <span class="what">
+                      <b>{al.label}</b>
+                      <small>
+                        {#each al.channels as c, i (c)}{#if i} · {/if}{channelName(c)}{/each}
+                        {#if st !== 'live' && st !== 'off'} · {stateOf(item)[1]}{/if}
+                      </small>
+                    </span>
+                    {@render last(item)}
+                    {@render sw(item)}
+                    {@render more(item)}
+                  </li>
+                {/each}
+              </ul>
+            </section>
+          {/each}
         </div>
-      {:else}
+      {/if}
+      {#if scenarios.length}
+        {#if alertGroups.length}<h3 class="sub"><Icon name="robot" size={16} />{t('automatismes.liste.scenarios')}</h3>{/if}
+        <div class="grid">
+          {#each scenarios as item (item.automation.id)}{@render tile(item)}{/each}
+        </div>
+      {/if}
+      {#if !mine.length}
         <p class="empty muted">{t('automatismes.liste.aucun_a_toi')}</p>
       {/if}
       {#if imported.length}
@@ -299,6 +431,255 @@
     color: var(--ink-2);
   }
 
+  /* Once there are automations, ideas are a row of chips, not a wall. */
+  .ideas.compact {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+
+  .ideas.compact button,
+  .ideas.compact .blank {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px 8px 8px;
+    border-radius: 999px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .ideas.compact .i {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    margin: 0;
+  }
+
+  .ideas.compact small {
+    display: none;
+  }
+
+  .ideas.compact .blank {
+    padding-left: 12px;
+  }
+
+  .ideas .alert .i {
+    background: color-mix(in srgb, #b05fd8 14%, var(--surface));
+    color: #b05fd8;
+  }
+
+  .sub {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: -6px;
+    font-size: 12px;
+    font-weight: 750;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  .alerts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+    gap: 16px;
+  }
+
+  .card.watch {
+    padding: 14px 10px 8px;
+  }
+
+  .watch header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 6px 6px;
+  }
+
+  h4 {
+    font-size: 16px;
+    font-weight: 700;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  h4 small {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-3);
+  }
+
+  .add {
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
+  .watch ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+  }
+
+  .watch li {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 6px;
+    border-top: 1px solid var(--line);
+    border-radius: 12px;
+  }
+
+  .watch li:first-child {
+    border-top: 0;
+  }
+
+  .watch li:hover {
+    background: var(--surface-2);
+  }
+
+  .watch li .ic {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+  }
+
+  .watch li.off .what,
+  .watch li.draft .what,
+  .watch li.bad .what {
+    opacity: 0.6;
+  }
+
+  .what {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+  }
+
+  .what b {
+    font-size: 14.5px;
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .what small {
+    font-size: 12.5px;
+    color: var(--ink-3);
+  }
+
+  .watch .switch {
+    transform: scale(0.85);
+  }
+
+  .more {
+    position: relative;
+    z-index: 2;
+  }
+
+  .dots {
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--ink-3);
+    cursor: pointer;
+  }
+
+  .dots:hover,
+  .dots[aria-expanded='true'] {
+    background: var(--surface-3);
+    color: var(--ink);
+  }
+
+  .menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 5;
+    min-width: 170px;
+    display: grid;
+    padding: 6px;
+    border-radius: 14px;
+    background: var(--surface);
+    box-shadow: var(--shadow-lift);
+    border: 1px solid var(--line);
+  }
+
+  .menu a,
+  .menu button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    text-decoration: none;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .menu a:hover,
+  .menu button:hover {
+    background: var(--surface-2);
+  }
+
+  .menu .danger {
+    color: var(--alert);
+  }
+
+  .when {
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 650;
+    background: var(--surface-2);
+    color: var(--ink-2);
+  }
+
+  .chip.muted {
+    background: none;
+    color: var(--ink-3);
+    padding-left: 2px;
+  }
+
   .section {
     font-size: 15px;
     font-weight: 700;
@@ -319,9 +700,10 @@
     gap: 16px;
   }
 
-  .auto {
+  .card.auto {
     display: grid;
-    gap: 10px;
+    gap: 8px;
+    padding: 16px;
     transition: transform 0.18s var(--ease);
   }
 
@@ -439,7 +821,9 @@
 
   .last {
     margin-left: auto;
+    flex: none;
     font-size: 12.5px;
+    color: var(--ink-3);
     display: inline-flex;
     align-items: center;
     gap: 6px;

@@ -435,5 +435,12 @@
   "automatismes.alerte.emoji.froid": "❄️",
   "automatismes.alerte.emoji.humide": "💧",
   "automatismes.alerte.emoji.silencieux": "🔕",
-  "automatismes.alerte.emoji.injoignable": "📡"
+  "automatismes.alerte.emoji.injoignable": "📡",
+  "automatismes.liste.actions": "Actions for “{nom}”",
+  "automatismes.liste.modifier": "Edit",
+  "automatismes.liste.etapes_one": "{count} step",
+  "automatismes.liste.etapes_other": "{count} steps",
+  "automatismes.liste.alertes": "Alerts",
+  "automatismes.liste.scenarios": "Scenarios",
+  "automatismes.liste.ajouter_alerte": "Add an alert for {nom}"
 }

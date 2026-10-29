@@ -11,15 +11,21 @@
 //!
 //! The protocols the transceiver listens to are kept in its memory and left
 //! as they are (RFXmngr changes them); the status in the logs says which.
+//! The transceiver is a device too (`<instance>:transceiver`): its `listen`
+//! switch has it hear every protocol for five minutes (never saved in its
+//! memory), and `heard` lists who spoke: a remote to try, a neighbour's
+//! probe. Its saved protocols come back at the end.
 
 mod frame;
+mod learn;
 
 use std::collections::{HashMap, HashSet};
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail, ensure};
-use frame::{Frame, Framer, Reading};
+use frame::{Frame, Framer, Reading, Status};
+use learn::{Learn, Standing};
 use moli_core::{Access, Device, DeviceId, Kind, PointSpec, Semantic, Unit, Value};
 use moli_runtime::{BoxFuture, Driver, DriverCtx};
 use rustix::termios::{self, ControlModes, OptionalActions, QueueSelector, SpecialCodeIndex};
@@ -59,6 +65,12 @@ pub struct Sensor {
     #[serde(default)]
     pub name: Option<String>,
 }
+
+/// The transceiver's own device.
+const TRANSCEIVER: &str = "transceiver";
+
+/// How long « listen to everything » lasts.
+const LISTENING: Duration = Duration::from_secs(5 * 60);
 
 fn default_port() -> String {
     "/dev/rfxtrx".into()
@@ -106,6 +118,10 @@ impl Rfxtrx {
                 "sensor id {:?}: a name, not a code",
                 s.id
             );
+            ensure!(
+                s.id != TRANSCEIVER,
+                "sensor id {TRANSCEIVER:?} is the transceiver's"
+            );
             ensure!(ids.insert(s.id.clone()), "sensor id {:?} twice", s.id);
             ensure!(
                 declared.insert(code(&s.code)?, s.clone()).is_none(),
@@ -127,9 +143,25 @@ impl Rfxtrx {
 }
 
 impl Rfxtrx {
+    /// Where a sensor's code stands, for the « listen » list.
+    fn standing(&self, code: &str, known: &HashSet<(u8, u8, u16)>) -> Standing {
+        let Some(code) = frame::parse_code(code) else {
+            return Standing::Unread;
+        };
+        if self.ignored.contains(&code) {
+            Standing::Ignored
+        } else if self.declared.contains_key(&code)
+            || (self.config.auto_add && known.contains(&code))
+        {
+            Standing::Known
+        } else {
+            Standing::New
+        }
+    }
+
     /// A device of an earlier run this configuration no longer shows.
     fn stale(&self, native: &str) -> bool {
-        if self.declared.values().any(|s| s.id == native) {
+        if native == TRANSCEIVER || self.declared.values().any(|s| s.id == native) {
             return false;
         }
         match frame::parse_code(native) {
@@ -222,7 +254,7 @@ async fn answer(
 }
 
 /// Reset, status (in the logs), receiver on.
-async fn start(port: &AsyncFd<OwnedFd>, framer: &mut Framer, path: &str) -> anyhow::Result<()> {
+async fn start(port: &AsyncFd<OwnedFd>, framer: &mut Framer, path: &str) -> anyhow::Result<Status> {
     send(port, &frame::RESET).await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     termios::tcflush(port.get_ref(), QueueSelector::IFlush)?;
@@ -247,7 +279,90 @@ async fn start(port: &AsyncFd<OwnedFd>, framer: &mut Framer, path: &str) -> anyh
         protocols.join(" "),
     );
     send(port, &frame::START_RECEIVER).await?;
+    Ok(status)
+}
+
+/// Every protocol for a while (`on`), or the transceiver's own again.
+async fn listen(port: &AsyncFd<OwnedFd>, status: &Status, on: bool) -> anyhow::Result<()> {
+    let protocols = if on {
+        frame::EVERYTHING
+    } else {
+        status.protocols
+    };
+    send(port, &frame::set_mode(status.frequency_code, protocols)).await?;
+    tracing::info!(
+        "rfxtrx: {}",
+        if on {
+            "listening to every protocol for 5 minutes"
+        } else {
+            "back to the saved protocols"
+        }
+    );
     Ok(())
+}
+
+/// Resolves at `when`, never without one.
+async fn until(when: Option<tokio::time::Instant>) {
+    match when {
+        Some(when) => tokio::time::sleep_until(when).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The transceiver's device, with what its status said.
+fn publish_transceiver(ctx: &DriverCtx, status: &Status) -> DeviceId {
+    let transceiver = ctx.device_id(TRANSCEIVER);
+    ctx.upsert_device(transceiver_device(ctx, &transceiver, status));
+    ctx.set_availability(&transceiver, true);
+    ctx.set_state(
+        &transceiver,
+        "firmware",
+        Value::Text(
+            format!(
+                "{} ({}), {}",
+                status.firmware, status.firmware_type, status.frequency
+            )
+            .into(),
+        ),
+    );
+    ctx.set_state(
+        &transceiver,
+        "protocols",
+        Value::Text(frame::protocol_names(status.protocols).join(", ").into()),
+    );
+    ctx.set_state(&transceiver, "listen", Value::Bool(false));
+    transceiver
+}
+
+/// When each sensor last spoke, and whether it was said online since.
+type Seen = HashMap<DeviceId, (Instant, bool)>;
+
+/// The declared sensors (unknown until they speak), and the devices of
+/// earlier runs this configuration no longer shows, removed.
+fn publish_sensors(this: &Rfxtrx, ctx: &DriverCtx) -> (Seen, HashSet<(u8, u8, u16)>) {
+    // When each sensor last spoke, and whether it was said online since.
+    let mut seen: Seen = HashMap::new();
+    let mut known: HashSet<(u8, u8, u16)> = HashSet::new();
+    for (&code, s) in &this.declared {
+        let id = ctx.device_id(&s.id);
+        ctx.upsert_device(device(ctx, &id, code, s.name.as_deref()));
+        // Unknown until it speaks (some speak every few minutes): silent
+        // only after a whole `offline_after`.
+        seen.insert(id, (Instant::now(), false));
+        known.insert(code);
+    }
+    // What earlier runs published and this one will not: a sensor no
+    // longer declared, a code now ignored or given a stable id. Gone from
+    // Moli, from the HomeKit bridge, from the state cache.
+    for id in ctx.known_devices() {
+        let native = id.to_string();
+        let native = native.split_once(':').map_or("", |(_, n)| n);
+        if this.stale(native) {
+            tracing::debug!("rfxtrx: {id} removed (no longer declared nor heard)");
+            ctx.remove_device(&id);
+        }
+    }
+    (seen, known)
 }
 
 async fn run(this: &Rfxtrx, ctx: &mut DriverCtx) -> anyhow::Result<()> {
@@ -270,31 +385,13 @@ async fn run(this: &Rfxtrx, ctx: &mut DriverCtx) -> anyhow::Result<()> {
         }
     };
     let mut framer = Framer::default();
-    start(&port, &mut framer, &this.config.port).await?;
+    let status = start(&port, &mut framer, &this.config.port).await?;
+    let transceiver = publish_transceiver(ctx, &status);
+    let mut listening: Option<tokio::time::Instant> = None;
+    let mut learn = Learn::default();
 
     let offline_after = Duration::from_secs(this.config.offline_after.saturating_mul(60));
-    // When each sensor last spoke, and whether it was said online since.
-    let mut seen: HashMap<DeviceId, (Instant, bool)> = HashMap::new();
-    let mut known: HashSet<(u8, u8, u16)> = HashSet::new();
-    for (&code, s) in &this.declared {
-        let id = ctx.device_id(&s.id);
-        ctx.upsert_device(device(ctx, &id, code, s.name.as_deref()));
-        // Unknown until it speaks (some speak every few minutes): silent
-        // only after a whole `offline_after`.
-        seen.insert(id, (Instant::now(), false));
-        known.insert(code);
-    }
-    // What earlier runs published and this one will not: a sensor no
-    // longer declared, a code now ignored or given a stable id. Gone from
-    // Moli, from the HomeKit bridge, from the state cache.
-    for id in ctx.known_devices() {
-        let native = id.to_string();
-        let native = native.split_once(':').map_or("", |(_, n)| n);
-        if this.stale(native) {
-            tracing::debug!("rfxtrx: {id} removed (no longer declared nor heard)");
-            ctx.remove_device(&id);
-        }
-    }
+    let (mut seen, mut known) = publish_sensors(this, ctx);
     // Each kind of module heard but not read, said once.
     let mut unread: HashSet<(u8, u8)> = HashSet::new();
     ctx.ready();
@@ -306,9 +403,32 @@ async fn run(this: &Rfxtrx, ctx: &mut DriverCtx) -> anyhow::Result<()> {
     loop {
         tokio::select! {
             command = ctx.next_command() => match command {
+                Some(command) if command.device.id == transceiver && &*command.key == "listen" => {
+                    let on = command.value == Value::Bool(true);
+                    if let Err(e) = listen(&port, &status, on).await {
+                        command.reply(Err(e.to_string()));
+                        return Err(e);
+                    }
+                    command.reply(Ok(()));
+                    if on {
+                        listening = Some(tokio::time::Instant::now() + LISTENING);
+                        learn = Learn::default();
+                        let end = moli_core::now_ms() + u64::try_from(LISTENING.as_millis()).unwrap_or(0);
+                        ctx.set_state(&transceiver, "listen_until", Value::Int(i64::try_from(end).unwrap_or(0)));
+                        ctx.set_state(&transceiver, "heard", Value::Text("[]".into()));
+                    } else {
+                        listening = None;
+                    }
+                    ctx.set_state(&transceiver, "listen", Value::Bool(on));
+                }
                 Some(command) => command.reply(Err(moli_i18n::tr!("pilotes.rfxtrx.lecture_seule"))),
                 None => return Ok(()),
             },
+            () = until(listening) => {
+                listen(&port, &status, false).await?;
+                listening = None;
+                ctx.set_state(&transceiver, "listen", Value::Bool(false));
+            }
             n = receive(&port, &mut buf) => {
                 let n = n?;
                 // The end of a frame never comes half a second later.
@@ -317,7 +437,13 @@ async fn run(this: &Rfxtrx, ctx: &mut DriverCtx) -> anyhow::Result<()> {
                 }
                 last_byte = Instant::now();
                 for f in framer.push(&buf[..n]) {
-                    match frame::decode(&f) {
+                    let decoded = frame::decode(&f);
+                    if listening.is_some()
+                        && learn.note(&f, decoded.as_ref(), moli_core::now_ms(), |code| this.standing(code, &known))
+                    {
+                        ctx.set_state(&transceiver, "heard", Value::Text(learn.json().into()));
+                    }
+                    match decoded {
                         Some(Frame::Reading(r)) => {
                             heard(this, ctx, &r, &mut known, &mut seen);
                         }
@@ -351,7 +477,7 @@ fn heard(
     ctx: &DriverCtx,
     r: &Reading,
     known: &mut HashSet<(u8, u8, u16)>,
-    seen: &mut HashMap<DeviceId, (Instant, bool)>,
+    seen: &mut Seen,
 ) {
     let code = (r.packet, r.subtype, r.id);
     let id = match this.declared.get(&code) {
@@ -429,6 +555,65 @@ fn device(ctx: &DriverCtx, id: &DeviceId, code: (u8, u8, u16), name: Option<&str
         native_room: None,
         members: Vec::new(),
         points: points(packet),
+    }
+}
+
+/// The transceiver: what it is, what it listens to, and its « listen to
+/// everything » switch.
+fn transceiver_device(ctx: &DriverCtx, id: &DeviceId, status: &Status) -> Device {
+    let point = |key: &str, label: String, kind: Kind, write: bool| PointSpec {
+        key: key.into(),
+        label: label.into(),
+        kind,
+        access: Access { read: true, write },
+        unit: None,
+        semantic: Semantic::Config,
+    };
+    Device {
+        id: id.clone(),
+        instance: ctx.instance().clone(),
+        native_name: moli_i18n::tr!("pilotes.rfxtrx.cle").into(),
+        manufacturer: Some("RFXCOM".into()),
+        model: Some(format!("RFXtrx ({})", status.frequency).into()),
+        description: None,
+        native_room: None,
+        members: Vec::new(),
+        points: vec![
+            point(
+                "listen",
+                moli_i18n::tr!("pilotes.rfxtrx.ecoute"),
+                Kind::Binary,
+                true,
+            ),
+            point(
+                "listen_until",
+                moli_i18n::tr!("pilotes.rfxtrx.ecoute_jusqua"),
+                Kind::Numeric {
+                    min: None,
+                    max: None,
+                    step: None,
+                },
+                false,
+            ),
+            point(
+                "heard",
+                moli_i18n::tr!("pilotes.rfxtrx.entendu"),
+                Kind::Text,
+                false,
+            ),
+            point(
+                "firmware",
+                moli_i18n::tr!("pilotes.rfxtrx.firmware"),
+                Kind::Text,
+                false,
+            ),
+            point(
+                "protocols",
+                moli_i18n::tr!("pilotes.rfxtrx.protocoles"),
+                Kind::Text,
+                false,
+            ),
+        ],
     }
 }
 
@@ -536,6 +721,15 @@ mod tests {
         assert!(r.stale("50-06-3c0a"), "ignored");
         assert!(r.stale("garage"), "no longer declared");
         assert!(!r.stale("52-01-9999"), "added when heard");
+        assert!(!r.stale("transceiver"));
+        assert_eq!(r.standing("52-01-1a2b", &HashSet::new()), Standing::Known);
+        assert_eq!(r.standing("50-06-3c0a", &HashSet::new()), Standing::Ignored);
+        assert_eq!(r.standing("52-01-7777", &HashSet::new()), Standing::New);
+        assert_eq!(
+            r.standing("13-00-abcdef", &HashSet::new()),
+            Standing::Unread
+        );
+        assert!(config("[[sensor]]\nid = \"transceiver\"\ncode = \"52-01-1a2b\"\n").is_err());
         let r = config("auto_add = false").unwrap();
         assert!(r.stale("52-01-9999"));
     }

@@ -18,6 +18,20 @@ pub const GET_STATUS: [u8; 14] = command(1, 0x02);
 /// Firmware 1001 and later receive only after this.
 pub const START_RECEIVER: [u8; 14] = command(2, 0x07);
 
+/// Listens to these protocols until the next reset (`msg3` to `msg6` of the
+/// status). Never saved in the transceiver's memory (that is command 0x06,
+/// which Moli never sends): a reset brings its own settings back.
+pub fn set_mode(frequency: u8, protocols: [u8; 4]) -> [u8; 14] {
+    let [a, b, c, d] = protocols;
+    [
+        0x0D, 0x00, 0x00, 3, 0x03, frequency, 0x00, a, b, c, d, 0, 0, 0,
+    ]
+}
+
+/// Every protocol, undecoded frames included: to find out what a remote
+/// sends. Too many at once make reception worse: for a few minutes only.
+pub const EVERYTHING: [u8; 4] = [0xFF; 4];
+
 /// Packet types Moli decodes.
 pub const TEMP: u8 = 0x50;
 pub const HUM: u8 = 0x51;
@@ -29,6 +43,8 @@ pub const TEMP_HUM_BARO: u8 = 0x54;
 pub struct Status {
     /// 433.92 MHz for an RFXtrx433.
     pub frequency: &'static str,
+    /// The same, as the transceiver says it (sent back in `set_mode`).
+    pub frequency_code: u8,
     pub firmware: u16,
     pub firmware_type: &'static str,
     /// The enabled protocols, as the four bytes of the status (msg3 to msg6).
@@ -114,7 +130,8 @@ pub fn decode(frame: &[u8]) -> Option<Frame> {
         r.rssi = b >> 4;
     };
     Some(match packet {
-        0x01 if subtype == 0x00 && at(4)? == 0x02 => Frame::Status(status(frame)?),
+        // The answer to GET_STATUS, or to a new mode.
+        0x01 if subtype == 0x00 && matches!(at(4)?, 0x02 | 0x03) => Frame::Status(status(frame)?),
         TEMP if len >= 0x08 => {
             let mut r = reading(id()?);
             r.temperature = Some(temperature(frame[6], frame[7]));
@@ -148,7 +165,8 @@ pub fn decode(frame: &[u8]) -> Option<Frame> {
 }
 
 fn status(frame: &[u8]) -> Option<Status> {
-    let frequency = match frame.get(5)? {
+    let frequency_code = *frame.get(5)?;
+    let frequency = match frequency_code {
         0x50 | 0x51 => "310/315 MHz",
         0x52..=0x54 => "433.92 MHz",
         0x55..=0x5F => "868 MHz",
@@ -182,6 +200,7 @@ fn status(frame: &[u8]) -> Option<Status> {
     };
     Some(Status {
         frequency,
+        frequency_code,
         firmware,
         firmware_type,
         protocols,
@@ -228,6 +247,92 @@ pub fn model(packet: u8, subtype: u8) -> (&'static str, &'static str) {
         (TEMP_HUM_BARO, 0x02) => (OREGON, "BTHR918N, BTHR968"),
         _ => ("", "433 MHz"),
     }
+}
+
+/// The protocols a status says are listened to, by name (RFXtrx SDK,
+/// `msg3` to `msg5`; `msg6` holds newer ones, given by bit).
+pub fn protocol_names(protocols: [u8; 4]) -> Vec<String> {
+    const NAMES: [[&str; 8]; 3] = [
+        [
+            "AE Blyss",
+            "Rubicson",
+            "FineOffset/Viking",
+            "Lighting4",
+            "RSL",
+            "Byron SX",
+            "Imagintronix",
+            "undecoded",
+        ],
+        [
+            "Mertik",
+            "AD LightwaveRF",
+            "Hideki/UPM",
+            "La Crosse",
+            "Legrand CAD",
+            "ProGuard",
+            "BlindsT0",
+            "BlindsT1",
+        ],
+        [
+            "X10",
+            "ARC",
+            "AC",
+            "HomeEasy EU",
+            "Meiantech",
+            "Oregon",
+            "ATI",
+            "Visonic",
+        ],
+    ];
+    let mut out = Vec::new();
+    for (byte, names) in protocols.iter().zip(NAMES) {
+        for (bit, name) in names.iter().enumerate() {
+            if byte & (1 << bit) != 0 {
+                out.push((*name).to_owned());
+            }
+        }
+    }
+    for bit in 0..8 {
+        if protocols[3] & (1 << bit) != 0 {
+            out.push(format!("msg6.{bit}"));
+        }
+    }
+    out
+}
+
+/// What a packet type is, as a word the dashboard translates.
+pub fn kind_of(packet: u8) -> &'static str {
+    match packet {
+        0x02 => "transceiver",
+        0x03 => "undecoded",
+        0x10..=0x12 | 0x14 | 0x15 => "lighting",
+        0x13 => "lighting4",
+        0x16 => "chime",
+        0x17..=0x1A => "blinds",
+        0x1B..=0x1F | 0x28 | 0x30 => "remote_control",
+        0x20 => "security",
+        0x4E..=0x5F | 0x70..=0x7F => "sensor",
+        _ => "other",
+    }
+}
+
+/// What tells two senders of a same type apart: the bytes after the
+/// sequence number, without the last one (battery and signal) and without
+/// what changes from one press to the next for sensors (the reading).
+pub fn signature(frame: &[u8]) -> String {
+    let end = if frame.get(1) == Some(&0x03) {
+        frame.len()
+    } else {
+        frame.len().saturating_sub(1)
+    };
+    frame
+        .get(4..end.max(4))
+        .unwrap_or_default()
+        .iter()
+        .fold(String::new(), |mut out, b| {
+            let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{b:02x}"));
+            out
+        })
 }
 
 /// Cuts the byte stream into frames. A length byte that cannot start a
@@ -290,6 +395,7 @@ mod tests {
             decode(&frames[0]),
             Some(Frame::Status(Status {
                 frequency: "433.92 MHz",
+                frequency_code: 0x53,
                 firmware: 1025,
                 firmware_type: "Ext",
                 protocols: [0x00, 0x0C, 0x2F, 0x00],
@@ -380,6 +486,48 @@ mod tests {
         assert!(!f.is_empty());
         f.clear();
         assert!(f.is_empty());
+    }
+
+    #[test]
+    fn listens_to_everything_then_back() {
+        let mode = set_mode(0x53, EVERYTHING);
+        assert_eq!(usize::from(mode[0]) + 1, mode.len());
+        assert_eq!((mode[4], mode[5]), (0x03, 0x53));
+        assert_eq!(&mode[7..11], &[0xFF; 4]);
+        let saved = set_mode(0x53, [0x00, 0x0C, 0x2F, 0x00]);
+        assert_eq!(&saved[7..11], &[0x00, 0x0C, 0x2F, 0x00]);
+        // The capture's protocols: what was heard, named.
+        assert_eq!(
+            protocol_names([0x00, 0x0C, 0x2F, 0x00]),
+            [
+                "Hideki/UPM",
+                "La Crosse",
+                "X10",
+                "ARC",
+                "AC",
+                "HomeEasy EU",
+                "Oregon"
+            ]
+        );
+        // The answer to a new mode is a status too.
+        let mut answer = fixture()[0].clone();
+        answer[4] = 0x03;
+        assert!(matches!(decode(&answer), Some(Frame::Status(_))));
+    }
+
+    #[test]
+    fn names_and_tells_apart_what_it_hears() {
+        assert_eq!(kind_of(0x13), "lighting4");
+        assert_eq!(kind_of(0x03), "undecoded");
+        assert_eq!(kind_of(TEMP_HUM), "sensor");
+        // A Lighting4 remote: its 3-byte code and pulse, not the signal.
+        let press = [0x09, 0x13, 0x00, 0x07, 0xAB, 0xCD, 0xEF, 0x01, 0x5E, 0x60];
+        assert_eq!(signature(&press), "abcdef015e");
+        // Undecoded: every byte counts.
+        assert_eq!(
+            signature(&[0x06, 0x03, 0x01, 0x00, 0x12, 0x34, 0x56]),
+            "123456"
+        );
     }
 
     #[test]

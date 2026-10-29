@@ -4,6 +4,7 @@
   import { catalogue, showTile, available, deviceOnDashboard, showDevice } from '../lib/tiles.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
+  import RfxPanel from '../ui/RfxPanel.svelte';
   import { newAlert } from '../lib/auto.svelte.js';
 
   const KIND_ICON = {
@@ -48,6 +49,9 @@
   const source = (d) => d.id.split(':')[0];
   /** A bridge's own interface (Zigbee2MQTT…), for what Moli does not do: pairing, device settings. */
   const webOf = (src) => hub.drivers?.find((x) => x.instance === src)?.web;
+  /** A 433 MHz transceiver: its pairing and settings are Moli's own panel. */
+  const isRfx = (src) => hub.drivers?.find((x) => x.instance === src)?.kind === 'rfxtrx';
+  let rfx = $state(null);
   /** « Zigbee », not « z2m »: the catalog's name for where they come from. */
   const sourceName = (src) => {
     const driver = hub.drivers?.find((x) => x.instance === src);
@@ -173,6 +177,7 @@
       <h2>
         {by === 'room' ? src || t('maison.equipements.sans_piece') : sourceName(src)} <small>{list.length}</small>
         {#if by === 'source' && webOf(src)}<a class="web" href={webOf(src)} target="_blank" rel="noopener noreferrer" title={t('maison.equipements.interface_de', { name: sourceName(src) })}>{t('maison.equipements.interface')} ↗</a>{/if}
+        {#if by === 'source' && isRfx(src)}<button class="web" onclick={() => (rfx = src)}>{t('maison.equipements.interface')}</button>{/if}
       </h2>
       <ul>
         {#each list as x (x.d.id)}
@@ -246,6 +251,8 @@
       </section>
     {/each}
   {/if}
+
+  {#if rfx}<RfxPanel instance={rfx} onclose={() => (rfx = null)} />{/if}
 
   <nav class="more" aria-label={t('maison.equipements.autres_vues')}>
     <span>{t('maison.equipements.autres_vues')}</span>
@@ -354,6 +361,11 @@
 
   .group h2 .web {
     float: right;
+    border: 0;
+    padding: 0;
+    background: none;
+    font-family: inherit;
+    cursor: pointer;
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 0;

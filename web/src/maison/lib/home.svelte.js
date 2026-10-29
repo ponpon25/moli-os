@@ -144,7 +144,7 @@ export const leak = (id) => value(id, 'water_leak') === true || value(id, 'water
 
 // Driver kinds: their name and description are in the catalog
 // (systeme.pilotes.<kind>.nom / .desc); a kind not listed shows as it is.
-const KINDS = ['z2m', 'hue', 'tuya', 'reolink', 'sonos', 'helpers', 'philips', 'frigate', 'bambu', 'tapo', 'igd', 'presence', 'telegram', 'phones', 'profile'];
+const KINDS = ['z2m', 'hue', 'tuya', 'reolink', 'sonos', 'helpers', 'philips', 'frigate', 'bambu', 'tapo', 'igd', 'presence', 'rfxtrx', 'telegram', 'phones', 'profile'];
 export const kindWord = (kind, part) => (KINDS.includes(kind) ? t(`systeme.pilotes.${kind}.${part}`) : null);
 export const driverName = (d) => (d.kind === 'profile' ? d.instance.charAt(0).toUpperCase() + d.instance.slice(1) : (kindWord(d.kind, 'nom') ?? d.kind));
 

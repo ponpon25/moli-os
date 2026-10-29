@@ -579,5 +579,11 @@
   "pilotes.rfxtrx.pression": "Pressure",
   "pilotes.rfxtrx.pile_faible": "Low battery",
   "pilotes.rfxtrx.signal": "Signal",
-  "pilotes.rfxtrx.sonde": "{brand} sensor {id}"
+  "pilotes.rfxtrx.sonde": "{brand} sensor {id}",
+  "pilotes.rfxtrx.cle": "RFXtrx transceiver",
+  "pilotes.rfxtrx.ecoute": "Listen to everything",
+  "pilotes.rfxtrx.ecoute_jusqua": "Listening until",
+  "pilotes.rfxtrx.entendu": "Heard",
+  "pilotes.rfxtrx.firmware": "Firmware",
+  "pilotes.rfxtrx.protocoles": "Protocols listened to"
 }

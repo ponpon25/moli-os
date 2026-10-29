@@ -348,7 +348,6 @@
   "systeme.alexa.verification": "Connecting…",
   "systeme.alexa.aide": "Moli never sees your password: it shows up as a \"Moli\" device of your Amazon account, and keeps an encrypted token in its secret store.",
   "systeme.alexa.officieux": "Amazon offers no official interface to drive Echo music: Moli uses the Alexa app's, which may change without notice.",
-
   "systeme.homekit.titre": "HomeKit",
   "systeme.homekit.resume": "{devices} devices visible in the Home app · {count} phone(s) paired",
   "systeme.homekit.regler": "Settings",
@@ -443,5 +442,7 @@
   "systeme.olvid.attente": "Waiting for your invitation…",
   "systeme.olvid.etape_code_olvid": "3. Type here the code Olvid shows",
   "systeme.olvid.valider": "Confirm",
-  "systeme.olvid.demarrage": "Starting…"
+  "systeme.olvid.demarrage": "Starting…",
+  "systeme.pilotes.rfxtrx.nom": "433 MHz",
+  "systeme.pilotes.rfxtrx.desc": "Wireless 433 MHz temperature sensors, through the RFXtrx transceiver."
 }

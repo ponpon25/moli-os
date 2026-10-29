@@ -579,5 +579,11 @@
   "pilotes.rfxtrx.pression": "Pression",
   "pilotes.rfxtrx.pile_faible": "Pile faible",
   "pilotes.rfxtrx.signal": "Signal",
-  "pilotes.rfxtrx.sonde": "Sonde {brand} {id}"
+  "pilotes.rfxtrx.sonde": "Sonde {brand} {id}",
+  "pilotes.rfxtrx.cle": "Clé RFXtrx",
+  "pilotes.rfxtrx.ecoute": "Écoute de tout",
+  "pilotes.rfxtrx.ecoute_jusqua": "Fin de l'écoute",
+  "pilotes.rfxtrx.entendu": "Entendu",
+  "pilotes.rfxtrx.firmware": "Firmware",
+  "pilotes.rfxtrx.protocoles": "Protocoles écoutés"
 }

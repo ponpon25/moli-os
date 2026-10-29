@@ -902,6 +902,7 @@ fn start_history(
 /// missing here is unknown, whatever `build_driver`'s match says.
 const KINDS: &[&str] = &[
     "z2m",
+    "zwave",
     "hue",
     "igd",
     "tapo",
@@ -1097,6 +1098,9 @@ fn build_driver(
             config.options.clone().try_into().with_context(context)?,
         )),
         "presence" => Arc::new(moli_presence::Presence::new(
+            config.options.clone().try_into().with_context(context)?,
+        )?),
+        "zwave" => Arc::new(moli_zwave::Zwave::new(
             config.options.clone().try_into().with_context(context)?,
         )?),
         "rfxtrx" => Arc::new(moli_rfxtrx::Rfxtrx::new(

@@ -1,0 +1,21 @@
+[package]
+name = "moli-zwave"
+description = "Moli OS Z-Wave: the nodes of a Z-Wave network through the Z-Wave JS server of Z-Wave JS UI (local)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+moli-core.workspace = true
+moli-i18n.workspace = true
+moli-net.workspace = true
+moli-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

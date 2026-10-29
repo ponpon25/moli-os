@@ -1,6 +1,7 @@
 //! A minimal WebSocket client (RFC 6455) over TLS, pinned for appliances
 //! that speak JSON over a websocket (Sonos audio clips), public CAs for
-//! cloud feeds (Tuya's message service). Text messages only; pings are
+//! cloud feeds (Tuya's message service); in clear only for a service on the
+//! same machine (the Z-Wave JS server). Text messages only; pings are
 //! answered; anything else ends the conversation.
 
 use std::fmt::Write as _;
@@ -12,7 +13,7 @@ use ring::digest::{SHA1_FOR_LEGACY_USE_ONLY, digest};
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::ClientConfig;
 use rustls::pki_types::ServerName;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
@@ -22,11 +23,18 @@ use crate::{PinnedTls, TIMEOUT, public_tls};
 const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const MAX_HANDSHAKE: usize = 16 * 1024;
 const MAX_MESSAGE: usize = 1024 * 1024;
+/// A local service may send its whole state at once (every Z-Wave node).
+const MAX_LOCAL_MESSAGE: usize = 16 * 1024 * 1024;
+
+trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 
 pub struct WebSocket {
-    stream: TlsStream<TcpStream>,
+    stream: Box<dyn Io>,
     /// Bytes read but not yet consumed (a frame split across reads).
     buf: Vec<u8>,
+    /// Largest message accepted.
+    max: usize,
 }
 
 impl std::fmt::Debug for WebSocket {
@@ -58,6 +66,29 @@ impl WebSocket {
         Self::open(host, port, path, headers, public_tls()).await
     }
 
+    /// Opens `ws://host:port/path`, in clear: only for a service on this
+    /// machine (a loopback address), never across the network.
+    pub async fn connect_local(host: &str, port: u16, path: &str) -> anyhow::Result<Self> {
+        let ip: std::net::IpAddr = if host == "localhost" {
+            std::net::Ipv4Addr::LOCALHOST.into()
+        } else {
+            host.parse().context("a loopback address")?
+        };
+        ensure!(
+            ip.is_loopback(),
+            "{host}: a websocket in clear stays on this machine"
+        );
+        let tcp = Self::reach(host, port).await?;
+        Self::handshake(Box::new(tcp), host, port, path, &[], MAX_LOCAL_MESSAGE).await
+    }
+
+    async fn reach(host: &str, port: u16) -> anyhow::Result<TcpStream> {
+        tokio::time::timeout(TIMEOUT, TcpStream::connect((host, port)))
+            .await
+            .context("connect timeout")?
+            .with_context(|| format!("cannot reach {host}:{port}"))
+    }
+
     async fn open(
         host: &str,
         port: u16,
@@ -65,17 +96,24 @@ impl WebSocket {
         headers: &[(&str, &str)],
         config: Arc<ClientConfig>,
     ) -> anyhow::Result<Self> {
-        let tcp = tokio::time::timeout(TIMEOUT, TcpStream::connect((host, port)))
-            .await
-            .context("connect timeout")?
-            .with_context(|| format!("cannot reach {host}:{port}"))?;
+        let tcp = Self::reach(host, port).await?;
         let name = ServerName::try_from(host.to_owned()).context("host name")?;
-        let mut stream =
+        let stream: TlsStream<TcpStream> =
             tokio::time::timeout(TIMEOUT, TlsConnector::from(config).connect(name, tcp))
                 .await
                 .context("tls handshake timeout")?
                 .context("tls handshake")?;
+        Self::handshake(Box::new(stream), host, port, path, headers, MAX_MESSAGE).await
+    }
 
+    async fn handshake(
+        mut stream: Box<dyn Io>,
+        host: &str,
+        port: u16,
+        path: &str,
+        headers: &[(&str, &str)],
+        max: usize,
+    ) -> anyhow::Result<Self> {
         let mut raw = [0u8; 16];
         SystemRandom::new()
             .fill(&mut raw)
@@ -125,7 +163,7 @@ impl WebSocket {
             "bad websocket accept key"
         );
         buf.drain(..end);
-        Ok(Self { stream, buf })
+        Ok(Self { stream, buf, max })
     }
 
     pub async fn send_text(&mut self, text: &str) -> anyhow::Result<()> {
@@ -151,7 +189,7 @@ impl WebSocket {
             match opcode {
                 0x0 | 0x1 => {
                     ensure!(
-                        message.len() + payload.len() <= MAX_MESSAGE,
+                        message.len() + payload.len() <= self.max,
                         "message too large"
                     );
                     message.extend_from_slice(&payload);
@@ -222,7 +260,7 @@ impl WebSocket {
             }
             n => (2, usize::from(n)),
         };
-        ensure!(len <= MAX_MESSAGE, "frame too large");
+        ensure!(len <= self.max, "frame too large");
         let mut mask = None;
         if masked {
             self.fill(at + 4).await?;
@@ -295,5 +333,65 @@ mod tests {
             .as_ref(),
         );
         assert_eq!(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
+
+    #[tokio::test]
+    async fn in_clear_only_on_this_machine() {
+        let err = WebSocket::connect_local("192.168.1.10", 3000, "/")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("stays on this machine"), "{err}");
+        assert!(
+            WebSocket::connect_local("example.com", 3000, "/")
+                .await
+                .is_err()
+        );
+    }
+
+    /// A tiny server: answers the handshake, sends a message, reads one.
+    #[tokio::test]
+    async fn talks_to_a_local_server() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let mut b = [0u8; 1];
+                sock.read_exact(&mut b).await.unwrap();
+                head.push(b[0]);
+            }
+            let head = String::from_utf8(head).unwrap();
+            let key = head
+                .lines()
+                .find_map(|l| l.strip_prefix("Sec-WebSocket-Key: "))
+                .unwrap()
+                .trim()
+                .to_owned();
+            let accept = base64(
+                digest(&SHA1_FOR_LEGACY_USE_ONLY, format!("{key}{GUID}").as_bytes()).as_ref(),
+            );
+            let answer = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+            );
+            sock.write_all(answer.as_bytes()).await.unwrap();
+            // An unmasked text frame from the server.
+            sock.write_all(&[0x81, 5, b'h', b'e', b'l', b'l', b'o'])
+                .await
+                .unwrap();
+            // The client's masked answer.
+            let mut f = [0u8; 2 + 4 + 2];
+            sock.read_exact(&mut f).await.unwrap();
+            assert_eq!(f[0], 0x81);
+            assert_eq!(f[1], 0x80 | 2);
+            let mask = [f[2], f[3], f[4], f[5]];
+            [f[6] ^ mask[0], f[7] ^ mask[1]]
+        });
+        let mut ws = WebSocket::connect_local("127.0.0.1", port, "/")
+            .await
+            .unwrap();
+        assert_eq!(ws.recv_text(Duration::from_secs(2)).await.unwrap(), "hello");
+        ws.send_text("ok").await.unwrap();
+        assert_eq!(&server.await.unwrap(), b"ok");
     }
 }

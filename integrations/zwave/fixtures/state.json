@@ -1,0 +1,62 @@
+{
+  "controller": { "homeId": 2882338817, "ownNodeId": 1 },
+  "nodes": [
+    {
+      "nodeId": 1,
+      "isControllerNode": true,
+      "status": 4,
+      "deviceConfig": { "manufacturer": "Z-Wave.Me", "label": "UZB", "description": "Z-Wave USB stick" },
+      "values": []
+    },
+    {
+      "nodeId": 2,
+      "name": "Portail",
+      "location": "",
+      "status": 4,
+      "ready": true,
+      "deviceConfig": { "manufacturer": "Qubino", "label": "ZMNHND1", "description": "Flush 1D Relay" },
+      "values": [
+        { "commandClass": 32, "endpoint": 0, "property": "currentValue",
+          "metadata": { "type": "number", "readable": true, "writeable": false, "min": 0, "max": 99, "label": "Current value" }, "value": 0 },
+        { "commandClass": 32, "endpoint": 0, "property": "targetValue",
+          "metadata": { "type": "number", "readable": true, "writeable": true, "min": 0, "max": 99, "label": "Target value" } },
+        { "commandClass": 37, "endpoint": 0, "property": "currentValue",
+          "metadata": { "type": "boolean", "readable": true, "writeable": false, "label": "Current value" }, "value": false },
+        { "commandClass": 37, "endpoint": 0, "property": "targetValue",
+          "metadata": { "type": "boolean", "readable": true, "writeable": true, "label": "Target value" }, "value": false },
+        { "commandClass": 37, "endpoint": 0, "property": "duration",
+          "metadata": { "type": "duration", "readable": true, "writeable": false, "label": "Remaining duration" } },
+        { "commandClass": 49, "endpoint": 0, "property": "Air temperature",
+          "metadata": { "type": "number", "readable": true, "writeable": false, "label": "Air temperature", "unit": "°C" }, "value": 21.4 },
+        { "commandClass": 50, "endpoint": 0, "property": "value", "propertyKey": 66049,
+          "metadata": { "type": "number", "readable": true, "writeable": false, "label": "Electric Consumption [W]", "unit": "W" }, "value": 0.3 },
+        { "commandClass": 50, "endpoint": 0, "property": "reset",
+          "metadata": { "type": "boolean", "readable": false, "writeable": true, "label": "Reset accumulated values" } },
+        { "commandClass": 112, "endpoint": 0, "property": 11,
+          "metadata": { "type": "number", "readable": true, "writeable": true, "min": 0, "max": 32535, "label": "Automatic turning off output after set time" }, "value": 0 },
+        { "commandClass": 134, "endpoint": 0, "property": "firmwareVersions",
+          "metadata": { "type": "string[]", "readable": true, "writeable": false, "label": "Z-Wave chip firmware versions" }, "value": ["4.61"] }
+      ]
+    },
+    {
+      "nodeId": 3,
+      "name": "",
+      "location": "Garage",
+      "status": 1,
+      "ready": true,
+      "statistics": { "commandsTX": 3, "commandsRX": 12, "lastSeen": "2026-10-29T08:12:41.000Z" },
+      "deviceConfig": { "manufacturer": "Example", "label": "DS-1", "description": "Door sensor" },
+      "values": [
+        { "commandClass": 128, "endpoint": 0, "property": "level",
+          "metadata": { "type": "number", "readable": true, "writeable": false, "min": 0, "max": 100, "unit": "%", "label": "Battery level" }, "value": 90 },
+        { "commandClass": 128, "endpoint": 0, "property": "isLow",
+          "metadata": { "type": "boolean", "readable": true, "writeable": false, "label": "Low battery level" }, "value": false },
+        { "commandClass": 113, "endpoint": 0, "property": "Access Control", "propertyKey": "Door state",
+          "metadata": { "type": "number", "readable": true, "writeable": false, "min": 0, "max": 255, "label": "Door state",
+                        "states": { "22": "Window/door is open", "23": "Window/door is closed" } }, "value": 22 },
+        { "commandClass": 132, "endpoint": 0, "property": "wakeUpInterval",
+          "metadata": { "type": "number", "readable": false, "writeable": true, "min": 0, "max": 86400, "label": "Wake Up interval" }, "value": 43200 }
+      ]
+    }
+  ]
+}

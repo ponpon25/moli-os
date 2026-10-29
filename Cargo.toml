@@ -39,6 +39,7 @@ moli-helpers = { path = "crates/moli-helpers" }
 moli-lights = { path = "crates/moli-lights" }
 moli-presence = { path = "crates/moli-presence" }
 moli-rfxtrx = { path = "crates/moli-rfxtrx" }
+moli-zwave = { path = "crates/moli-zwave" }
 moli-telegram = { path = "crates/moli-telegram" }
 moli-olvid = { path = "crates/moli-olvid" }
 moli-i18n = { path = "crates/moli-i18n" }

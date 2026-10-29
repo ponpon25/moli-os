@@ -1,0 +1,28 @@
+[integration]
+id = "zwave"
+name = "Z-Wave (via Z-Wave JS UI)"
+# Any node Z-Wave JS describes: no list per brand.
+brands = []
+models = []
+# The Z-Wave JS server's websocket, on this machine.
+transport = "tcp"
+driver = "zwave"
+crate = "moli-zwave"
+
+[discovery]
+mdns = []
+ssdp = []
+ports = [3000]
+
+[needs]
+secrets = []
+vars = []
+options = []
+
+[origin]
+reused = "protocole websocket du serveur Z-Wave JS (start_listening, événements, node.set_value), comme l'intégration zwave_js de HA"
+author = "agent"
+
+# Replayed by the crate's tests (crates/moli-zwave/src/model.rs, lib.rs).
+[[fixture]]
+file = "fixtures/state.json"

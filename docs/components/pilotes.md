@@ -72,7 +72,7 @@ Le hub l'appelle quand une surface demande une image : rien n'est récupéré po
 ```toml
 [[driver]]
 id = "enceinte"         # non vide, sans ':' ni '/', unique ; réservés : core, assistant, automations
-kind = "sonos"          # z2m, hue, tuya, reolink, sonos, philips, frigate, bambu, tapo, igd, rfxtrx, helpers, profile
+kind = "sonos"          # z2m, zwave, hue, tuya, reolink, sonos, philips, frigate, bambu, tapo, igd, rfxtrx, helpers, profile
 # enabled = false       # désactive l'instance sans la supprimer
 
 [driver.options]        # s'applique au [[driver]] qui précède ; clés inconnues refusées
@@ -500,6 +500,27 @@ pièces ; il commande ensuite les membres en origine `system` (journal : `lumina
   serveur TLS parlant RSA/CBC (rustls ne sait pas le faire, à vérifier avec le vrai ClientHello du module) et d'un réappairage après chaque panne.
 - Non couvert : minuteries, programmes, consommation, lamelles en écriture, mode vacances.
 
+## `zwave` : Z-Wave via Z-Wave JS UI (`crates/moli-zwave`)
+
+- **Couvre** : tout module que Z-Wave JS sait décrire, sans code par marque.
+- **Protocole** : websocket du serveur Z-Wave JS de Z-Wave JS UI, **sur cette machine** (en clair : refusé ailleurs que sur une adresse de bouclage ; client `moli_net::ws::WebSocket::connect_local`, messages jusqu'à 16 Mio). `set_api_schema` (35, borné par ce que le serveur accepte), `start_listening` (tout le réseau), puis les événements ; un ordre = `node.set_value` (réponse attendue, statut 1, 254 ou 255 = accepté).
+- **Configuration** :
+
+```toml
+[[driver]]
+id = "zwave"
+kind = "zwave"
+[driver.options]
+# host = "127.0.0.1"                    # défaut ; jamais une autre machine
+# port = 3000                           # défaut (WS Server de Z-Wave JS UI)
+frontend = "http://192.168.1.x:8091"    # « Appairage et réglages » dans Équipements
+```
+
+- **Points** (`src/model.rs`) : chaque valeur lisible, clé `[epN.]<classe>.<propriété>[.<clé>]` (`sensor.air_temperature`, `meter.value.66049`) ; `currentValue` + `targetValue` d'une même classe font un seul point (`switch` : `on_off`, `level` : luminosité), lu sur le premier, écrit sur le second ; `Basic` masqué s'il y a un interrupteur ; nombres nommés → choix (reconvertis en nombre à l'envoi) ; batterie (`battery.level`, `battery.is_low`) ; réglages, versions, associations, sécurité, réveil : non montrés (Z-Wave JS UI les gère).
+- **Identité** : `<instance>:<home id en hex>-<nœud>` ; le contrôleur (la clé) n'est pas un appareil. Nom : celui donné dans Z-Wave JS UI, sinon la description du modèle ; pièce : sa « location ».
+- **Vie du réseau** : `dead` → hors ligne, `alive`/`wake up`/`sleep` → en ligne ; un nœud inclus, exclu, une interview finie, une valeur nouvelle → l'état est relu 3 s après le dernier de ces événements (les ordres en cours reçoivent un refus). Au démarrage, les appareils de nœuds disparus sont retirés.
+- **Tests** : `src/model.rs` et `src/lib.rs` sur `integrations/zwave/fixtures/state.json` (contrôleur, relais Qubino, capteur d'ouverture sur pile), écrite d'après le protocole : à remplacer par une capture réelle.
+
 ## `rfxtrx` : capteurs 433 MHz (`crates/moli-rfxtrx`)
 
 - **Couvre** : les sondes de température, d'humidité et de pression sur 433 MHz (Oregon Scientific, La Crosse, TFA, Viking, Rubicson…) par un RFXCOM RFXtrx433 en USB. Lecture seule.
@@ -572,6 +593,7 @@ ni pièce native). Il ne déplace jamais rien. Sans argument : plan à blanc ; `
 | `phones` | `moli-phones` | rapports HTTP de l'appli (jeton) | `notify` (notification) | iPhone (appli Moli) |
 | `telegram` | `moli-telegram` | HTTPS, API des bots | `notify` (message) | oui (API des bots) |
 | `hitachi` | `moli-hitachi` | REST + WebSocket STOMP du compte airCloud Go (cloud) | oui : marche, mode, consigne, vitesse | pas encore (cibles : RAK-DJ25RHAE, RAK-DJ35RHAE) |
+| `zwave` | `moli-zwave` | websocket local du serveur Z-Wave JS | oui, selon les valeurs | pas encore (cible : Qubino Flush 1D Relay) |
 | `rfxtrx` | `moli-rfxtrx` | série USB 38 400 bauds (SDK RFXtrx) | non | RFXtrx433E, sondes Oregon THGN132 |
 | `profile` | `moli-profile` | HTTP/HTTPS GET, Meross signé | oui si le profil déclare `[[write]]` (Daikin) | Daikin BRP069 (lecture), Meross EM06, Open-Meteo, Tempo, iopool EcO (voir [profils.md](profils.md#les-profils-du-catalogue)) |
 | `helpers` | `moli-helpers` | aucun (valeurs gardées par Moli) | oui | sans objet |

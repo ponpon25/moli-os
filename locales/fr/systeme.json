@@ -444,5 +444,7 @@
   "systeme.olvid.valider": "Valider",
   "systeme.olvid.demarrage": "Démarrage…",
   "systeme.pilotes.rfxtrx.nom": "433 MHz",
-  "systeme.pilotes.rfxtrx.desc": "Les sondes de température sans fil en 433 MHz, par la clé RFXtrx."
+  "systeme.pilotes.rfxtrx.desc": "Les sondes de température sans fil en 433 MHz, par la clé RFXtrx.",
+  "systeme.pilotes.zwave.nom": "Z-Wave",
+  "systeme.pilotes.zwave.desc": "Les modules Z-Wave (relais, capteurs), via Z-Wave JS UI."
 }

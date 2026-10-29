@@ -585,5 +585,7 @@
   "pilotes.rfxtrx.ecoute_jusqua": "Listening until",
   "pilotes.rfxtrx.entendu": "Heard",
   "pilotes.rfxtrx.firmware": "Firmware",
-  "pilotes.rfxtrx.protocoles": "Protocols listened to"
+  "pilotes.rfxtrx.protocoles": "Protocols listened to",
+  "pilotes.zwave.marche": "On",
+  "pilotes.zwave.niveau": "Level"
 }

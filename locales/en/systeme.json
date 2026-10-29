@@ -444,5 +444,7 @@
   "systeme.olvid.valider": "Confirm",
   "systeme.olvid.demarrage": "Starting…",
   "systeme.pilotes.rfxtrx.nom": "433 MHz",
-  "systeme.pilotes.rfxtrx.desc": "Wireless 433 MHz temperature sensors, through the RFXtrx transceiver."
+  "systeme.pilotes.rfxtrx.desc": "Wireless 433 MHz temperature sensors, through the RFXtrx transceiver.",
+  "systeme.pilotes.zwave.nom": "Z-Wave",
+  "systeme.pilotes.zwave.desc": "Z-Wave modules (relays, sensors), through Z-Wave JS UI."
 }

@@ -576,6 +576,12 @@ pub(crate) struct HistoryQuery {
     hours: f64,
     #[serde(default = "default_points")]
     points: usize,
+    /// With `step`: where the buckets start (ms; a midnight for days).
+    #[serde(default)]
+    from: Option<u64>,
+    /// Bucket width in ms (a day: 86 400 000): a chart by day or by hour.
+    #[serde(default)]
+    step: Option<u64>,
 }
 
 fn default_hours() -> f64 {
@@ -612,25 +618,35 @@ pub(crate) async fn history(
     };
     let to = moli_core::now_ms();
     let span = window_ms(q.hours);
-    match history
-        .series(
-            &q.point,
-            to.saturating_sub(span),
-            to,
-            q.points.clamp(10, 2_000),
-        )
-        .await
-    {
+    let from = q
+        .from
+        .filter(|f| *f < to && to - f <= window_ms(f64::INFINITY))
+        .unwrap_or_else(|| to.saturating_sub(span));
+    let read = match q.step.filter(|s| *s >= 60_000) {
+        Some(step) => {
+            history
+                .series_by(&q.point, from, to, q.points.clamp(10, 5_000), step)
+                .await
+        }
+        None => {
+            history
+                .series(&q.point, from, to, q.points.clamp(10, 2_000))
+                .await
+        }
+    };
+    match read {
         Ok(series) => Json(series).into_response(),
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
 
-/// Hours → ms, clamped to [1 min, 1 year].
+/// Hours → ms, clamped to [1 min, 50 years] (a history kept forever).
+/// Infinite: the longest window.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(crate) fn window_ms(hours: f64) -> u64 {
-    let hours = if hours.is_finite() { hours } else { 24.0 };
-    (hours.clamp(1.0 / 60.0, 24.0 * 366.0) * 3_600_000.0) as u64
+    const LONGEST: f64 = 24.0 * 366.0 * 50.0;
+    let hours = if hours.is_nan() { 24.0 } else { hours };
+    (hours.clamp(1.0 / 60.0, LONGEST) * 3_600_000.0) as u64
 }
 
 // ---- family dashboard layout --------------------------------------------------

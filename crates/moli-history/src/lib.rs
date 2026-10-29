@@ -27,6 +27,9 @@ const BATCH_MAX: usize = 1_000;
 const WRITER_QUEUE: usize = 64;
 const RETENTION_EVERY: Duration = Duration::from_secs(6 * 3600);
 
+/// `retention_days` that keeps everything (`history_days = "forever"`).
+pub const FOREVER: u32 = u32::MAX;
+
 type Row = (PointId, Value, u64);
 
 /// A batch for the writer, and whether it re-states known values.
@@ -83,6 +86,19 @@ impl History {
     ) -> Result<Series, HistoryError> {
         let (store, point) = (Arc::clone(&self.store), point.to_owned());
         blocking(move || store.series(&point, from_ms, to_ms, max_points)).await
+    }
+
+    /// A chart by day (or any `step`, in ms) from `from_ms`.
+    pub async fn series_by(
+        &self,
+        point: &str,
+        from_ms: u64,
+        to_ms: u64,
+        max_points: usize,
+        step_ms: u64,
+    ) -> Result<Series, HistoryError> {
+        let (store, point) = (Arc::clone(&self.store), point.to_owned());
+        blocking(move || store.series_by(&point, from_ms, to_ms, max_points, Some(step_ms))).await
     }
 
     pub async fn sql(&self, sql: &str, max_rows: usize) -> Result<SqlResult, HistoryError> {
@@ -190,6 +206,9 @@ async fn write_loop(store: Arc<Store>, mut queue: mpsc::Receiver<Batch>) {
 }
 
 async fn prune_loop(store: Arc<Store>, retention_days: u32, cancel: CancellationToken) {
+    if retention_days == FOREVER {
+        return;
+    }
     let mut tick = tokio::time::interval(RETENTION_EVERY);
     loop {
         tokio::select! {

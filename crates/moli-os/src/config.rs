@@ -132,8 +132,8 @@ pub struct Server {
     /// relayed request is a stranger's.
     #[serde(default)]
     pub trusted_proxies: Vec<std::net::IpAddr>,
-    /// Days of history kept (0 = no history).
-    #[serde(default = "default_history_days")]
+    /// Days of history kept (0 = no history), or `"forever"`.
+    #[serde(default = "default_history_days", deserialize_with = "history_days")]
     pub history_days: u32,
     /// The Cloudflare Access application in front of the tunnel (absent:
     /// nobody coming through Cloudflare is recognized).
@@ -160,6 +160,23 @@ fn default_language() -> String {
 
 fn default_history_days() -> u32 {
     30
+}
+
+/// A number of days, or `"forever"` (never pruned).
+fn history_days<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Days {
+        Count(u32),
+        Word(String),
+    }
+    match Days::deserialize(d)? {
+        Days::Count(n) => Ok(n),
+        Days::Word(w) if w == "forever" => Ok(moli_history::FOREVER),
+        Days::Word(w) => Err(serde::de::Error::custom(format!(
+            "history_days: a number of days or \"forever\", not {w:?}"
+        ))),
+    }
 }
 
 impl Default for Server {
@@ -365,6 +382,21 @@ mod tests {
         let again = Config::load(&path).unwrap();
         assert_eq!(again.server.data_dir, config.server.data_dir);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn history_can_be_kept_forever() {
+        let days = |v: &str| {
+            toml::from_str::<Config>(&format!("[server]\nhistory_days = {v}"))
+                .map(|c| c.server.history_days)
+        };
+        assert_eq!(days("90").unwrap(), 90);
+        assert_eq!(days("\"forever\"").unwrap(), moli_history::FOREVER);
+        assert!(days("\"always\"").is_err());
+        assert_eq!(
+            toml::from_str::<Config>("").unwrap().server.history_days,
+            30
+        );
     }
 
     #[test]

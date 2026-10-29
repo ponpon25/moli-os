@@ -3,10 +3,12 @@
 ## Historique (`crates/moli-history`)
 
 - SQLite `data/history.db`, enregistrement **au changement** (le hub n'émet que les
-  changements), 30 jours (`retention_days`), la dernière valeur de chaque point jamais
-  purgée (une valeur stable a toujours une valeur « avant la fenêtre »).
+  changements), 30 jours par défaut (`[server] history_days`, ou `"forever"` : rien n'est
+  jamais purgé), la dernière valeur de chaque point jamais purgée (une valeur stable a
+  toujours une valeur « avant la fenêtre »).
 - Lecture : `series(point, from, to, max_points)` → valeurs brutes, ou seaux (moyenne, min,
-  max, nombre) quand il y en a trop.
+  max, nombre) quand il y en a trop ; `series_by(…, step)` : toujours en seaux de `step` ms
+  depuis `from` (un graphe par jour depuis minuit : la vue longue durée des sondes).
 - Surfaces : `/api/history` (courbes du dashboard), outil MCP `history` (statistiques +
   série compacte) et **`history_sql`** pour les agents : une seule requête `SELECT`, `ATTACH`,
   `PRAGMA`, `BEGIN` interdits, 2 s et 200 lignes maximum, 64 Ko par valeur, sur la vue

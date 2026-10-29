@@ -246,6 +246,20 @@ impl Store {
         to: u64,
         max_points: usize,
     ) -> Result<Series, HistoryError> {
+        self.series_by(point, from, to, max_points, None)
+    }
+
+    /// Like `series`, but with `step` (ms) a numeric point is always
+    /// bucketed by that width from `from` (a day from midnight, for a chart
+    /// by day); its buckets are then at most `max_points`.
+    pub fn series_by(
+        &self,
+        point: &str,
+        from: u64,
+        to: u64,
+        max_points: usize,
+        step: Option<u64>,
+    ) -> Result<Series, HistoryError> {
         let conn = lock(&self.reader);
         let mut series = Series {
             point: point.to_owned(),
@@ -295,7 +309,9 @@ impl Store {
         series.first = edge("ASC")?;
         series.last = edge("DESC")?;
 
-        if total <= max {
+        let step =
+            step.filter(|&w| w > 0 && (to - from) / w < u64::try_from(max).unwrap_or(u64::MAX));
+        if step.is_none() && total <= max {
             let mut stmt = conn.prepare(
                 "SELECT ts, kind, num, txt FROM samples WHERE point_id = ?1 AND ts BETWEEN ?2 AND ?3 ORDER BY ts",
             )?;
@@ -305,7 +321,7 @@ impl Store {
         } else if numeric > 0 {
             // Numeric points are bucketed even if some readings were null
             // (device offline a moment): nulls simply do not count.
-            let width = ((to_ts - from_ts) / max).max(1);
+            let width = step.map_or(((to_ts - from_ts) / max).max(1), ts);
             let mut stmt = conn.prepare(
                 "SELECT MIN(ts), AVG(num), MIN(num), MAX(num), COUNT(*) FROM samples
                  WHERE point_id = ?1 AND ts BETWEEN ?2 AND ?3 AND num IS NOT NULL
@@ -498,6 +514,38 @@ mod tests {
             store.series("remote/button1", 0, 10_000, 10).unwrap().total,
             2
         );
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_step_buckets_by_its_width_from_the_start() {
+        let (store, dir) = store("step");
+        // Two samples a day for three days, from day 0 at midnight.
+        let day = 86_400_000;
+        let rows: Vec<_> = (0..6u32)
+            .map(|i| {
+                (
+                    p("t:a/temp"),
+                    Value::Float(f64::from(i)),
+                    1_000 + u64::from(i) * day / 2,
+                )
+            })
+            .collect();
+        store.insert(&rows, false).unwrap();
+        let s = store
+            .series_by("t:a/temp", 0, 3 * day, 400, Some(day))
+            .unwrap();
+        assert!(s.raw.is_empty(), "bucketed even when few");
+        let mins: Vec<f64> = s.buckets.iter().map(|b| b.min).collect();
+        let maxs: Vec<f64> = s.buckets.iter().map(|b| b.max).collect();
+        assert_eq!(mins, [0.0, 2.0, 4.0]);
+        assert_eq!(maxs, [1.0, 3.0, 5.0]);
+        // Too many buckets for the bound: the plain series.
+        let s = store
+            .series_by("t:a/temp", 0, 3 * day, 400, Some(1))
+            .unwrap();
+        assert_eq!(s.raw.len(), 6);
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
     }

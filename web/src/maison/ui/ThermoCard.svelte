@@ -3,6 +3,8 @@
   import { device, value, since, reachable, nameOf, lowBattery, relative, clock, home, num } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
+  import ThermoLong from './ThermoLong.svelte';
+  import { hueOf } from '../lib/thermo.js';
 
   /** A thermometer (and hygrometer): the temperature big, tinted from cold
    *  blue to hot coral, its last 24 hours as a curve, where it heads, the
@@ -90,27 +92,6 @@
     return { dir: delta > 0 ? 'hausse' : 'baisse', delta };
   });
 
-  // Cold blue → teal → comfort green → amber → coral, as an oklch hue.
-  const STOPS = [
-    [-5, 262],
-    [8, 238],
-    [15, 205],
-    [19, 170],
-    [22, 135],
-    [25, 75],
-    [28, 45],
-    [33, 25],
-  ];
-  function hueOf(deg) {
-    if (typeof deg !== 'number') return 240;
-    if (deg <= STOPS[0][0]) return STOPS[0][1];
-    for (let i = 1; i < STOPS.length; i++) {
-      const [t1, h1] = STOPS[i];
-      const [t0, h0] = STOPS[i - 1];
-      if (deg <= t1) return h0 + ((deg - t0) / (t1 - t0)) * (h1 - h0);
-    }
-    return STOPS.at(-1)[1];
-  }
   const hue = $derived(Math.round(hueOf(temp)));
 
   // 23,4 → « 23 » and « ,4 »: the decimal smaller.
@@ -206,10 +187,22 @@
   // An SVG id: no colon nor slash.
   const gradient = $derived(`thermo-${id.replace(/[^a-z0-9_-]/gi, '_')}`);
 
+  let long = $state(false);
+
   const last = $derived(Math.max(heard, ...(d?.points ?? []).map((p) => since(id, p.key) ?? 0)));
 </script>
 
-<section class="card thermo" class:off={!online} style="--h: {hue}">
+<!-- The whole card opens its long view (a tap, or Enter). -->
+<div
+  class="card thermo"
+  class:off={!online}
+  style="--h: {hue}"
+  role="button"
+  tabindex="0"
+  aria-label={t('commun.thermo.long.ouvrir', { name: nameOf(id, name) })}
+  onclick={() => (long = true)}
+  onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), (long = true))}
+>
   <div class="glow" aria-hidden="true"></div>
   <header>
     <h2><Icon name="thermometer" size={18} />{nameOf(id, name)}</h2>
@@ -289,7 +282,11 @@
       <span class="span">{full ? t('commun.thermo.vingt_quatre') : t('commun.thermo.depuis', { time: clock(start) })}</span>
     </footer>
   {/if}
-</section>
+</div>
+
+{#if long}
+  <ThermoLong {id} {name} onclose={() => (long = false)} />
+{/if}
 
 <style>
   .thermo {
@@ -308,6 +305,15 @@
   :global(.maison[data-theme='night']) .thermo {
     --tone: oklch(0.74 0.14 var(--h));
     --tone-ink: oklch(0.86 0.09 var(--h));
+  }
+
+  .thermo {
+    cursor: pointer;
+  }
+
+  .thermo:focus-visible {
+    outline: 2px solid var(--tone);
+    outline-offset: 3px;
   }
 
   .off {

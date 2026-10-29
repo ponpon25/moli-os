@@ -422,5 +422,6 @@
   "automatismes.liste.etapes_other": "{count} étapes",
   "automatismes.liste.alertes": "Alertes",
   "automatismes.liste.scenarios": "Scénarios",
-  "automatismes.liste.ajouter_alerte": "Ajouter une alerte pour {nom}"
+  "automatismes.liste.ajouter_alerte": "Ajouter une alerte pour {nom}",
+  "automatismes.liste.dernier": "dernier {quand}"
 }

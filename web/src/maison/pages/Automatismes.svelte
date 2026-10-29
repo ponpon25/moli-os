@@ -321,7 +321,14 @@
     {/if}
 
     {#if recent.length}
-      <h2 class="section">{t('automatismes.liste.recent')}</h2>
+      <!-- Folded: the list above is what matters; what ran is a click away. -->
+      <details class="recent">
+        <summary>
+          <Icon name="history" size={18} />
+          <b>{t('automatismes.liste.recent')}</b>
+          <span class="muted">{t('automatismes.liste.dernier', { quand: relative(recent[0].started, home.now) })}</span>
+          <span class="chev"><Icon name="chevron-down" size={18} /></span>
+        </summary>
       <ul class="feed">
         {#each recent as r (r.id + (r.dry ? 'd' : ''))}
           <li>
@@ -332,6 +339,7 @@
           </li>
         {/each}
       </ul>
+      </details>
     {/if}
 
     {#if !abilities.telegram}
@@ -880,6 +888,43 @@
     font-size: 13.5px;
     color: var(--cool);
     font-weight: 600;
+    margin-bottom: 14px;
+  }
+
+  .recent {
+    border-radius: var(--r-lg);
+    background: color-mix(in srgb, var(--surface) 55%, transparent);
+    padding: 14px 16px;
+  }
+
+  .recent summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    list-style: none;
+    color: var(--ink-2);
+  }
+
+  .recent summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .recent summary span.muted {
+    font-size: 13px;
+  }
+
+  .chev {
+    margin-left: auto;
+    display: grid;
+    transition: transform 0.2s var(--ease);
+  }
+
+  .recent[open] .chev {
+    transform: rotate(180deg);
+  }
+
+  .recent[open] summary {
     margin-bottom: 14px;
   }
 

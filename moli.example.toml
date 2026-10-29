@@ -74,6 +74,8 @@ port = 1883
 base_topic = "zigbee2mqtt"
 # username = "moli-os"
 # password_env = "MOLI_Z2M_PASSWORD"
+# Zigbee2MQTT's web interface, linked from Équipements and Système.
+# frontend = "http://192.168.0.x:8080"
 
 # Philips Hue bridge (CLIP v2). Needs MOLI_MASTER_KEY in the environment to
 # keep the pairing key encrypted; press the link button when asked.

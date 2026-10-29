@@ -367,6 +367,7 @@
           <p>{kindWord(d.kind, 'desc') ?? t('systeme.pilotes.defaut')}</p>
           <p class="muted">{d.status?.reason ? t('systeme.page.publie_raison', { points: d.points, devices: d.devices, status: statusText(d.status), reason: d.status.reason }) : t('systeme.page.publie', { points: d.points, devices: d.devices, status: statusText(d.status) })}</p>
           <p class="how">{t('systeme.page.entre_sort')}</p>
+          {#if d.web}<p><a class="web" href={d.web} target="_blank" rel="noopener noreferrer">{t('systeme.page.interface')} ↗</a></p>{/if}
         {:else if chosen.kind === 'core'}
           <h3>{t('systeme.page.coeur')}</h3>
           <p>{t('systeme.page.coeur_explique')}</p>
@@ -964,6 +965,11 @@
   .explain .how {
     color: var(--ink-2);
     font-size: 14px;
+  }
+
+  .explain .web {
+    font-weight: 650;
+    color: var(--warm-ink);
   }
 
   .x {

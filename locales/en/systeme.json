@@ -270,6 +270,7 @@
   "systeme.page.publie": "It publishes {points} values for {devices} devices · {status}.",
   "systeme.page.publie_raison": "It publishes {points} values for {devices} devices · {status}: {reason}.",
   "systeme.page.entre_sort": "In: what the devices say. Out: their values to the core, and the core’s commands to the devices.",
+  "systeme.page.interface": "Open its interface (pairing, device settings)",
   "systeme.page.coeur_explique": "Everything goes through it: it keeps the state of every value, checks every command (is it valid? is it a protected bedroom? is it during quiet hours?), sends it to the right driver and writes it in the log.",
   "systeme.page.coeur_programme": "A single program of {mb} MB, running for {min} min.",
   "systeme.page.active": "active",

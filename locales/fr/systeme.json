@@ -270,6 +270,7 @@
   "systeme.page.publie": "Il publie {points} valeurs pour {devices} appareils · {status}.",
   "systeme.page.publie_raison": "Il publie {points} valeurs pour {devices} appareils · {status} : {reason}.",
   "systeme.page.entre_sort": "Entre : ce que disent les appareils. Sort : leurs valeurs vers le cœur, et les ordres du cœur vers les appareils.",
+  "systeme.page.interface": "Ouvrir son interface (appairage, réglages des appareils)",
   "systeme.page.coeur_explique": "Tout passe par lui : il tient l’état de chaque valeur, vérifie chaque ordre (est-ce valide ? est-ce une chambre protégée ? est-ce l’heure calme ?), l’envoie au bon pilote et l’inscrit au journal.",
   "systeme.page.coeur_programme": "Un seul programme de {mb} Mo, démarré depuis {min} min.",
   "systeme.page.active": "active",

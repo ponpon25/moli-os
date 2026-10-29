@@ -7,6 +7,7 @@
 mod catalog;
 
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -35,6 +36,10 @@ pub struct Config {
     pub password_env: Option<String>,
     #[serde(default)]
     pub client_id: Option<String>,
+    /// Zigbee2MQTT's web interface (`http://host:8080`), linked from Moli
+    /// for pairing and device settings.
+    #[serde(default)]
+    pub frontend: Option<String>,
 }
 
 fn default_host() -> String {
@@ -62,6 +67,11 @@ impl Z2m {
 impl Driver for Z2m {
     fn kind(&self) -> &'static str {
         "z2m"
+    }
+
+    fn web(&self) -> Option<Arc<str>> {
+        let url = self.config.frontend.as_deref()?.trim_end_matches('/');
+        (url.starts_with("http://") || url.starts_with("https://")).then(|| Arc::from(url))
     }
 
     fn run<'a>(&'a self, ctx: &'a mut DriverCtx) -> BoxFuture<'a, anyhow::Result<()>> {
@@ -276,6 +286,17 @@ mod tests {
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 1883);
         assert_eq!(config.base_topic, "zigbee2mqtt");
+        assert!(Z2m::new(config).web().is_none());
+    }
+
+    #[test]
+    fn frontend_link() {
+        let web = |url: &str| Z2m::new(toml_like(&format!(r#"{{"frontend":"{url}"}}"#))).web();
+        assert_eq!(
+            web("http://192.168.1.x:8080/").as_deref(),
+            Some("http://192.168.1.x:8080")
+        );
+        assert!(web("javascript:alert(1)").is_none());
     }
 
     fn toml_like(json: &str) -> Config {

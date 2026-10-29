@@ -25,6 +25,11 @@ pub trait Driver: Send + Sync + 'static {
     fn integration(&self) -> Arc<str> {
         Arc::from(self.kind())
     }
+    /// Address of the bridge's own web interface (pairing, device settings
+    /// Moli does not do), when it has one.
+    fn web(&self) -> Option<Arc<str>> {
+        None
+    }
     fn run<'a>(&'a self, ctx: &'a mut DriverCtx) -> BoxFuture<'a, anyhow::Result<()>>;
 }
 

@@ -43,6 +43,8 @@
   const cards = $derived(catalogue().filter((c) => !c.device && c.id !== 'alarm' && available(c.id)));
 
   const source = (d) => d.id.split(':')[0];
+  /** A bridge's own interface (Zigbee2MQTT…), for what Moli does not do: pairing, device settings. */
+  const webOf = (src) => hub.drivers?.find((x) => x.instance === src)?.web;
   const norm = (s) => String(s ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
   const devices = $derived(
@@ -149,7 +151,10 @@
 
   {#each groups as [src, list] (src)}
     <section class="group">
-      <h2>{src} <small>{list.length}</small></h2>
+      <h2>
+        {src} <small>{list.length}</small>
+        {#if webOf(src)}<a class="web" href={webOf(src)} target="_blank" rel="noopener noreferrer" title={t('maison.equipements.interface_de', { name: src })}>{t('maison.equipements.interface')} ↗</a>{/if}
+      </h2>
       <ul>
         {#each list as x (x.d.id)}
           <li class:off={!reachable(x.d.id)}>
@@ -286,6 +291,20 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-2);
+  }
+
+  .group h2 .web {
+    float: right;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--warm-ink);
+    text-decoration: none;
+  }
+
+  .group h2 .web:hover {
+    text-decoration: underline;
   }
 
   small {

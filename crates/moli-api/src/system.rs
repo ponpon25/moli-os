@@ -114,6 +114,7 @@ fn drivers(snapshot: &Snapshot) -> (Vec<Json>, usize) {
                 "instance": d.instance,
                 "kind": d.kind,
                 "integration": d.integration,
+                "web": d.web,
                 "status": d.status,
                 "devices": devices,
                 "points": points,

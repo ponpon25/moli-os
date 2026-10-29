@@ -206,6 +206,9 @@ pub struct DriverView {
     pub kind: &'static str,
     /// The catalogue package it runs (see [`crate::Driver::integration`]).
     pub integration: Arc<str>,
+    /// The bridge's own web interface (see [`crate::Driver::web`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web: Option<Arc<str>>,
     pub status: DriverStatus,
 }
 
@@ -286,6 +289,7 @@ struct Model {
 struct DriverSlot {
     kind: &'static str,
     integration: Arc<str>,
+    web: Option<Arc<str>>,
     status: DriverStatus,
     commands: mpsc::Sender<CommandRequest>,
 }
@@ -409,6 +413,7 @@ impl Hub {
                     instance: instance.clone(),
                     kind: slot.kind,
                     integration: slot.integration.clone(),
+                    web: slot.web.clone(),
                     status: slot.status.clone(),
                 })
                 .collect(),
@@ -1278,6 +1283,7 @@ impl Hub {
         instance: &InstanceId,
         kind: &'static str,
         integration: Arc<str>,
+        web: Option<Arc<str>>,
     ) -> mpsc::Receiver<CommandRequest> {
         let (commands, rx) = mpsc::channel(COMMAND_QUEUE);
         self.write().drivers.insert(
@@ -1285,6 +1291,7 @@ impl Hub {
             DriverSlot {
                 kind,
                 integration,
+                web,
                 status: DriverStatus::Starting,
                 commands,
             },

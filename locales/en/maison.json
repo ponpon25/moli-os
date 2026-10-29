@@ -303,5 +303,7 @@
   "maison.equipements.dashboard": "Dashboard",
   "maison.equipements.cartes": "Dashboard cards",
   "maison.equipements.carte_sans_equipement": "Card without a device",
-  "maison.equipements.afficher_dashboard": "Show {name} on the dashboard"
+  "maison.equipements.afficher_dashboard": "Show {name} on the dashboard",
+  "maison.equipements.interface": "Pairing and settings",
+  "maison.equipements.interface_de": "Open the {name} interface"
 }

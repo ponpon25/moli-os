@@ -251,6 +251,9 @@ pub enum ColorPart {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Conv {
     Bool,
+    /// The on/off of a device that sleeps (a TV in deep standby): asleep, it
+    /// reads off rather than unresponsive, and switching it on wakes it.
+    Wake,
     /// Moli's `lo..hi` ⇄ HAP's 0–100 %.
     Percent {
         lo: f64,
@@ -460,11 +463,18 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
 
     // Lights and switches.
     let has_power = device.points.iter().any(|p| p.semantic == Semantic::Power);
+    // A TV (it takes remote keys): its power only, which wakes it from deep
+    // standby (Ambilight and the like stay in Moli).
+    let tv = device
+        .points
+        .iter()
+        .any(|p| &*p.key == "key" && writable(p));
     let switches: Vec<&PointSpec> = device
         .points
         .iter()
         .filter(|p| p.semantic == Semantic::OnOff && writable(p) && p.kind == Kind::Binary)
         .filter(|p| !climate_points.contains(&&*p.key))
+        .filter(|p| !tv || &*p.key == "power")
         .collect();
     let single = switches.len() == 1;
     for on in &switches {
@@ -497,7 +507,7 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
                 C_ON,
                 "bool",
                 READ_WRITE_NOTIFY,
-                Bind::Point(id(&on.key), Conv::Bool),
+                Bind::Point(id(&on.key), if tv { Conv::Wake } else { Conv::Bool }),
                 "On",
             ),
         ];
@@ -1417,7 +1427,7 @@ pub fn placeholder(c: &Characteristic) -> Json {
 /// Moli value → HAP JSON.
 pub fn to_hap(conv: Conv, value: &Value) -> Option<Json> {
     Some(match conv {
-        Conv::Bool => json!(as_bool(value)?),
+        Conv::Bool | Conv::Wake => json!(as_bool(value)?),
         Conv::Percent { lo, hi } => {
             let v = value.as_f64()?;
             let span = (hi - lo).max(f64::EPSILON);
@@ -1442,7 +1452,7 @@ fn as_bool(value: &Value) -> Option<bool> {
 /// HAP JSON → Moli value (before the point's own validation).
 pub fn from_hap(conv: Conv, json: &Json) -> Option<Value> {
     match conv {
-        Conv::Bool => {
+        Conv::Bool | Conv::Wake => {
             let b = match json {
                 Json::Bool(b) => *b,
                 Json::Number(n) => n.as_i64()? != 0,
@@ -1617,6 +1627,38 @@ mod tests {
         let kinds: Vec<_> = light.chars.iter().map(|ch| ch.kind).collect();
         assert_eq!(kinds, ["23", "25", "8", "CE", "13", "2F"]);
         assert_eq!(kinds_of(&lamp.device), [Kinds::Light]);
+    }
+
+    #[test]
+    fn a_tv_is_one_switch_that_wakes_it() {
+        let tv = view(
+            "tv",
+            vec![
+                point("power", Kind::Binary, true, Semantic::OnOff),
+                point("ambilight", Kind::Binary, true, Semantic::OnOff),
+                point("mute", Kind::Binary, true, Semantic::Other),
+                point(
+                    "key",
+                    Kind::Enum {
+                        values: vec!["Home".into()],
+                    },
+                    true,
+                    Semantic::Other,
+                ),
+            ],
+        );
+        let c = catalog(&[tv]);
+        assert_eq!(types(&c, 2), ["3E", "49"]);
+        let on = c.accessories[1].services[1]
+            .chars
+            .iter()
+            .find(|ch| ch.kind == C_ON)
+            .unwrap();
+        assert!(
+            matches!(&on.bind, Bind::Point(p, Conv::Wake) if p.to_string().ends_with("/power"))
+        );
+        assert_eq!(to_hap(Conv::Wake, &Value::Bool(true)), Some(json!(true)));
+        assert_eq!(from_hap(Conv::Wake, &json!(1)), Some(Value::Bool(true)));
     }
 
     #[test]

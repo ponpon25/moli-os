@@ -369,6 +369,10 @@ impl Shared {
             }
             Bind::Point(point, conv) => {
                 if self.offline(point) {
+                    // A TV in deep standby is off, not unresponsive.
+                    if *conv == accessories::Conv::Wake {
+                        return Ok(Json::Bool(false));
+                    }
                     return Err(ST_COMMUNICATION);
                 }
                 // A device that answers but has no value for this point (a

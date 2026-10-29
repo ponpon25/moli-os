@@ -69,6 +69,7 @@ La correspondance se fait par **sens** (`Semantic`), jamais par marque :
 | un point `on_off` inscriptible, avec luminosité / température de couleur / couleur (`#rrggbb`) | **Lumière** (On, Brightness, ColorTemperature, Hue, Saturation) |
 | un `on_off` inscriptible avec une puissance (`power`) | **Prise** |
 | un `on_off` inscriptible seul | **Interrupteur** |
+| une **télé** (un appareil qui prend des touches, point `key`) | **un seul interrupteur**, son `power` : en veille profonde (injoignable) il lit « éteint » au lieu de « Pas de réponse », et l'allumer la réveille (Ambilight et le reste restent dans Moli) |
 | température, humidité, luminosité (lecture seule) | capteurs de température, d'humidité, de lumière (valeurs bornées comme HAP les borne) |
 | `occupancy` (mouvement, présence) | capteur de mouvement |
 | `contact` (vrai = fermé) | capteur d'ouverture |

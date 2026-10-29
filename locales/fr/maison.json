@@ -305,5 +305,7 @@
   "maison.equipements.carte_sans_equipement": "Carte sans équipement",
   "maison.equipements.afficher_dashboard": "Afficher {name} sur le dashboard",
   "maison.equipements.interface": "Appairage et réglages",
-  "maison.equipements.interface_de": "Ouvrir l’interface de {name}"
+  "maison.equipements.interface_de": "Ouvrir l’interface de {name}",
+  "maison.equipements.pont_vide": "Aucun équipement pour l’instant",
+  "maison.equipements.pont_vide_aide": "L’appairage se fait dans son interface ; les équipements apparaissent ici ensuite."
 }

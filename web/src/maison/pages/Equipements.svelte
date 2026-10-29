@@ -74,6 +74,9 @@
     return [...by.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
   });
 
+  /** Bridges with an interface but no device yet: where pairing starts. */
+  const bridges = $derived((hub.drivers ?? []).filter((x) => x.web && !groups.some(([src]) => src === x.instance)));
+
   const unplaced = $derived(devices.filter((x) => !x.room).length);
 
   async function choose(id, value) {
@@ -207,8 +210,25 @@
       </ul>
     </section>
   {:else}
-    <p class="empty">{t('maison.equipements.rien')}</p>
+    {#if !bridges.length}<p class="empty">{t('maison.equipements.rien')}</p>{/if}
   {/each}
+
+  {#if filter === 'all' && !query}
+    {#each bridges as b (b.instance)}
+      <section class="group">
+        <h2>
+          {b.instance} <small>0</small>
+          <a class="web" href={b.web} target="_blank" rel="noopener noreferrer" title={t('maison.equipements.interface_de', { name: b.instance })}>{t('maison.equipements.interface')} ↗</a>
+        </h2>
+        <ul>
+          <li>
+            <span class="glyph"><Icon name="info" size={20} /></span>
+            <span class="who"><b>{t('maison.equipements.pont_vide')}</b><small>{t('maison.equipements.pont_vide_aide')}</small></span>
+          </li>
+        </ul>
+      </section>
+    {/each}
+  {/if}
 
   <nav class="more" aria-label={t('maison.equipements.autres_vues')}>
     <span>{t('maison.equipements.autres_vues')}</span>

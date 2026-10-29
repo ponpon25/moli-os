@@ -250,12 +250,15 @@ async fn run(this: &Rfxtrx, ctx: &mut DriverCtx) -> anyhow::Result<()> {
     send(&port, &frame::START_RECEIVER).await?;
 
     let offline_after = Duration::from_secs(this.config.offline_after.saturating_mul(60));
-    let mut seen: HashMap<DeviceId, Instant> = HashMap::new();
+    // When each sensor last spoke, and whether it was said online since.
+    let mut seen: HashMap<DeviceId, (Instant, bool)> = HashMap::new();
     let mut known: HashSet<(u8, u8, u16)> = HashSet::new();
     for (&code, s) in &this.declared {
         let id = ctx.device_id(&s.id);
         ctx.upsert_device(device(ctx, &id, code, s.name.as_deref()));
-        ctx.set_availability(&id, false);
+        // Unknown until it speaks (some speak every few minutes): silent
+        // only after a whole `offline_after`.
+        seen.insert(id, (Instant::now(), false));
         known.insert(code);
     }
     // Each kind of module heard but not read, said once.
@@ -296,7 +299,7 @@ async fn run(this: &Rfxtrx, ctx: &mut DriverCtx) -> anyhow::Result<()> {
             }
             _ = tick.tick() => {
                 let now = Instant::now();
-                seen.retain(|id, at| {
+                seen.retain(|id, (at, _)| {
                     let fresh = now.duration_since(*at) < offline_after;
                     if !fresh {
                         ctx.set_availability(id, false);
@@ -314,7 +317,7 @@ fn heard(
     ctx: &DriverCtx,
     r: &Reading,
     known: &mut HashSet<(u8, u8, u16)>,
-    seen: &mut HashMap<DeviceId, Instant>,
+    seen: &mut HashMap<DeviceId, (Instant, bool)>,
 ) {
     let code = (r.packet, r.subtype, r.id);
     let id = match this.declared.get(&code) {
@@ -342,16 +345,17 @@ fn heard(
         .flatten()
         .collect();
         tracing::info!(
-            "rfxtrx: new sensor {} ({brand} {model}), {}",
+            "rfxtrx: new sensor {} ({}), {}",
             r.code(),
+            format!("{brand} {model}").trim(),
             measured.join(", ")
         );
         ctx.upsert_device(device(ctx, &id, code, None));
     }
-    if !seen.contains_key(&id) {
+    if !matches!(seen.get(&id), Some((_, true))) {
         ctx.set_availability(&id, true);
     }
-    seen.insert(id.clone(), Instant::now());
+    seen.insert(id.clone(), (Instant::now(), true));
     if let Some(t) = r.temperature {
         ctx.set_state(&id, "temperature", Value::Float(t));
     }
@@ -377,14 +381,14 @@ fn device(ctx: &DriverCtx, id: &DeviceId, code: (u8, u8, u16), name: Option<&str
                 || {
                     moli_i18n::tr!(
                         "pilotes.rfxtrx.sonde",
-                        brand = brand,
+                        brand = if brand.is_empty() { model } else { brand },
                         id = format!("{raw:04x}")
                     )
                 },
                 str::to_owned,
             )
             .into(),
-        manufacturer: Some(brand.into()),
+        manufacturer: (!brand.is_empty()).then(|| brand.into()),
         model: Some(model.into()),
         // The code: what to write in `code` or `ignore`.
         description: Some(code.into()),

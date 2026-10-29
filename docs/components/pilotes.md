@@ -522,7 +522,7 @@ kind = "rfxtrx"
 ```
 
 - **Identité** : le code sur l'air `<type>-<sous-type>-<id>` (dans la description de l'appareil), ou l'`id` d'une sonde déclarée. Après un changement de piles, seul `code` change : l'appareil et son historique restent.
-- **Points** : `temperature`, `humidity`, `pressure` selon le type, `battery_low` (niveau 0), `rssi` (0 à 15). Hors ligne après `offline_after` minutes sans trame. Clé absente : `waiting` avec la raison, nouvel essai toutes les 30 s ; clé débranchée : erreur, le superviseur relance.
+- **Points** : `temperature`, `humidity`, `pressure` selon le type, `battery_low` (niveau 0), `rssi` (0 à 15). Hors ligne après `offline_after` minutes sans trame ; au démarrage, une sonde déclarée reste « inconnue » (pas hors ligne) jusqu'à sa première trame. Clé absente : `waiting` avec la raison, nouvel essai toutes les 30 s ; clé débranchée : erreur, le superviseur relance.
 - **Tests** : `src/frame.rs` sur une capture réelle `integrations/rfxtrx/fixtures/frames.txt` (état d'un RFXtrx433E, deux sondes Oregon), découpage du flux, températures négatives ; `src/lib.rs` : options.
 
 ## `profile` : profils déclaratifs (`crates/moli-profile`)

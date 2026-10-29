@@ -151,6 +151,13 @@ export const driverName = (d) => (d.kind === 'profile' ? d.instance.charAt(0).to
 /** A smoke detector, whatever else it reports. */
 export const isSmoke = (d) => d?.points.some((p) => p.key === 'smoke') ?? false;
 
+/** A thermometer or hygrometer: it measures the air and takes no order. */
+export const isThermo = (d) =>
+  !!d &&
+  !isSmoke(d) &&
+  d.points.some((p) => ['temperature', 'humidity'].includes(p.key) && !p.access?.write) &&
+  !d.points.some((p) => p.access?.write);
+
 export const motion = (id) => value(id, 'occupancy') === true || value(id, 'pir') === 'pir';
 
 /** A sensor's battery (not a phone's: it charges). */

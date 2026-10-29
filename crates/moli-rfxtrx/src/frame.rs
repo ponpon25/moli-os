@@ -188,7 +188,8 @@ fn status(frame: &[u8]) -> Option<Status> {
     })
 }
 
-/// Brand and model a packet type and subtype stand for.
+/// Brand and model a packet type and subtype stand for. The SDK names some
+/// protocols without a brand (TS15C, WT0122): their brand is empty.
 // One line per (type, subtype), as the SDK lists them: a model sold under
 // two packet types appears twice.
 #[allow(clippy::match_same_arms)]
@@ -204,12 +205,12 @@ pub fn model(packet: u8, subtype: u8) -> (&'static str, &'static str) {
         (TEMP, 0x03) => (OREGON, "THWR800"),
         (TEMP, 0x04) => (OREGON, "RTHN318"),
         (TEMP, 0x05) => (LA_CROSSE, "TX2, TX3, TX4, TX17"),
-        (TEMP, 0x06) => ("TFA", "TS15C"),
+        (TEMP, 0x06) => ("", "TS15C"),
         (TEMP, 0x07) => ("Viking", "02811, 02813"),
         (TEMP, 0x08) => (LA_CROSSE, "WS2300"),
         (TEMP, 0x09) => ("Rubicson", "Rubicson"),
         (TEMP, 0x0A) => ("TFA", "30.3133"),
-        (TEMP, 0x0B) => ("WT", "WT0122"),
+        (TEMP, 0x0B) => ("", "WT0122"),
         (HUM, 0x01) => (LA_CROSSE, "TX3"),
         (HUM, 0x02) => (LA_CROSSE, "WS2300"),
         (HUM, 0x03) => ("Inovalley", "S80"),
@@ -225,7 +226,7 @@ pub fn model(packet: u8, subtype: u8) -> (&'static str, &'static str) {
         (TEMP_HUM, 0x0A) => ("Rubicson", "Rubicson"),
         (TEMP_HUM_BARO, 0x01) => (OREGON, "BTHR918, BTHGN129"),
         (TEMP_HUM_BARO, 0x02) => (OREGON, "BTHR918N, BTHR968"),
-        _ => ("RFXCOM", "433 MHz"),
+        _ => ("", "433 MHz"),
     }
 }
 
@@ -303,6 +304,7 @@ mod tests {
         assert_eq!(r.humidity, Some(50));
         assert_eq!((r.battery, r.rssi), (9, 5));
         assert_eq!(model(r.packet, r.subtype).0, "Oregon Scientific");
+        assert_eq!(model(TEMP, 0x06), ("", "TS15C"), "no brand guessed");
         let Some(Frame::Reading(r)) = decode(&frames[3]) else {
             panic!("a reading");
         };

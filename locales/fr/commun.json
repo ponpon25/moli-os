@@ -259,5 +259,21 @@
   "commun.fumee.tester": "Tester",
   "commun.fumee.tester_confirme": "La sirène va sonner fort quelques secondes. Lancer le test ?",
   "commun.fumee.couper": "Couper la sirène",
-  "commun.fumee.alertes": "Alertes"
+  "commun.fumee.alertes": "Alertes",
+  "commun.thermo.hausse": "En hausse",
+  "commun.thermo.baisse": "En baisse",
+  "commun.thermo.stable": "Stable",
+  "commun.thermo.en_une_heure": "en 1 h",
+  "commun.thermo.tres_sec": "Air très sec",
+  "commun.thermo.sec": "Air sec",
+  "commun.thermo.confort": "Confortable",
+  "commun.thermo.humide": "Humide",
+  "commun.thermo.tres_humide": "Très humide",
+  "commun.thermo.pile": "Pile à changer",
+  "commun.thermo.hors_ligne": "Muet {when}",
+  "commun.thermo.signal": "Signal : {n} sur 4",
+  "commun.thermo.vingt_quatre": "dernières 24 h",
+  "commun.thermo.attente": "En attente d'une première mesure",
+  "commun.thermo.courbe": "La température des dernières 24 heures",
+  "commun.thermo.depuis": "depuis {time}"
 }

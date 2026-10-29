@@ -259,5 +259,21 @@
   "commun.fumee.tester": "Test",
   "commun.fumee.tester_confirme": "The siren will ring loudly for a few seconds. Start the test?",
   "commun.fumee.couper": "Silence the siren",
-  "commun.fumee.alertes": "Alerts"
+  "commun.fumee.alertes": "Alerts",
+  "commun.thermo.hausse": "Rising",
+  "commun.thermo.baisse": "Falling",
+  "commun.thermo.stable": "Steady",
+  "commun.thermo.en_une_heure": "in 1 h",
+  "commun.thermo.tres_sec": "Very dry air",
+  "commun.thermo.sec": "Dry air",
+  "commun.thermo.confort": "Comfortable",
+  "commun.thermo.humide": "Humid",
+  "commun.thermo.tres_humide": "Very humid",
+  "commun.thermo.pile": "Replace battery",
+  "commun.thermo.hors_ligne": "Silent {when}",
+  "commun.thermo.signal": "Signal: {n} of 4",
+  "commun.thermo.vingt_quatre": "last 24 h",
+  "commun.thermo.attente": "Waiting for a first reading",
+  "commun.thermo.courbe": "The temperature over the last 24 hours",
+  "commun.thermo.depuis": "since {time}"
 }

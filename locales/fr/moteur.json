@@ -186,5 +186,13 @@
 
   "moteur.refus.nom_note": "Seule une personne (code de la maison) peut renommer un automatisme validé ou changer sa note.",
   "moteur.canal.messagerie": "la messagerie",
-  "moteur.lieu.messagerie": "la messagerie"
+  "moteur.lieu.messagerie": "la messagerie",
+  "moteur.verif.choisir_appareil": "Choisis un appareil.",
+  "moteur.verif.silence_duree": "Entre 1 heure et 31 jours.",
+  "moteur.verif.injoignable_duree": "7 jours au plus.",
+  "moteur.decrit.quand_silencieux": "quand {appareil} ne donne plus de nouvelles depuis {duree}",
+  "moteur.decrit.quand_injoignable": "quand {appareil} devient injoignable",
+  "moteur.decrit.quand_injoignable_depuis": "quand {appareil} est injoignable depuis {duree}",
+  "moteur.pourquoi.silencieux": "{appareil} ne donne plus de nouvelles depuis {duree}",
+  "moteur.pourquoi.injoignable": "{appareil} est injoignable"
 }

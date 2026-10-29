@@ -258,5 +258,6 @@
   "commun.fumee.signal_4": "Very good signal",
   "commun.fumee.tester": "Test",
   "commun.fumee.tester_confirme": "The siren will ring loudly for a few seconds. Start the test?",
-  "commun.fumee.couper": "Silence the siren"
+  "commun.fumee.couper": "Silence the siren",
+  "commun.fumee.alertes": "Alerts"
 }

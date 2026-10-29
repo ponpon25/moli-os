@@ -205,6 +205,41 @@ async fn the_engine_speaks_the_language_of_the_house() {
          turn on lamp, then wait 1 h 30 min; otherwise: notify the house: “No”."
     );
 
+    // Alerts on a device's silence or reachability.
+    let quiet = simple(
+        json!({ "type": "when_silent", "device": "fake:door", "hours": 24 }),
+        json!({ "type": "notify", "message": "Quiet", "channels": ["telegram"] }),
+    );
+    let gone = simple(
+        json!({ "type": "when_offline", "device": "fake:door", "for_s": 600 }),
+        json!({ "type": "notify", "message": "Gone", "channels": ["maison"] }),
+    );
+    assert_eq!(
+        say(quiet),
+        "When door has said nothing for 24 h, notify the messenger: “Quiet”."
+    );
+    assert_eq!(
+        say(gone),
+        "When door has been unreachable for 10 min, notify the house: “Gone”."
+    );
+    let nowhere = graph(simple(
+        json!({ "type": "when_silent", "device": "fake:nobody", "hours": 0 }),
+        json!({ "type": "notify", "message": "?", "channels": ["maison"] }),
+    ));
+    let said: Vec<String> = autos
+        .check_with(&nowhere, can)
+        .problems
+        .iter()
+        .map(|p| p.message.clone())
+        .collect();
+    assert_eq!(
+        said,
+        [
+            "Device not found (fake:nobody).",
+            "Between 1 hour and 31 days."
+        ]
+    );
+
     // Problems, in words; and the one the assistant looks for by kind.
     let broken = graph(json!({
         "nodes": [

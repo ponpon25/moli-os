@@ -119,6 +119,21 @@
       <span class="lbl">{t('automatismes.inspecteur.pendant_au_moins')}</span>
       <Fields kind="duration" value={node.for_s || 60} onchange={(v) => set({ for_s: v })} />
       <button class="link" onclick={() => set({ for_s: 0 })}>{t('automatismes.inspecteur.tout_de_suite')}</button>
+    {:else if node.type === 'when_silent'}
+      <span class="lbl">{t('automatismes.inspecteur.quel_appareil')}</span>
+      <PointPicker point={node.device} mode="device" onpick={(d) => set({ device: d })} />
+      <span class="lbl">{t('automatismes.inspecteur.sans_nouvelles')}</span>
+      <input type="number" min="1" max="744" value={node.hours ?? 24} onchange={(e) => set({ hours: Math.max(1, Math.round(Number(e.currentTarget.value) || 1)) })} />
+    {:else if node.type === 'when_offline'}
+      <span class="lbl">{t('automatismes.inspecteur.quel_appareil')}</span>
+      <PointPicker point={node.device} mode="device" onpick={(d) => set({ device: d })} />
+      <span class="lbl">{t('automatismes.inspecteur.pendant_au_moins')} <small>{t('automatismes.inspecteur.zero_tout_de_suite')}</small></span>
+      {#if node.for_s}
+        <Fields kind="duration" value={node.for_s} onchange={(v) => set({ for_s: v })} />
+        <button class="link" onclick={() => set({ for_s: 0 })}>{t('automatismes.inspecteur.tout_de_suite')}</button>
+      {:else}
+        <button class="link" onclick={() => set({ for_s: 600 })}>{t('automatismes.inspecteur.seulement_si_dure')}</button>
+      {/if}
     {:else if node.type === 'at_time'}
       <span class="lbl">{t('automatismes.inspecteur.quelle_heure')}</span>
       <Fields kind="time" value={node.at} onchange={(v) => set({ at: v })} />

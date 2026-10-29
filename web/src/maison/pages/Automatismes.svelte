@@ -4,7 +4,7 @@
   import Orb from '../moli/Orb.svelte';
   import Editor from '../auto/Editor.svelte';
   import { home, note, relative } from '../lib/home.svelte.js';
-  import { api, asHuman, pending, liveRuns, CATALOG, CANCELLED } from '../lib/auto.svelte.js';
+  import { api, asHuman, pending, liveRuns, newAlert, CATALOG, CANCELLED } from '../lib/auto.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
 
   /** « The n8n of the house »: what runs by itself, and a way to ask for
@@ -145,6 +145,11 @@
     </form>
 
     <section class="ideas" aria-label={t('automatismes.liste.idees')}>
+      <button class="alert" onclick={() => newAlert()}>
+        <span class="i"><Icon name="bell" size={20} /></span>
+        <b>{t('automatismes.alerte.titre')}</b>
+        <small>{t('automatismes.alerte.idee')}</small>
+      </button>
       {#each IDEAS as [icon, id] (id)}
         <button onclick={() => draft(t('automatismes.idee.' + id + '.demande'))} disabled={drafting}>
           <span class="i"><Icon name={icon} size={20} /></span>

@@ -164,6 +164,11 @@ struct Inner {
     last: Mutex<HashMap<String, moli_core::Value>>,
     /// Last minute a clock trigger fired, per (automation, trigger).
     fired: Mutex<HashMap<(String, String), String>>,
+    /// Silence triggers that already said so, per (automation, trigger):
+    /// not again until the device speaks.
+    silent: Mutex<std::collections::HashSet<(String, String)>>,
+    /// The last minute silences were looked at.
+    silence_minute: Mutex<String>,
     /// Recent starts per automation, against runaway loops.
     rate: Mutex<HashMap<String, VecDeque<Instant>>>,
     writer: RwLock<Option<Arc<dyn Writer>>>,
@@ -254,6 +259,8 @@ impl Automations {
             holds: Mutex::default(),
             last: Mutex::default(),
             fired: Mutex::default(),
+            silent: Mutex::default(),
+            silence_minute: Mutex::default(),
             rate: Mutex::default(),
             writer: RwLock::new(None),
             saving: tokio::sync::Mutex::new(()),

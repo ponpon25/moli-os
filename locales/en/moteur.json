@@ -186,5 +186,13 @@
 
   "moteur.refus.nom_note": "Only a person (house code) can rename an approved automation or change its note.",
   "moteur.canal.messagerie": "the messenger",
-  "moteur.lieu.messagerie": "the messenger"
+  "moteur.lieu.messagerie": "the messenger",
+  "moteur.verif.choisir_appareil": "Choose a device.",
+  "moteur.verif.silence_duree": "Between 1 hour and 31 days.",
+  "moteur.verif.injoignable_duree": "7 days at most.",
+  "moteur.decrit.quand_silencieux": "when {appareil} has said nothing for {duree}",
+  "moteur.decrit.quand_injoignable": "when {appareil} becomes unreachable",
+  "moteur.decrit.quand_injoignable_depuis": "when {appareil} has been unreachable for {duree}",
+  "moteur.pourquoi.silencieux": "{appareil} has said nothing for {duree}",
+  "moteur.pourquoi.injoignable": "{appareil} is unreachable"
 }

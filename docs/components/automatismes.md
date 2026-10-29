@@ -46,6 +46,8 @@ Une automatisation = un **graphe** de nœuds reliés (comme n8n), stocké dans
 |---|---|---|
 | Déclencheurs | `when_state` | `point`, `to?`, `from?`, `for_s` (maintenu N s) |
 | | `when_threshold` | `point`, `above?`, `below?`, `for_s` (franchissement) |
+| | `when_silent` | `device`, `hours` (aucune nouvelle depuis N h ; une fois, jusqu'à ce qu'il reparle) |
+| | `when_offline` | `device`, `for_s` (injoignable, maintenu N s) |
 | | `at_time` | `at` « HH:MM », `days` (1 = lundi … 7) |
 | | `at_sun` | `event` rise/set, `offset_min`, `days` |
 | | `every` | `minutes` |
@@ -111,6 +113,15 @@ lui fait perdre sa validation, la maison est prévenue (notice dans le dashboard
 - MCP : `list_automations`, `get_automation`, `save_automation_draft` (brouillon non
   validé, documentation du format dans la description de l'outil), `test_automation`.
 - Moli (conversation) : « préviens-moi quand… » → brouillon + carte « Valider ».
+
+## Alertes en trois choix
+
+« Nouvelle alerte » (liste des automatismes, cloche de chaque équipement, carte du détecteur
+de fumée) : un équipement, ce qui lui arrive (proposé d'après ses points : fumée, fuite,
+ouverture, pile sous un seuil, autotest, silence, injoignable…), où prévenir (messagerie
+Olvid/Telegram, maison, voix, téléphones). Cela crée un automatisme ordinaire (déclencheur +
+`notify`, mode `single`), validé par code PIN comme les autres, modifiable ensuite dans
+l'éditeur (`web/src/maison/auto/AlertWizard.svelte`).
 
 ## Éditeur (onglet « Automatismes »)
 

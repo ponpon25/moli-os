@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use moli_core::{Event, Notice, PointId, Value};
+use moli_core::{DeviceId, Event, Notice, PointId, Value};
 use moli_i18n::tr;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -34,6 +34,7 @@ pub(crate) async fn run(autos: Automations) {
             () = cancel.cancelled() => break,
             event = events.recv() => match event {
                 Ok(Event::State { point, value, .. }) => on_state(&autos, &point, &value),
+                Ok(Event::Availability { device, online }) => on_availability(&autos, &device, online),
                 Ok(_) => {}
                 Err(RecvError::Lagged(missed)) => {
                     tracing::warn!(missed, "automations lagged behind the hub: some changes were not seen");
@@ -182,6 +183,104 @@ fn on_state(autos: &Automations, point: &PointId, value: &Value) {
     }
 }
 
+fn on_availability(autos: &Automations, device: &DeviceId, online: bool) {
+    for a in live(autos).iter() {
+        for t in a.graph.triggers() {
+            let Step::WhenOffline { device: d, for_s } = &t.step else {
+                continue;
+            };
+            if d.as_str() != device.as_str() {
+                continue;
+            }
+            if online {
+                unhold(autos, &a.id, &t.id);
+                continue;
+            }
+            let why = tr!(
+                "moteur.pourquoi.injoignable",
+                appareil = device_name(autos, device)
+            );
+            if *for_s == 0 {
+                fire(autos, a, &t.id, why);
+                continue;
+            }
+            let key = (a.id.clone(), t.id.clone());
+            if lock(&autos.0.holds)
+                .get(&key)
+                .is_some_and(|h| !h.is_finished())
+            {
+                continue;
+            }
+            let (autos2, a_id, trigger, device, for_s) = (
+                autos.clone(),
+                a.id.clone(),
+                t.id.clone(),
+                device.clone(),
+                *for_s,
+            );
+            let task = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(for_s)).await;
+                lock(&autos2.0.holds).remove(&(a_id.clone(), trigger.clone()));
+                let still = autos2
+                    .0
+                    .hub
+                    .device(&device)
+                    .is_some_and(|d| d.online == Some(false));
+                if still && let Some(a) = autos2.get(&a_id).filter(Automation::is_live) {
+                    fire(&autos2, &a, &trigger, why);
+                }
+            });
+            lock(&autos.0.holds).insert(key, task.abort_handle());
+        }
+    }
+}
+
+/// Once a minute: devices quiet for longer than their silence triggers
+/// allow fire them, once, until they speak again.
+fn check_silences(autos: &Automations, stamp: &str) {
+    {
+        let mut last = lock(&autos.0.silence_minute);
+        if *last == stamp {
+            return;
+        }
+        stamp.clone_into(&mut last);
+    }
+    let now = moli_core::now_ms();
+    for a in live(autos).iter() {
+        for t in a.graph.triggers() {
+            let Step::WhenSilent { device, hours } = &t.step else {
+                continue;
+            };
+            let id = DeviceId::from(device.as_str());
+            // Never heard (no value yet): nothing to measure.
+            let Some(heard) = autos
+                .0
+                .hub
+                .device(&id)
+                .and_then(|d| d.state.values().map(|s| s.ts).max())
+            else {
+                continue;
+            };
+            let quiet = now.saturating_sub(heard) >= u64::from(*hours) * 3_600_000;
+            let key = (a.id.clone(), t.id.clone());
+            if !quiet {
+                lock(&autos.0.silent).remove(&key);
+            } else if lock(&autos.0.silent).insert(key) {
+                fire(
+                    autos,
+                    a,
+                    &t.id,
+                    tr!(
+                        "moteur.pourquoi.silencieux",
+                        appareil = device_name(autos, &id),
+                        duree = crate::check::duration(u64::from(*hours) * 3600)
+                    ),
+                );
+            }
+        }
+    }
+}
+
 /// Fires after `for_s` if the point still has the value by then.
 #[allow(clippy::too_many_arguments)]
 fn hold(
@@ -243,6 +342,7 @@ fn on_clock(autos: &Automations) {
     let now = jiff::Timestamp::now().to_zoned(autos.0.tz.clone());
     let minute = u32::from(now.hour().unsigned_abs()) * 60 + u32::from(now.minute().unsigned_abs());
     let stamp = format!("{} {minute}", now.date());
+    check_silences(autos, &stamp);
     for a in live(autos).iter() {
         for t in a.graph.triggers() {
             let due = match &t.step {
@@ -440,6 +540,13 @@ impl Automations {
             steps: Vec::new(),
         }
     }
+}
+
+fn device_name(autos: &Automations, device: &DeviceId) -> String {
+    autos.0.hub.describe(device).map_or_else(
+        || device.to_string(),
+        |(d, label)| label.name.unwrap_or_else(|| d.native_name.to_string()),
+    )
 }
 
 fn label(autos: &Automations, point: &str) -> String {

@@ -5,7 +5,7 @@
   import Icon from '../ui/Icon.svelte';
 
   /** Choosing a device and one of its values, by name and room.
-   *  `mode`: write (it can be set), number, any. */
+   *  `mode`: write (it can be set), number, any; device: the device itself. */
   let { point = '', mode = 'any', onpick } = $props();
 
   // Open at first when nothing is chosen yet (only then).
@@ -29,6 +29,7 @@
   });
 
   function choose(d, points) {
+    if (mode === 'device') return pick(d.id);
     // One value, or an obvious on/off: pick it straight away.
     const power = points.find((p) => POWER.includes(p.key) || p.semantic === 'on_off');
     if (points.length === 1 || (mode === 'write' && power && points.length <= 3)) {
@@ -52,7 +53,7 @@
   <button class="chosen" class:empty={!point} onclick={() => (open = !open)}>
     <Icon name={point ? 'tune' : 'plus'} size={18} />
     <span>{point ? pointName(point) : t('automatismes.picker.choisir')}</span>
-    {#if current}<small class="muted">{valueText(point, value(current[0], current[1]))}</small>{/if}
+    {#if current && mode !== 'device'}<small class="muted">{valueText(point, value(current[0], current[1]))}</small>{/if}
   </button>
   {#if open}
     <div class="list">
@@ -64,7 +65,7 @@
             <button class="device" class:off={d.online === false} onclick={() => choose(d, points)}>
               <b>{nameOf(d.id)}</b>
               {#if d.online === false}<small>{t('automatismes.picker.injoignable')}</small>{/if}
-              {#if points.length > 1}<Icon name={expanded === d.id ? 'chevron-up' : 'chevron-down'} size={16} />{/if}
+              {#if points.length > 1 && mode !== 'device'}<Icon name={expanded === d.id ? 'chevron-up' : 'chevron-down'} size={16} />{/if}
             </button>
             {#if expanded === d.id}
               <ul class="points">

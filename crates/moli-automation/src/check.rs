@@ -182,6 +182,18 @@ impl Ctx<'_> {
     }
 
     /// The point's description, or a problem said once.
+    /// A device that must exist (silence and reachability triggers).
+    fn device(&mut self, device: &str) {
+        if device.is_empty() {
+            self.push(Level::Error, tr!("moteur.verif.choisir_appareil"));
+        } else if self.hub.describe(&DeviceId::from(device)).is_none() {
+            self.push(
+                Level::Error,
+                tr!("moteur.verif.appareil_introuvable", appareil = device),
+            );
+        }
+    }
+
     fn need(&mut self, point: &str, writable: bool) -> Option<PointSpec> {
         let Some((device, key)) = PointId::from(point).split().map(|(d, k)| (d, k.to_owned()))
         else {
@@ -287,6 +299,18 @@ fn check_node(
             }
             if above.is_none() && below.is_none() {
                 c.push(Level::Error, tr!("moteur.verif.seuil_manquant"));
+            }
+        }
+        Step::WhenSilent { device, hours } => {
+            c.device(device);
+            if *hours == 0 || *hours > 24 * 31 {
+                c.push(Level::Error, tr!("moteur.verif.silence_duree"));
+            }
+        }
+        Step::WhenOffline { device, for_s } => {
+            c.device(device);
+            if *for_s > 7 * 24 * 3600 {
+                c.push(Level::Error, tr!("moteur.verif.injoignable_duree"));
             }
         }
         Step::AtTime { at, days } => {
@@ -453,6 +477,11 @@ struct Said {
     spec: Option<PointSpec>,
 }
 
+fn device_said(hub: &Hub, device: &str) -> String {
+    hub.describe(&DeviceId::from(device))
+        .map_or_else(|| device.to_owned(), |(d, label)| name(&d, &label))
+}
+
 fn said(hub: &Hub, point: &str) -> Said {
     let Some((device, key)) = PointId::from(point).split().map(|(d, k)| (d, k.to_owned())) else {
         return Said {
@@ -506,7 +535,7 @@ fn value_words(spec: Option<&PointSpec>, v: &Json) -> String {
     }
 }
 
-fn duration(s: u64) -> String {
+pub(crate) fn duration(s: u64) -> String {
     match s {
         0 => String::new(),
         s if s % 3600 == 0 => tr!("moteur.duree.h", heures = s / 3600),
@@ -627,6 +656,7 @@ fn sun_words(event: SunEvent, offset_min: i32, days: &[u8]) -> String {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per kind of trigger
 fn trigger_words(step: &Step, hub: &Hub) -> String {
     match step {
         Step::WhenState {
@@ -690,6 +720,25 @@ fn trigger_words(step: &Step, hub: &Hub) -> String {
                     libelle = label,
                     appareil = s.device,
                     evenement = what
+                )
+            }
+        }
+        Step::WhenSilent { device, hours } => tr!(
+            "moteur.decrit.quand_silencieux",
+            appareil = device_said(hub, device),
+            duree = duration(u64::from(*hours) * 3600)
+        ),
+        Step::WhenOffline { device, for_s } => {
+            if *for_s > 0 {
+                tr!(
+                    "moteur.decrit.quand_injoignable_depuis",
+                    appareil = device_said(hub, device),
+                    duree = duration(*for_s)
+                )
+            } else {
+                tr!(
+                    "moteur.decrit.quand_injoignable",
+                    appareil = device_said(hub, device)
                 )
             }
         }

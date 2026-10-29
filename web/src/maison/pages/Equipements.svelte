@@ -4,6 +4,7 @@
   import { catalogue, showTile, available, deviceOnDashboard, showDevice } from '../lib/tiles.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
+  import { newAlert } from '../lib/auto.svelte.js';
 
   const KIND_ICON = {
     light: 'light',
@@ -201,6 +202,7 @@
                 {#if hidden(x.d.id)} · {t('maison.equipements.masque')}{/if}
               </small>
             </span>
+            <button type="button" class="bell" title={t('maison.equipements.alerte', { name: x.name })} aria-label={t('maison.equipements.alerte', { name: x.name })} onclick={() => newAlert(x.d.id)}><Icon name="bell" size={16} /></button>
             <label class="show" title={t('maison.equipements.afficher_dashboard', { name: x.name })}>
               <input type="checkbox" checked={deviceOnDashboard(x.d)} onchange={(e) => showDevice(x.d, e.currentTarget.checked)} aria-label={t('maison.equipements.afficher_dashboard', { name: x.name })} />
               <span>{t('maison.equipements.dashboard')}</span>
@@ -330,6 +332,24 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-2);
+  }
+
+  .bell {
+    flex: none;
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--ink-3);
+    cursor: pointer;
+  }
+
+  .bell:hover {
+    background: var(--surface-2);
+    color: var(--warm-ink);
   }
 
   .group h2 .web {

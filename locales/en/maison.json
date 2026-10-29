@@ -311,5 +311,6 @@
   "maison.equipements.ranger": "Group",
   "maison.equipements.par_source": "By source",
   "maison.equipements.par_room": "By room",
-  "maison.equipements.sans_piece": "No room"
+  "maison.equipements.sans_piece": "No room",
+  "maison.equipements.alerte": "Create an alert for {name}"
 }

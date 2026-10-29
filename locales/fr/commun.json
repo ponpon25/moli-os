@@ -258,5 +258,6 @@
   "commun.fumee.signal_4": "Très bon signal",
   "commun.fumee.tester": "Tester",
   "commun.fumee.tester_confirme": "La sirène va sonner fort quelques secondes. Lancer le test ?",
-  "commun.fumee.couper": "Couper la sirène"
+  "commun.fumee.couper": "Couper la sirène",
+  "commun.fumee.alertes": "Alertes"
 }

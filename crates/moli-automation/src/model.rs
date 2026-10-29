@@ -180,6 +180,18 @@ pub enum Step {
         #[serde(default)]
         for_s: u64,
     },
+    /// A device says nothing for `hours` (flat battery, out of range):
+    /// once, until it speaks again.
+    WhenSilent {
+        device: String,
+        hours: u32,
+    },
+    /// A device becomes unreachable, maybe for a while.
+    WhenOffline {
+        device: String,
+        #[serde(default)]
+        for_s: u64,
+    },
     /// Every day (or some days) at a time.
     AtTime {
         at: String,
@@ -255,6 +267,8 @@ impl Step {
             self,
             Self::WhenState { .. }
                 | Self::WhenThreshold { .. }
+                | Self::WhenSilent { .. }
+                | Self::WhenOffline { .. }
                 | Self::AtTime { .. }
                 | Self::AtSun { .. }
                 | Self::Every { .. }
@@ -276,6 +290,8 @@ impl Step {
         match self {
             Self::WhenState { .. } => "when_state",
             Self::WhenThreshold { .. } => "when_threshold",
+            Self::WhenSilent { .. } => "when_silent",
+            Self::WhenOffline { .. } => "when_offline",
             Self::AtTime { .. } => "at_time",
             Self::AtSun { .. } => "at_sun",
             Self::Every { .. } => "every",

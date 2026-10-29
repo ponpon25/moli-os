@@ -69,6 +69,7 @@ struct DraftArgs {
     /// (restart|single|queued), "graph": { "nodes": [...], "edges": [...] } }`.
     /// Give an `id` to rework an existing one. Node `type`s: when_state
     /// (point, to, from, for_s), when_threshold (point, above, below, for_s),
+    /// when_silent (device, hours), when_offline (device, for_s),
     /// at_time (at "HH:MM", days 1=Monday..7), at_sun (event rise|set,
     /// offset_min, days), every (minutes), on_start, manual, if (rules, all →
     /// ports yes/no; rules: {kind: state, point, op eq|ne|gt|ge|lt|le, value}

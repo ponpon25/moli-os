@@ -36,6 +36,8 @@ function kind(type, family, icon, defaults) {
 export const CATALOG = {
   when_state: kind('when_state', 'trigger', 'flash', { point: '', to: true, for_s: 0 }),
   when_threshold: kind('when_threshold', 'trigger', 'thermometer', { point: '', above: 0, for_s: 0 }),
+  when_silent: kind('when_silent', 'trigger', 'history', { device: '', hours: 24 }),
+  when_offline: kind('when_offline', 'trigger', 'offline', { device: '', for_s: 0 }),
   at_time: kind('at_time', 'trigger', 'clock', { at: '07:00', days: [] }),
   at_sun: kind('at_sun', 'trigger', 'sunset', { event: 'set', offset_min: 0, days: [] }),
   every: kind('every', 'trigger', 'repeat', { minutes: 15 }),
@@ -134,6 +136,7 @@ export function graphPoints(graph) {
     else if (v && typeof v === 'object') {
       for (const [k, x] of Object.entries(v)) {
         if (k === 'point' && typeof x === 'string') found.add(x);
+        else if (k === 'device' && typeof x === 'string' && x) found.add(`${x}/`);
         else walk(x);
       }
     }
@@ -192,6 +195,12 @@ export function nodeText(node) {
             : `< ${node.below}${u}`;
       const base = `${pointName(node.point)} ${what}`;
       return node.for_s ? t('automatismes.texte.pendant', { texte: base, duree: duration(node.for_s) }) : base;
+    }
+    case 'when_silent':
+      return t('automatismes.texte.silencieux', { nom: pointName(node.device), duree: duration((node.hours ?? 0) * 3600) });
+    case 'when_offline': {
+      const base = t('automatismes.texte.injoignable', { nom: pointName(node.device) });
+      return node.for_s ? t('automatismes.texte.depuis', { texte: base, duree: duration(node.for_s) }) : base;
     }
     case 'at_time':
       return `${node.at ?? '—'} · ${daysText(node.days)}`;
@@ -378,6 +387,15 @@ export async function asHuman(label, action) {
       onCancel: () => reject(new Error(CANCELLED)),
     };
   });
+}
+
+/** The « new alert » sheet: open, and for which device (or none yet). */
+export const alerts = $state({ open: false, device: null, opened: 0 });
+export function newAlert(device = null) {
+  alerts.device = device;
+  alerts.open = true;
+  // A fresh sheet each time, even over one already open.
+  alerts.opened += 1;
 }
 
 /** A draft (from Moli) waiting for the editor to open it. */

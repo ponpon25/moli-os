@@ -82,6 +82,8 @@ fn schema() -> Json {
         "message",
         "channels",
         "prompt",
+        "device",
+        "hours",
     ];
     json!({
         "type": "object",
@@ -98,7 +100,7 @@ fn schema() -> Json {
                 "properties": {
                     "id": { "type": "string" },
                     "type": { "type": "string", "enum": [
-                        "when_state", "when_threshold", "at_time", "at_sun", "every", "on_start", "manual",
+                        "when_state", "when_threshold", "when_silent", "when_offline", "at_time", "at_sun", "every", "on_start", "manual",
                         "if", "set", "toggle", "wait", "wait_for", "notify", "write"
                     ] },
                     "point": nullable("string"),
@@ -121,7 +123,9 @@ fn schema() -> Json {
                     "title": nullable("string"),
                     "message": nullable("string"),
                     "channels": { "type": ["array", "null"], "items": { "type": "string", "enum": ["maison", "voix", "telephone", "telegram"] } },
-                    "prompt": nullable("string")
+                    "prompt": nullable("string"),
+                    "device": nullable("string"),
+                    "hours": nullable("integer")
                 }
             } },
             "edges": { "type": "array", "items": {

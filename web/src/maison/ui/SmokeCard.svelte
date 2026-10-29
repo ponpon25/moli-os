@@ -2,6 +2,7 @@
   import { device, nameOf, reachable, value, since, relative, home, act, pending, roomOf, num } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
+  import { newAlert } from '../lib/auto.svelte.js';
 
   /** A smoke detector, whatever its brand: calm when all is well, loud when not. */
   let { id, name = null } = $props();
@@ -32,7 +33,10 @@
 <section class="card smoke {state}">
   <div class="card-head">
     <h2><Icon name="smoke-detector" size={18} />{nameOf(id, name)}{#if roomOf(d)}<small>{roomOf(d)}</small>{/if}</h2>
-    {#if heard}<span class="when">{relative(heard, home.now)}</span>{/if}
+    <span class="side">
+      {#if heard}<span class="when">{relative(heard, home.now)}</span>{/if}
+      <button class="bell" onclick={() => newAlert(id)} title={t('commun.fumee.alertes')} aria-label={t('commun.fumee.alertes')}><Icon name="bell" size={16} /></button>
+    </span>
   </div>
 
   <div class="hero" role="status" aria-live="assertive">
@@ -110,9 +114,31 @@
     margin-right: 8px;
   }
 
+  .side {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   .when {
     font-size: 13px;
     color: var(--ink-3);
+  }
+
+  .bell {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
+  .bell:hover {
+    color: var(--warm-ink);
   }
 
   .hero {

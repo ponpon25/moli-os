@@ -61,6 +61,8 @@ Nœuds (champ `type`) et leurs champs utiles (les autres à null) :\n\
 - Déclencheurs (aucun lien entrant) :\n\
   - when_state : point, to (valeur atteinte, ou null pour tout changement), from (null en général), for_s (maintenu N secondes, 0 sinon)\n\
   - when_threshold : point (nombre), above et/ou below, for_s\n\
+  - when_silent : device (identifiant de l'appareil), hours (aucune nouvelle depuis N heures)\n\
+  - when_offline : device, for_s (injoignable depuis N secondes, 0 sinon)\n\
   - at_time : at « HH:MM », days ([] = tous les jours ; 1 = lundi … 7 = dimanche)\n\
   - at_sun : event rise|set, offset_min (négatif = avant), days\n\
   - every : minutes\n\

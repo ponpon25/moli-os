@@ -14,6 +14,8 @@ enceinte → Alexa (Amazon) → AWS Lambda (ce dossier) → https://alexa.exampl
 - **Ce qu'Alexa voit** : chaque point `on_off` inscriptible des appareils choisis devient un
   appareil, avec la luminosité, la couleur et la température de blanc d'une lampe, le volume et la
   sourdine d'une télé. Catégorie : télé (volume), lampe, prise (puissance mesurée) ou interrupteur.
+  Un variateur sans interrupteur (Z-Wave : un seul niveau, 0 = éteint) est une lampe : son niveau
+  sert d'interrupteur (allumer = plein, éteindre = 0) et se règle en pourcentage.
 - **La garde s'applique** : un ordre d'Alexa part en origine `api`, acteur `alexa`, comme ceux de
   HomeKit. Retenu (pièce protégée, heures calmes, machine), il est dit fait à Alexa et attend
   l'approbation dans le tableau de bord.

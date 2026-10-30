@@ -331,6 +331,9 @@ struct Endpoint<'a> {
     id: String,
     view: &'a DeviceView,
     on: &'a PointSpec,
+    /// `on` is a dimmer's level with no switch of its own (a Z-Wave
+    /// multilevel switch): on above its minimum.
+    level: bool,
     brightness: Option<&'a PointSpec>,
     color_temp: Option<&'a PointSpec>,
     color: Option<&'a PointSpec>,
@@ -438,6 +441,7 @@ fn endpoints(views: &[DeviceView], shown: impl Fn(&DeviceView) -> bool) -> Vec<E
                 id: hex(PointId::new(&device.id, &on.key).as_str()),
                 view,
                 on,
+                level: false,
                 brightness,
                 color_temp,
                 color,
@@ -447,8 +451,35 @@ fn endpoints(views: &[DeviceView], shown: impl Fn(&DeviceView) -> bool) -> Vec<E
                 category,
             });
         }
+        // A dimmer with no switch (a Z-Wave multilevel switch): its level
+        // is the switch, 0 meaning off.
+        let level = device.points.iter().find(|p| {
+            p.semantic == Semantic::Brightness
+                && p.access.write
+                && matches!(p.kind, Kind::Numeric { .. })
+        });
+        if let (true, Some(level)) = (switches.is_empty(), level) {
+            out.push(Endpoint {
+                id: hex(PointId::new(&device.id, &level.key).as_str()),
+                view,
+                on: level,
+                level: true,
+                brightness: Some(level),
+                color_temp: None,
+                color: None,
+                volume: None,
+                mute: None,
+                name: base,
+                category: "LIGHT",
+            });
+        }
     }
     out
+}
+
+/// A dimmer's level read as on or off.
+fn level_on(spec: &PointSpec, value: &Value) -> Option<bool> {
+    Some(value.as_f64()? > range(spec).0)
 }
 
 /// Alexa's endpoint ids take few characters: the point id, in hex.
@@ -590,7 +621,14 @@ fn properties(e: &Endpoint<'_>) -> Vec<Json> {
         json!({ "value": if online { "OK" } else { "UNREACHABLE" } }),
         iso_time(moli_core::now_ms()),
     ));
-    if let Some(on) = e.value(e.on).and_then(as_bool) {
+    let on = e.value(e.on).and_then(|v| {
+        if e.level {
+            level_on(e.on, v)
+        } else {
+            as_bool(v)
+        }
+    });
+    if let Some(on) = on {
         out.push(property(
             "Alexa.PowerController",
             "powerState",
@@ -656,6 +694,13 @@ async fn order(
     let unsupported = || ("INVALID_DIRECTIVE", format!("{namespace}.{name}"));
     let number = |key: &str| payload[key].as_f64().filter(|n| n.is_finite());
     match (namespace, name) {
+        // A dimmer's level: full on, its minimum off (as HomeKit does).
+        ("Alexa.PowerController", "TurnOn") if e.level => {
+            send(hub, e.point(e.on), from_percent(e.on, 100.0)).await
+        }
+        ("Alexa.PowerController", "TurnOff") if e.level => {
+            send(hub, e.point(e.on), from_percent(e.on, 0.0)).await
+        }
         ("Alexa.PowerController", "TurnOn") => send(hub, e.point(e.on), Value::Bool(true)).await,
         ("Alexa.PowerController", "TurnOff") => send(hub, e.point(e.on), Value::Bool(false)).await,
         ("Alexa.BrightnessController", verb) => {
@@ -787,13 +832,19 @@ fn from_percent(spec: &PointSpec, pct: f64) -> Value {
     integral(spec, raw)
 }
 
-/// Whole steps stay whole (a TV's volume takes integers).
+/// Whole steps stay whole (a TV's volume takes integers), and so does a
+/// range of whole bounds without a step (a Z-Wave level, 0–99).
 #[allow(clippy::cast_possible_truncation)] // a point's own range
 fn integral(spec: &PointSpec, raw: f64) -> Value {
     match spec.kind {
         Kind::Numeric {
             step: Some(step), ..
         } if step.fract() == 0.0 => Value::Int(raw.round() as i64),
+        Kind::Numeric {
+            step: None,
+            min: Some(min),
+            max: Some(max),
+        } if min.fract() == 0.0 && max.fract() == 0.0 => Value::Int(raw.round() as i64),
         _ => Value::Float(raw),
     }
 }
@@ -886,6 +937,78 @@ fn iso_time(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dimmer_without_switch_is_a_light() {
+        // A Z-Wave multilevel switch: one level, 0–99, 0 meaning off.
+        let view = DeviceView {
+            device: Arc::new(moli_core::Device {
+                id: "zwave:a-40".into(),
+                instance: "zwave".into(),
+                native_name: "Salon".into(),
+                manufacturer: None,
+                model: None,
+                description: None,
+                native_room: None,
+                members: Vec::new(),
+                points: vec![PointSpec {
+                    key: "level".into(),
+                    label: "Niveau".into(),
+                    // As Z-Wave JS declares it: no step.
+                    kind: Kind::Numeric {
+                        min: Some(0.0),
+                        max: Some(99.0),
+                        step: None,
+                    },
+                    access: moli_core::Access {
+                        read: true,
+                        write: true,
+                    },
+                    unit: None,
+                    semantic: Semantic::Brightness,
+                }],
+            }),
+            label: moli_core::Label::default(),
+            online: Some(true),
+            state: std::iter::once((
+                Arc::from("level"),
+                moli_core::Sample {
+                    value: Value::Int(30),
+                    ts: 0,
+                },
+            ))
+            .collect(),
+            camera: false,
+            printer: false,
+        };
+        let views = [view];
+        let all = endpoints(&views, |_| true);
+        let [e] = all.as_slice() else {
+            panic!("one endpoint")
+        };
+        assert!(e.level);
+        assert_eq!(e.category, "LIGHT");
+        assert_eq!(e.name, "Salon");
+        let found = discovery(&all).to_string();
+        assert!(
+            found.contains("Alexa.PowerController") && found.contains("Alexa.BrightnessController")
+        );
+        let props = properties(e);
+        assert!(
+            props
+                .iter()
+                .any(|p| p["name"] == "powerState" && p["value"] == "ON")
+        );
+        assert!(
+            props
+                .iter()
+                .any(|p| p["name"] == "brightness" && p["value"] == 30)
+        );
+        assert_eq!(from_percent(e.on, 100.0), Value::Int(99));
+        assert_eq!(from_percent(e.on, 30.0), Value::Int(30), "29.7, whole");
+        assert_eq!(from_percent(e.on, 0.0), Value::Int(0));
+        assert_eq!(level_on(e.on, &Value::Int(0)), Some(false));
+    }
 
     #[test]
     fn times_are_iso() {

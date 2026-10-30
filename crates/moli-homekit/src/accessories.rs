@@ -273,6 +273,8 @@ pub enum Conv {
     },
     /// An integer in the same unit (mired).
     Int,
+    /// Kelvins (WiZ, Tapo) ⇄ HAP's mireds.
+    Kelvin,
     /// Moli `true` (closed) ⇄ HAP 0 (`CONTACT_DETECTED`).
     Contact,
     /// Moli `true` ⇄ HAP 1 (leak, smoke detected).
@@ -590,12 +592,22 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
         }
         if let Some(ct) = color_temp {
             let (lo, hi) = numeric(ct);
+            // HAP counts in mireds; a range past 1000 is in kelvins.
+            let (conv, lo, hi) = if hi > 1000.0 {
+                (
+                    Conv::Kelvin,
+                    (1e6 / hi).round(),
+                    (1e6 / lo.max(1.0)).round(),
+                )
+            } else {
+                (Conv::Int, lo, hi)
+            };
             chars.push(
                 spec(
                     C_COLOR_TEMP,
                     "uint32",
                     READ_WRITE_NOTIFY,
-                    Bind::Point(id(&ct.key), Conv::Int),
+                    Bind::Point(id(&ct.key), conv),
                     "Color Temperature",
                 )
                 .meta(Meta {
@@ -1552,6 +1564,7 @@ pub fn to_hap(conv: Conv, value: &Value) -> Option<Json> {
             json!(((v - lo) * 100.0 / span).round().clamp(0.0, 100.0) as i64)
         }
         Conv::Int => json!(value.as_f64()?.round() as i64),
+        Conv::Kelvin => json!((1e6 / value.as_f64()?.max(1.0)).round() as i64),
         Conv::Clamped { lo, hi } => json!(value.as_f64()?.clamp(lo, hi)),
         Conv::Contact => json!(i64::from(!as_bool(value)?)),
         Conv::Detected => json!(i64::from(as_bool(value)?)),
@@ -1593,6 +1606,7 @@ pub fn from_hap(conv: Conv, json: &Json) -> Option<Value> {
             Some(Value::Float(lo + pct * (hi - lo) / 100.0))
         }
         Conv::Int => Some(Value::Int(json.as_f64()?.round() as i64)),
+        Conv::Kelvin => Some(Value::Int((1e6 / json.as_f64()?.max(1.0)).round() as i64)),
         Conv::Lux | Conv::Clamped { .. } => Some(Value::Float(json.as_f64()?)),
         Conv::Contact | Conv::Detected | Conv::DoorCurrent => None,
         Conv::DoorTarget => {
@@ -2113,6 +2127,9 @@ mod tests {
         assert_eq!(to_hap(bounded, &Value::Float(220.0)), Some(json!(100.0)));
         assert_eq!(to_hap(bounded, &Value::Int(21)), Some(json!(21.0)));
         assert_eq!(to_hap(Conv::Int, &Value::Float(366.4)), Some(json!(366)));
+        // Kelvins (WiZ, Tapo) travel as mireds.
+        assert_eq!(to_hap(Conv::Kelvin, &Value::Int(2700)), Some(json!(370)));
+        assert_eq!(from_hap(Conv::Kelvin, &json!(370)), Some(Value::Int(2703)));
     }
 
     #[test]

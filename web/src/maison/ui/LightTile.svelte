@@ -1,5 +1,5 @@
 <script>
-  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey } from '../lib/home.svelte.js';
+  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import LightTile from './LightTile.svelte';
@@ -17,8 +17,16 @@
   const on = $derived((reachable(id) && isOn(id, point)) || also.some((a) => reachable(a) && isOn(a)));
   const busy = $derived(pending(id, point));
   const label = $derived(nameOf(id, name));
-  const level = $derived(value(id, 'brightness'));
-  const dimmable = $derived(dimmer && d?.points.some((p) => p.key === 'brightness' && p.access?.write));
+  // The point that dims: « brightness », or the level of a dimmer that has
+  // no on/off (Z-Wave), whose own range (0–99) the slider follows.
+  const dimKey = $derived(levelKey(d) ?? 'brightness');
+  const dimSpec = $derived(d?.points.find((p) => p.key === dimKey)?.kind);
+  const top = $derived(levelKey(d) ? (dimSpec?.max ?? 100) : 100);
+  const level = $derived.by(() => {
+    const v = value(id, dimKey);
+    return v == null ? null : (v / top) * 100;
+  });
+  const dimmable = $derived(dimmer && d?.points.some((p) => p.key === dimKey && p.access?.write));
 
   // A bulb cut at the wall switch: off, and only the switch brings it back.
   const cut = $derived(!!d && !isFixture(d) && unpowered(id));
@@ -82,7 +90,7 @@
   function commitLevel(e) {
     const v = Number(e.currentTarget.value);
     dragging = null;
-    act(`${id}/brightness`, v, label);
+    act(`${id}/${dimKey}`, Math.round((v / 100) * top), label);
   }
 
   // Colour (« #rrggbb ») and white temperature, where the lamp takes them.

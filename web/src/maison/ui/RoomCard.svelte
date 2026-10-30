@@ -1,5 +1,5 @@
 <script>
-  import { hub, value, act, isOn, powerKey, protectedRoom, num, nameOf, deviceKind, lampsOf, doorOpen, leak, motion, lowBattery, unpowered, isFixture, note, reachable, quiet, outletsOf } from '../lib/home.svelte.js';
+  import { hub, value, act, isOn, powerKey, setPower, dimKey, protectedRoom, num, nameOf, deviceKind, lampsOf, doorOpen, leak, motion, lowBattery, unpowered, isFixture, note, reachable, quiet, outletsOf } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import LightTile from './LightTile.svelte';
@@ -83,15 +83,14 @@
     const on = !room.lit;
     for (const d of room.lights) {
       if (isOn(d.id) === on || (on && unpowered(d.id) && !isFixture(d))) continue;
-      const key = powerKey(d);
-      if (key) act(`${d.id}/${key}`, typeof value(d.id, key) === 'string' ? (on ? 'ON' : 'OFF') : on, t(on ? 'commun.piece.label_allumer' : 'commun.piece.label_eteindre', { name: room.name }));
+      setPower(d, on, t(on ? 'commun.piece.label_allumer' : 'commun.piece.label_eteindre', { name: room.name }));
     }
   }
 
   // ---- pads ----------------------------------------------------------------------------
 
   const hasFan = (id) => hub.devices[id]?.points.some((p) => p.key === 'fan_switch');
-  const fine = (d) => d.points.some((p) => ['brightness', 'color', 'color_temp'].includes(p.key) && p.access?.write);
+  const fine = (d) => !!dimKey(d) || d.points.some((p) => ['color', 'color_temp'].includes(p.key) && p.access?.write);
 
   /** A speaking icon, from what it is and what it is called. */
   function padIcon(d) {
@@ -135,8 +134,10 @@
     if (outlets) return t('commun.piece.prises_allumees', { on: litCount(outlets, d.id), count: outlets.length });
     if (deviceKind(d) === 'speaker') return value(d.id, 'playing') === true ? t('commun.piece.lecture_en_cours') : t('commun.piece.a_l_arret');
     if (!isOn(d.id, point)) return t('commun.piece.eteinte');
-    const b = value(d.id, 'brightness');
-    return typeof b === 'number' && fine(d) ? t('commun.pourcent', { n: Math.round(b) }) : t('commun.piece.allumee');
+    const dk = dimKey(d);
+    const b = dk ? value(d.id, dk) : null;
+    const top = d.points.find((p) => p.key === dk)?.kind?.max ?? 100;
+    return typeof b === 'number' ? t('commun.pourcent', { n: Math.round((b / top) * 100) }) : t('commun.piece.allumee');
   }
 
   function tap(d, point, outlets, name) {
@@ -154,10 +155,9 @@
       act(`${d.id}/${point}`, !isOn(d.id, point), `${nameOf(d.id)} · ${name}`);
       return;
     }
-    const key = point ?? powerKey(d);
-    if (!key) return;
-    const cur = value(d.id, key);
-    act(`${d.id}/${key}`, typeof cur === 'string' ? (isOn(d.id, point) ? 'OFF' : 'ON') : !isOn(d.id, point), nameOf(d.id));
+    if (!point) return setPower(d, !isOn(d.id), nameOf(d.id));
+    const cur = value(d.id, point);
+    act(`${d.id}/${point}`, typeof cur === 'string' ? (isOn(d.id, point) ? 'OFF' : 'ON') : !isOn(d.id, point), nameOf(d.id));
   }
 
   // The unit's modes (as it says them) → the catalogue key of their short name.

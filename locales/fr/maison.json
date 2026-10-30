@@ -304,6 +304,8 @@
   "maison.equipements.cartes": "Cartes du dashboard",
   "maison.equipements.carte_sans_equipement": "Carte sans équipement",
   "maison.equipements.afficher_dashboard": "Afficher {name} sur le dashboard",
+  "maison.equipements.a_part": "Carte à part",
+  "maison.equipements.a_part_titre": "Afficher {name} sur sa propre carte, hors de la carte Lumières",
   "maison.equipements.interface": "Appairage et réglages",
   "maison.equipements.interface_de": "Ouvrir l’interface de {name}",
   "maison.equipements.pont_vide": "Aucun équipement pour l’instant",

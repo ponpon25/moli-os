@@ -12,7 +12,7 @@
   import AmbiancePicker from '../ui/AmbiancePicker.svelte';
   import Routines from '../ui/Routines.svelte';
   import SkyHero from '../ui/SkyHero.svelte';
-  import { ROW, setTile, saveDashboard, resetDashboard, onDashboard } from '../lib/layout.svelte.js';
+  import { ROW, setTile, saveDashboard, resetDashboard, onDashboard, isApart } from '../lib/layout.svelte.js';
   import { catalogue, showTile, isClim, isDev, available } from '../lib/tiles.svelte.js';
   import DeviceCard from '../ui/DeviceCard.svelte';
   import SensorCard from '../ui/SensorCard.svelte';
@@ -303,7 +303,7 @@
     return roomList().flatMap((r) => r.lights.map((d) => ({ id: d.id, name: null, icon: 'light', also: [] })));
   });
   /** The lights the family wants on the dashboard (each has its own box in Équipements). */
-  const shownLights = $derived(lights.filter((l) => onDashboard(l.id)));
+  const shownLights = $derived(lights.filter((l) => onDashboard(l.id) && !isApart(l.id)));
   const litCount = $derived(shownLights.filter((l) => [l.id, ...(l.also ?? [])].some((i) => isOn(i))).length);
 
   // Ambiances, room by room (the last room chosen is remembered here).
@@ -460,6 +460,8 @@
         </section>
       {:else if kind === 'garage'}
         <GarageCard id={tile.device} name={tile.label} />
+      {:else if kind === 'light'}
+        <LightTile id={tile.device} name={tile.label} dimmer />
       {:else if kind === 'plug'}
         <LightTile id={tile.device} name={tile.label} icon="power" />
       {:else if kind === 'cover'}

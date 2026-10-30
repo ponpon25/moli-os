@@ -1,6 +1,6 @@
 <script>
   import { hub, roomList, roomOf, nameOf, deviceKind, hidden, reachable, roomNamed, home, driverName, isSmoke } from '../lib/home.svelte.js';
-  import { layout, addRoom, setDeviceRoom, setDeviceName } from '../lib/layout.svelte.js';
+  import { layout, addRoom, setDeviceRoom, setDeviceName, isApart, setApart } from '../lib/layout.svelte.js';
   import { catalogue, showTile, available, deviceOnDashboard, showDevice } from '../lib/tiles.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
@@ -213,6 +213,12 @@
               <input type="checkbox" checked={deviceOnDashboard(x.d)} onchange={(e) => showDevice(x.d, e.currentTarget.checked)} aria-label={t('maison.equipements.afficher_dashboard', { name: x.name })} />
               <span>{t('maison.equipements.dashboard')}</span>
             </label>
+            {#if deviceKind(x.d) === 'light'}
+              <label class="show" title={t('maison.equipements.a_part_titre', { name: x.name })}>
+                <input type="checkbox" checked={isApart(x.d.id)} onchange={(e) => setApart(x.d.id, e.currentTarget.checked)} aria-label={t('maison.equipements.a_part_titre', { name: x.name })} />
+                <span>{t('maison.equipements.a_part')}</span>
+              </label>
+            {/if}
             {#if creating === x.d.id}
               <form onsubmit={create}>
                 <!-- svelte-ignore a11y_autofocus -->

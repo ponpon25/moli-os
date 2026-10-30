@@ -117,6 +117,17 @@ export function showOnDashboard(id, yes) {
   keep('maison-dashboard-on', shown.on);
 }
 
+/** Lights the family wants on a card of their own, not in the shared
+ *  « Lumières » card. */
+export const apart = $state({ ids: read('maison-dashboard-apart', []) });
+
+export const isApart = (id) => apart.ids.includes(id);
+
+export function setApart(id, yes) {
+  apart.ids = yes ? [...new Set([...apart.ids, id])] : apart.ids.filter((i) => i !== id);
+  keep('maison-dashboard-apart', apart.ids);
+}
+
 // ---- the dashboard's tiles -------------------------------------------------------
 
 /** Width in columns (of 12), height in rows of `ROW` px (0: its own, as
@@ -166,6 +177,7 @@ onPrefs((kept) => {
   layout.extraRooms = list(kept['maison-rooms-extra']) ?? layout.extraRooms;
   shown.off = list(kept['maison-dashboard-off']) ?? shown.off;
   shown.on = list(kept['maison-dashboard-on']) ?? shown.on;
+  apart.ids = list(kept['maison-dashboard-apart']) ?? apart.ids;
   const tiles = kept['maison-dashboard'];
   if (tiles && typeof tiles === 'object' && !Array.isArray(tiles)) dash.tiles = tiles;
 });

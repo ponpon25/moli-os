@@ -260,6 +260,12 @@ pub enum Conv {
     /// The on/off of a device that sleeps (a TV in deep standby): asleep, it
     /// reads off rather than unresponsive, and switching it on wakes it.
     Wake,
+    /// The on/off of a dimmer that has no switch of its own (a Z-Wave
+    /// multilevel switch): on above `lo`; switching on sets full, off sets `lo`.
+    LevelOn {
+        lo: f64,
+        hi: f64,
+    },
     /// Moli's `lo..hi` ⇄ HAP's 0–100 %.
     Percent {
         lo: f64,
@@ -654,6 +660,46 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
             });
             kinds.push(Kinds::Switch);
         }
+    }
+
+    // A dimmer with no switch of its own (a Z-Wave multilevel switch): its
+    // level is the light, off at its lowest.
+    if switches.is_empty()
+        && !tv
+        && climate_points.is_empty()
+        && let Some(level) = device
+            .points
+            .iter()
+            .filter(|p| {
+                p.semantic == Semantic::Brightness
+                    && writable(p)
+                    && matches!(p.kind, Kind::Numeric { .. })
+            })
+            .min_by(|a, b| a.key.cmp(&b.key))
+    {
+        let (lo, hi) = numeric(level);
+        services.push(ServiceSpec {
+            kind: SVC_LIGHT,
+            chars: vec![
+                name_char(name),
+                spec(
+                    C_ON,
+                    "bool",
+                    READ_WRITE_NOTIFY,
+                    Bind::Point(id(&level.key), Conv::LevelOn { lo, hi }),
+                    "On",
+                ),
+                spec(
+                    C_BRIGHTNESS,
+                    "int",
+                    READ_WRITE_NOTIFY,
+                    Bind::Point(id(&level.key), Conv::Percent { lo, hi }),
+                    "Brightness",
+                )
+                .meta(percent_meta()),
+            ],
+        });
+        kinds.push(Kinds::Light);
     }
 
     // Sensors: read-only points only (a writable temperature is a setpoint).
@@ -1499,6 +1545,7 @@ pub fn placeholder(c: &Characteristic) -> Json {
 pub fn to_hap(conv: Conv, value: &Value) -> Option<Json> {
     Some(match conv {
         Conv::Bool | Conv::Wake => json!(as_bool(value)?),
+        Conv::LevelOn { lo, .. } => json!(value.as_f64()? > lo),
         Conv::Percent { lo, hi } => {
             let v = value.as_f64()?;
             let span = (hi - lo).max(f64::EPSILON);
@@ -1532,6 +1579,14 @@ pub fn from_hap(conv: Conv, json: &Json) -> Option<Value> {
                 _ => return None,
             };
             Some(Value::Bool(b))
+        }
+        Conv::LevelOn { lo, hi } => {
+            let on = match json {
+                Json::Bool(b) => *b,
+                Json::Number(n) => n.as_i64()? != 0,
+                _ => return None,
+            };
+            Some(Value::Float(if on { hi } else { lo }))
         }
         Conv::Percent { lo, hi } => {
             let pct = json.as_f64()?.clamp(0.0, 100.0);
@@ -1716,6 +1771,32 @@ mod tests {
         let kinds: Vec<_> = light.chars.iter().map(|ch| ch.kind).collect();
         assert_eq!(kinds, ["23", "25", "8", "CE", "13", "2F"]);
         assert_eq!(kinds_of(&lamp.device), [Kinds::Light]);
+    }
+
+    #[test]
+    fn a_dimmer_without_a_switch_is_a_lightbulb() {
+        let dimmer = view(
+            "dimmer",
+            vec![
+                point("ep1.level", range(0.0, 99.0), true, Semantic::Brightness),
+                point("ep2.level", range(0.0, 99.0), true, Semantic::Brightness),
+                point("ep1.sensor.power", range(0.0, 250.0), false, Semantic::Power),
+            ],
+        );
+        let c = catalog(std::slice::from_ref(&dimmer));
+        let light = &c.accessories[1].services[1];
+        assert_eq!(light.kind, SVC_LIGHT);
+        let kinds: Vec<_> = light.chars.iter().map(|ch| ch.kind).collect();
+        assert_eq!(kinds, ["23", "25", "8"]);
+        assert!(matches!(
+            &light.chars[1].bind,
+            Bind::Point(p, Conv::LevelOn { .. }) if p.to_string().ends_with("ep1.level")
+        ));
+        let on = Conv::LevelOn { lo: 0.0, hi: 99.0 };
+        assert_eq!(to_hap(on, &Value::Float(0.0)), Some(json!(false)));
+        assert_eq!(to_hap(on, &Value::Float(10.0)), Some(json!(true)));
+        assert_eq!(from_hap(on, &json!(true)), Some(Value::Float(99.0)));
+        assert_eq!(from_hap(on, &json!(0)), Some(Value::Float(0.0)));
     }
 
     #[test]

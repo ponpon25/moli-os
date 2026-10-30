@@ -34,6 +34,7 @@ const SHARED = [
   'maison-dashboard',
   'maison-dashboard-off',
   'maison-dashboard-on',
+  'maison-dashboard-apart',
   'maison-rooms-hidden',
   'maison-rooms-extra',
 ];
@@ -186,6 +187,13 @@ export function powerKey(d) {
   return p?.key ?? null;
 }
 
+/** A dimmer with no on/off point of its own (a Z-Wave multilevel switch):
+ *  its level is the switch, 0 meaning off. */
+export function levelKey(d) {
+  if (!d || powerKey(d)) return null;
+  return d.points.find((p) => p.semantic === 'brightness' && p.kind?.type === 'numeric' && p.access?.write)?.key ?? null;
+}
+
 const truthy = (v) => v === true || v === 'ON' || v === 'on' || v === 1;
 
 /** Really on, now. An unreachable device is not (a bulb cut at the wall
@@ -195,6 +203,8 @@ export function isOn(id, point = null) {
   const d = device(id);
   if (!d || d.online === false) return false;
   if (!point && isGroup(d) && d.members?.length) return d.members.some((m) => m !== id && isOn(m));
+  const lv = point ? null : levelKey(d);
+  if (lv) return Number(value(id, lv)) > 0;
   const key = point ?? powerKey(d);
   return key ? truthy(value(id, key)) : false;
 }
@@ -219,7 +229,7 @@ export function unpowered(id) {
 }
 
 export function pending(id, point = null) {
-  const key = point ?? powerKey(device(id));
+  const key = point ?? powerKey(device(id)) ?? levelKey(device(id));
   return key ? `${id}/${key}` in hub.pending : false;
 }
 
@@ -291,6 +301,7 @@ export function deviceKind(d) {
   if (has(d, 'playing', true) && has(d, 'volume')) return 'speaker';
   if (has(d, 'percent_control') || (has(d, 'control', true) && d.points.find((p) => p.key === 'control')?.kind.values?.includes('open')))
     return 'cover';
+  if (levelKey(d)) return 'light';
   if (powerKey(d)) {
     if (isGroup(d)) return 'group';
     if (isFixture(d)) return 'light';
@@ -430,8 +441,35 @@ function humanError(message) {
   return message;
 }
 
+const lastLevel = new Map();
+
+/** Switches a light on or off, whatever its power point is (a bool, « ON »,
+ *  or the level of a dimmer that has no switch). */
+export function setPower(d, on, label) {
+  const lv = levelKey(d);
+  if (lv) {
+    const now = Number(value(d.id, lv)) || 0;
+    if (now > 0) lastLevel.set(d.id, now);
+    const max = d.points.find((p) => p.key === lv)?.kind?.max ?? 100;
+    return act(`${d.id}/${lv}`, on ? (lastLevel.get(d.id) ?? max) : 0, label);
+  }
+  const key = powerKey(d);
+  if (key) return act(`${d.id}/${key}`, typeof value(d.id, key) === 'string' ? (on ? 'ON' : 'OFF') : on, label);
+}
+
+/** The point that dims a light: its brightness, or the level of a dimmer. */
+export const dimKey = (d) => levelKey(d) ?? (d?.points.some((p) => p.key === 'brightness' && p.access?.write) ? 'brightness' : null);
+
 export function toggle(id, label, point = null) {
   const d = device(id);
+  const lv = point ? null : levelKey(d);
+  if (lv) {
+    // Off is level 0; back on, the level it had (or full).
+    const now = Number(value(id, lv)) || 0;
+    if (now > 0) lastLevel.set(id, now);
+    const max = d.points.find((p) => p.key === lv)?.kind?.max ?? 100;
+    return act(`${id}/${lv}`, now > 0 ? 0 : (lastLevel.get(id) ?? max), label ?? nameOf(id));
+  }
   const key = point ?? powerKey(d);
   if (!key) return;
   const current = value(id, key);

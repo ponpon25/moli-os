@@ -19,10 +19,11 @@ use crate::caller::Caller;
 pub(crate) struct PrefsFile(pub(crate) Option<PathBuf>);
 
 /// The keys the dashboard shares across devices.
-const KEYS: [&str; 5] = [
+const KEYS: [&str; 6] = [
     "maison-dashboard",
     "maison-dashboard-off",
     "maison-dashboard-on",
+    "maison-dashboard-apart",
     "maison-rooms-hidden",
     "maison-rooms-extra",
 ];

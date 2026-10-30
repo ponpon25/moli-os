@@ -3,7 +3,7 @@
 // the settings list them, so both read this catalogue.
 
 import { home, hub, deviceKind, nameOf, device } from './home.svelte.js';
-import { dash, tileOf, setTile, onDashboard, showOnDashboard } from './layout.svelte.js';
+import { dash, tileOf, setTile, onDashboard, showOnDashboard, isApart } from './layout.svelte.js';
 import { t } from '../../lib/i18n.svelte.js';
 import { energy } from './energy-live.svelte.js';
 
@@ -115,7 +115,7 @@ export function catalogue() {
   });
   // Every other device the family chose to show, after the rest.
   Object.values(hub.devices)
-    .filter((d) => !byDefault(d) && !isAlarm(d) && onDashboard(d.id, false))
+    .filter((d) => !isAlarm(d) && (isApart(d.id) ? onDashboard(d.id, true) : !byDefault(d) && onDashboard(d.id, false)))
     .sort((a, b) => nameOf(a.id).localeCompare(nameOf(b.id)))
     .forEach((d, k) => {
       const id = DEV + d.id;

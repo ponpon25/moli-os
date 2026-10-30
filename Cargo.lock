@@ -1600,6 +1600,7 @@ dependencies = [
  "moli-unifi",
  "moli-verisure",
  "moli-weather",
+ "moli-wiz",
  "moli-z2m",
  "moli-zwave",
  "rusqlite",
@@ -1857,6 +1858,20 @@ dependencies = [
  "http",
  "http-body-util",
  "moli-net",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "moli-wiz"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-core",
+ "moli-i18n",
+ "moli-runtime",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

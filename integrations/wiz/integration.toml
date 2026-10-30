@@ -1,0 +1,23 @@
+[integration]
+id = "wiz"
+name = "WiZ (ampoules, bandeaux LED)"
+brands = ["WiZ"]
+models = ["ESP03_SHRGB1W_01"]
+transport = "udp"
+driver = "wiz"
+crate = "moli-wiz"
+
+[discovery]
+# No discovery: the instance gives the lamp's address.
+mdns = []
+ssdp = []
+ports = [38899]
+
+[needs]
+secrets = []
+vars = []
+options = ["host"]
+
+[origin]
+reused = "aucun code repris : API UDP locale de WiZ (getSystemConfig, getPilot, setPilot), telle que pywizlight la documente"
+author = "agent"

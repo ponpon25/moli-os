@@ -72,7 +72,7 @@ Le hub l'appelle quand une surface demande une image : rien n'est récupéré po
 ```toml
 [[driver]]
 id = "enceinte"         # non vide, sans ':' ni '/', unique ; réservés : core, assistant, automations, lumieres, portes
-kind = "sonos"          # z2m, zwave, hue, tuya, reolink, sonos, philips, frigate, bambu, tapo, igd, rfxtrx, helpers, profile
+kind = "sonos"          # z2m, zwave, hue, tuya, reolink, sonos, philips, frigate, bambu, tapo, wiz, igd, rfxtrx, helpers, profile
 # enabled = false       # désactive l'instance sans la supprimer
 
 [driver.options]        # s'applique au [[driver]] qui précède ; clés inconnues refusées
@@ -348,6 +348,16 @@ name = "Bambu A1"              # optionnel
 - **Adresse qui change** : comme les profils (`profils.md`, « Une adresse qui change », même `moli_net::lan::relocate`, même `data/addresses.json`) : injoignable (3 relevés en marche, ou au démarrage), l'ampoule est cherchée par sa MAC (retenue, sinon celle de `mac`) ; une candidate n'est prise que si elle réussit la poignée de main KLAP avec la clé du compte (`handshake1` prouve que l'appareil la connaît avant que Moli envoie quoi que ce soit) **et** donne le même `device_id`. Journal « retrouvé à une nouvelle adresse ». Une autre ampoule à une adresse apprise n'est jamais prise ; à l'adresse de la config, jamais seule quand la MAC de la sienne est connue (coupée au mur des heures, c'est normal, et toutes les ampoules du compte réussissent la poignée de main) : pour remplacer une ampoule à la même adresse, donner sa MAC dans `mac`. Une adresse ou une MAC changée par une personne est obéie. Tant qu'elle est introuvable, chaque minute : l'adresse où elle a répondu la dernière fois, puis celle de la config. En marche, un autre `device_id` à l'adresse arrête le pilote (relancé, il cherche).
 - **Pièges** : ampoule coupée au mur : statut `waiting` et nouvel essai chaque minute. Session expirée : une nouvelle poignée de main, une fois. Un changement de teinte/saturation remet `color_temp` à 0 (et inversement côté appareil).
 - **Tests** : session KLAP identique **octet par octet** à python-kasa ; lecture de `get_device_info`.
+
+## `wiz` : ampoules et bandeaux LED WiZ (`crates/moli-wiz`)
+
+- **Couvre** : marche/arrêt, luminosité, blancs (température), couleur.
+- **Protocole** : 100 % local, JSON en UDP (port 38899), sans compte ni clé (la « communication locale » de l'app WiZ doit rester permise) : `getSystemConfig` (MAC, module), `getPilot` (état, interrogé toutes les 5 s), `setPilot` (ordres). Trois essais de 800 ms par requête (UDP).
+- **Configuration** : `host`, `port` (38899 par défaut), `name` (la lampe ne garde pas de nom sur le réseau).
+- **Points** : `on`, `brightness` (10-100 % ; l'écrire allume la lampe), et selon le module (`moduleName`) : `color_temp` (2200-6500 K, modules `TW` et `RGB`), `color` (« #rrggbb », modules `RGB`). En blanc la lampe dit `temp`, en couleur `r`, `g`, `b` : seul le point du mode en cours est mis à jour.
+- **Identité** : la MAC (`getSystemConfig`), à défaut l'adresse `host`. Une autre MAC à l'adresse arrête le pilote.
+- **Pièges** : lampe coupée au mur : statut `waiting` et nouvel essai chaque minute. Pas de découverte : réserver l'adresse sur la box. Une lampe déjà dans Apple Maison en direct est à masquer du pont HomeKit de Moli.
+- **Tests** : lecture de `getPilot` (couleur, blanc), encodage des ordres (bornes WiZ, couleur), capacités selon le module.
 
 ## `igd` : box internet (`crates/moli-igd`)
 
@@ -626,6 +636,7 @@ ni pièce native). Il ne déplace jamais rien. Sans argument : plan à blanc ; `
 | `bambu` | `moli-bambu` | MQTT TLS 8883, épinglé | lumière, `control` (humain pour un agent) | pas encore (cible : Bambu Lab A1) |
 | `moonraker` | `moli-moonraker` | HTTP local 7125 | lumière, `control` (humain pour un agent) | Snapmaker U1 |
 | `tapo` | `moli-tapo` | HTTP 80 + KLAP v2 | oui : tout | pas encore (cible : Tapo L530) |
+| `wiz` | `moli-wiz` | UDP 38899, JSON local | oui : tout | pas encore (cible : bandeau LED WiZ couleur) |
 | `igd` | `moli-igd` | UPnP IGD (SSDP + SOAP) | non | Livebox |
 | `ipp` | `moli-ipp` | IPP 2.0 HTTP 631 | identifier, annuler, imprimer (tableau de bord) | Canon MG3600 |
 | `host` | `moli-host` | /proc, /sys ; WoL ; agent HTTP sortant | allumer, éteindre, veille, Claude et Codex pour le téléphone (PIN) | hôte Linux ; PC Windows avec l'agent |

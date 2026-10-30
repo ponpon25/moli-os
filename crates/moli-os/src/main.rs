@@ -907,6 +907,7 @@ const KINDS: &[&str] = &[
     "hue",
     "igd",
     "tapo",
+    "wiz",
     "philips",
     "frigate",
     "bambu",
@@ -1074,6 +1075,9 @@ fn build_driver(
             config.options.clone().try_into().with_context(context)?,
         )),
         "tapo" => Arc::new(moli_tapo::Tapo::new(
+            config.options.clone().try_into().with_context(context)?,
+        )),
+        "wiz" => Arc::new(moli_wiz::Wiz::new(
             config.options.clone().try_into().with_context(context)?,
         )),
         "philips" => Arc::new(moli_philips::Philips::new(

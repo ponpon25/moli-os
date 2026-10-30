@@ -294,7 +294,11 @@ async fn handle(hub: &Hub, alexa: &Alexa, request: &Json) -> Json {
     let snapshot = hub.snapshot();
     let endpoints = endpoints(&snapshot.devices, |v| alexa.exposed(v, &snapshot.drivers));
     match (namespace, name) {
-        ("Alexa.Discovery", "Discover") => discovery(&endpoints),
+        ("Alexa.Discovery", "Discover") => {
+            let names: Vec<&str> = endpoints.iter().map(|e| e.name.as_str()).collect();
+            tracing::info!(count = names.len(), names = ?names, "alexa: discovery");
+            discovery(&endpoints)
+        }
         ("Alexa.Authorization", "AcceptGrant") => json!({
             "event": {
                 "header": header("Alexa.Authorization", "AcceptGrant.Response", None),
@@ -317,7 +321,9 @@ async fn handle(hub: &Hub, alexa: &Alexa, request: &Json) -> Json {
                 // Asleep: only « switch on » reaches it (a TV wakes up).
                 return error(id, correlation, "ENDPOINT_UNREACHABLE", "offline");
             }
-            match order(hub, endpoint, namespace, name, &directive["payload"]).await {
+            let result = order(hub, endpoint, namespace, name, &directive["payload"]).await;
+            tracing::info!(endpoint = %endpoint.name, directive = %format!("{namespace}.{name}"), ok = result.is_ok(), "alexa: a directive");
+            match result {
                 Ok(()) => answer(endpoint, "Response", correlation),
                 Err((kind, message)) => error(id, correlation, kind, &message),
             }

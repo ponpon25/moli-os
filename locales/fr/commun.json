@@ -313,8 +313,6 @@
   "commun.garage.ouvrir": "Ouvrir la porte",
   "commun.garage.fermer": "Fermer la porte",
   "commun.garage.arreter": "Arrêter",
-  "commun.garage.glisser_ouvrir": "Glisser pour ouvrir",
-  "commun.garage.glisser_fermer": "Glisser pour fermer",
   "commun.garage.injoignable": "Relais injoignable",
   "commun.garage.supposee": "Position supposée",
   "commun.garage.supposee_aide": "Pas de capteur sur la porte : Moli suit les appuis et la durée de course.",

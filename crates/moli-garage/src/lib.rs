@@ -8,7 +8,8 @@
 //! the wall button's, seen as the relay closing without having been asked)
 //! and the travel time: the position is then a belief, said as such
 //! (`assumed`). With a sensor (`contact`, true when closed), the door's
-//! own word wins.
+//! own word wins: shut, or open (it is never shown half-way), whoever
+//! moved it, the remote and the button in the garage included.
 //!
 //! Moli runs it as instance [`INSTANCE`] whenever `moli.toml` declares doors:
 //!
@@ -40,8 +41,9 @@ pub const INSTANCE: &str = "portes";
 const BETWEEN: Duration = Duration::from_millis(1500);
 /// The relay closing this long after Moli's own press is that press.
 const ECHO: Duration = Duration::from_secs(4);
-/// A relay that does not open by itself is opened after this.
-const RELEASE: Duration = Duration::from_millis(1500);
+/// A relay that does not open by itself is opened after this: the motor's
+/// button is a push, never a held contact.
+const RELEASE: Duration = Duration::from_millis(500);
 
 /// One door, as `moli.toml` declares it.
 #[derive(Clone, Debug, Deserialize)]
@@ -213,9 +215,10 @@ fn sensed(belief: Belief, closed: bool) -> Belief {
             phase: Phase::Closed,
             last_up: false,
         },
-        // Open while Moli thought it shut: someone opened it.
+        // Not shut while Moli thought it was (the remote, the button in the
+        // garage): it is open, no matter how far.
         (false, Phase::Closed) => Belief {
-            phase: Phase::Opening,
+            phase: Phase::Open,
             last_up: true,
         },
         (false, _) => belief,
@@ -322,7 +325,12 @@ enum Next {
 }
 
 fn publish(ctx: &DriverCtx, door: &Door, live: &Live) {
-    ctx.set_state(&live.id, "state", Value::from(live.belief.phase.word()));
+    // With a sensor the door is shut or it is not: no half-way to show.
+    let phase = match live.belief.phase {
+        Phase::Stopped if door.contact.is_some() => Phase::Open,
+        phase => phase,
+    };
+    ctx.set_state(&live.id, "state", Value::from(phase.word()));
     ctx.set_state(&live.id, "target", Value::from(live.belief.target()));
     ctx.set_state(&live.id, "assumed", Value::Bool(door.contact.is_none()));
     ctx.set_state(
@@ -366,23 +374,27 @@ impl Garage {
                 .await
                 .map_err(|e| e.to_string())?;
             moved(ctx, door, live, live.belief.press());
-            // A relay that stays closed is released (most open by themselves).
-            let hub = self.hub.clone();
-            let point = door.relay_point();
-            let actor = actor.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(RELEASE).await;
-                if hub
-                    .state(&point)
-                    .is_some_and(|s| s.value == Value::Bool(true))
-                {
-                    let _ = hub
-                        .command(&point, Value::Bool(false), Origin::System, Some(actor))
-                        .await;
-                }
-            });
+            self.release(door, &actor);
         }
         Ok(())
+    }
+
+    /// A relay that stays closed is released (most open by themselves).
+    fn release(&self, door: &Door, actor: &str) {
+        let hub = self.hub.clone();
+        let point = door.relay_point();
+        let actor = actor.to_owned();
+        tokio::spawn(async move {
+            tokio::time::sleep(RELEASE).await;
+            if hub
+                .state(&point)
+                .is_some_and(|s| s.value == Value::Bool(true))
+            {
+                let _ = hub
+                    .command(&point, Value::Bool(false), Origin::System, Some(actor))
+                    .await;
+            }
+        });
     }
 
     async fn command(&self, ctx: &DriverCtx, lives: &mut [Live], command: CommandRequest) {
@@ -423,8 +435,12 @@ impl Garage {
             } else if door.relay_point() == *point && *value == Value::Bool(true) {
                 let ours = live.pressed.is_some_and(|t| t.elapsed() < ECHO);
                 if !ours {
-                    // The wall button: one press the motor saw too.
+                    // Someone closed the relay (a switch in HomeKit, the
+                    // wall button): one press the motor saw too, and it is
+                    // let go at once, like a push.
                     moved(ctx, door, live, live.belief.press());
+                    let actor = moli_i18n::tr!("pilotes.garage.acteur", name = door.name);
+                    self.release(door, &actor);
                 }
             }
         }
@@ -512,6 +528,14 @@ impl Driver for Garage {
                             if live.arrives.is_some_and(|t| t <= now) {
                                 live.arrives = None;
                                 live.belief = live.belief.arrived();
+                                // The sensor has the last word on a journey's end.
+                                if let Some(Value::Bool(closed)) = door
+                                    .contact_point()
+                                    .and_then(|p| self.hub.state(&p))
+                                    .map(|s| s.value)
+                                {
+                                    live.belief = sensed(live.belief, closed);
+                                }
                                 publish(ctx, door, live);
                             }
                         }
@@ -572,9 +596,12 @@ mod tests {
     #[test]
     fn the_sensor_wins() {
         assert_eq!(sensed(at(Phase::Opening, true), true).phase, Phase::Closed);
+        // Not shut, whoever opened it: open.
+        assert_eq!(sensed(at(Phase::Closed, false), false).phase, Phase::Open);
+        // Still moving: the sensor does not cut the journey short.
         assert_eq!(
-            sensed(at(Phase::Closed, false), false).phase,
-            Phase::Opening
+            sensed(at(Phase::Closing, false), false).phase,
+            Phase::Closing
         );
         assert_eq!(sensed(at(Phase::Open, true), false).phase, Phase::Open);
     }

@@ -313,8 +313,6 @@
   "commun.garage.ouvrir": "Open the door",
   "commun.garage.fermer": "Close the door",
   "commun.garage.arreter": "Stop",
-  "commun.garage.glisser_ouvrir": "Slide to open",
-  "commun.garage.glisser_fermer": "Slide to close",
   "commun.garage.injoignable": "Relay unreachable",
   "commun.garage.supposee": "Assumed position",
   "commun.garage.supposee_aide": "No sensor on the door: Moli follows the presses and the travel time.",

@@ -23,6 +23,8 @@ const TRIES: usize = 3;
 /// WiZ's own bounds.
 const DIM: (i64, i64) = (10, 100);
 const TEMP: (i64, i64) = (2200, 6500);
+/// How close (squared, channels 0–1) a colour must be to a white to be one.
+const NEAR: f64 = 0.01;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -182,8 +184,64 @@ fn rgb(text: &str) -> Option<(u8, u8, u8)> {
     Some((byte(0)?, byte(2)?, byte(4)?))
 }
 
+/// A white as a lamp of `kelvin` shows it (Tanner Helland's fit), each
+/// channel 0–1, the strongest at 1.
+#[allow(clippy::cast_precision_loss)]
+fn white_rgb(kelvin: i64) -> [f64; 3] {
+    let t = kelvin as f64 / 100.0;
+    let (r, g) = if t <= 66.0 {
+        (255.0, 99.470_802_586_1 * t.ln() - 161.119_568_166_1)
+    } else {
+        (
+            329.698_727_446 * (t - 60.0).powf(-0.133_204_759_2),
+            288.122_169_528_3 * (t - 60.0).powf(-0.075_514_849_2),
+        )
+    };
+    let b = if t >= 66.0 {
+        255.0
+    } else if t <= 19.0 {
+        0.0
+    } else {
+        138.517_731_223_1 * (t - 10.0).ln() - 305.044_792_730_7
+    };
+    let rgb = [r, g, b].map(|c: f64| c.clamp(0.0, 255.0));
+    let max = rgb.iter().copied().fold(1.0, f64::max);
+    rgb.map(|c| c / max)
+}
+
+/// The white a colour stands for, if it is one: HomeKit's presets are
+/// whites given as pale colours, which the colour LEDs alone render badly.
+fn white_of(r: u8, g: u8, b: u8) -> Option<i64> {
+    let max = f64::from(r.max(g).max(b));
+    if max == 0.0 {
+        return None;
+    }
+    let colour = [r, g, b].map(|v| f64::from(v) / max);
+    let distance = |kelvin| {
+        white_rgb(kelvin)
+            .iter()
+            .zip(colour)
+            .map(|(w, c)| (w - c).powi(2))
+            .sum::<f64>()
+    };
+    (TEMP.0..=TEMP.1)
+        .step_by(100)
+        .map(|kelvin| (kelvin, distance(kelvin)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .filter(|(_, d)| *d < NEAR)
+        .map(|(kelvin, _)| kelvin)
+}
+
+/// A colour for the strip: its white part on the white LEDs (cold `c` for
+/// a cool tint, warm `w` otherwise), the rest on the colour ones.
+fn colour_params(r: u8, g: u8, b: u8) -> Json {
+    let white = r.min(g).min(b);
+    let (warm, cold) = if r >= b { (white, 0) } else { (0, white) };
+    json!({ "r": r - white, "g": g - white, "b": b - white, "c": cold, "w": warm })
+}
+
 /// `getPilot`'s result as points: a lamp in white mode says `temp`, in
-/// colour mode `r`, `g`, `b`.
+/// colour mode `r`, `g`, `b` (and its white LEDs `c`, `w`).
 fn values(pilot: &Json) -> Vec<(&'static str, Value)> {
     let mut out = Vec::new();
     if let Some(on) = pilot["state"].as_bool() {
@@ -197,7 +255,9 @@ fn values(pilot: &Json) -> Vec<(&'static str, Value)> {
         _ => {
             let channel = |c: &str| pilot[c].as_i64();
             if let (Some(r), Some(g), Some(b)) = (channel("r"), channel("g"), channel("b")) {
-                out.push(("color", Value::from(hex(r, g, b).as_str())));
+                let white = channel("c").unwrap_or(0).max(channel("w").unwrap_or(0));
+                let colour = hex(r + white, g + white, b + white);
+                out.push(("color", Value::from(colour.as_str())));
             }
         }
     }
@@ -228,10 +288,14 @@ fn order(key: &str, value: &Value) -> anyhow::Result<(Json, Vec<(&'static str, V
         ("color", Value::Text(text)) => {
             let (r, g, b) =
                 rgb(text).with_context(|| moli_i18n::tr!("pilotes.wiz.couleur_invalide"))?;
-            (
-                json!({ "r": r, "g": g, "b": b }),
-                vec![("color", Value::from(text.to_lowercase().as_str()))],
-            )
+            let asked = ("color", Value::from(text.to_lowercase().as_str()));
+            match white_of(r, g, b) {
+                Some(temp) => (
+                    json!({ "temp": temp }),
+                    vec![asked, ("color_temp", Value::Int(temp))],
+                ),
+                None => (colour_params(r, g, b), vec![asked]),
+            }
         }
         (key, _) => bail!(moli_i18n::tr!("pilotes.wiz.ne_se_regle_pas", point = key)),
     })
@@ -354,7 +418,24 @@ mod tests {
         );
         assert_eq!(changed[0], ("on", Value::Bool(true)));
         let (params, _) = order("color", &Value::from("#FF7A00")).unwrap();
-        assert_eq!(params, json!({"r": 255, "g": 122, "b": 0}));
+        assert_eq!(params, json!({"r": 255, "g": 122, "b": 0, "c": 0, "w": 0}));
+        // HomeKit's presets: whites as pale colours (hue °, saturation %).
+        let preset = |hex: &str| order("color", &Value::from(hex)).unwrap().0;
+        assert_eq!(preset("#ffe0c4"), json!({"temp": 4700}), "28°, 23 %");
+        assert_eq!(preset("#ffc285"), json!({"temp": 3400}), "30°, 48 %");
+        assert_eq!(preset("#ffaa54"), json!({"temp": 2700}), "30°, 67 %");
+        assert_eq!(preset("#f5f2ff"), json!({"temp": 6400}), "251°, 5 %");
+        // A pale blue that is no white: its white part on the cold LEDs.
+        assert_eq!(
+            preset("#ccdcff"),
+            json!({"r": 0, "g": 16, "b": 51, "c": 204, "w": 0})
+        );
+        // Read back, the white LEDs count again.
+        let v: std::collections::HashMap<_, _> =
+            values(&json!({"r": 0, "g": 16, "b": 51, "c": 204, "w": 0}))
+                .into_iter()
+                .collect();
+        assert_eq!(v["color"], Value::from("#ccdcff"));
         let (params, _) = order("color_temp", &Value::Int(9000)).unwrap();
         assert_eq!(params, json!({"temp": 6500}));
         assert!(order("color", &Value::from("orange")).is_err());

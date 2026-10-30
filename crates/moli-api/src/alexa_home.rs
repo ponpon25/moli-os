@@ -274,7 +274,7 @@ pub(crate) async fn choose(
 }
 
 /// Compared through their digests: no early exit on the first difference.
-fn token_matches(expected: Option<&str>, given: Option<&str>) -> bool {
+pub(crate) fn token_matches(expected: Option<&str>, given: Option<&str>) -> bool {
     let (Some(expected), Some(given)) = (expected, given) else {
         return false;
     };

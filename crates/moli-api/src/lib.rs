@@ -26,6 +26,7 @@ mod integrations;
 mod limit;
 mod machines;
 mod mcp;
+mod netatmo_hook;
 mod people;
 mod people_api;
 mod whereabouts;
@@ -137,6 +138,8 @@ pub struct Options {
     pub homekit: Option<moli_homekit::HomeKit>,
     /// The Alexa Smart Home skill, when `[alexa]` is configured.
     pub alexa: Option<AlexaConfig>,
+    /// Where Netatmo's pushes land, when a `netatmo` driver runs.
+    pub netatmo: Option<moli_netatmo::Hook>,
 }
 
 /// Builds the complete HTTP application. Live streams end when `shutdown`
@@ -290,6 +293,7 @@ fn people(
             .map(std::net::IpAddr::to_canonical)
             .collect(),
         alexa: options.alexa.clone(),
+        netatmo: options.netatmo.is_some(),
     };
     (Arc::new(humans), gate, persons)
 }
@@ -322,6 +326,7 @@ fn assistant_routes() -> Router<Hub> {
         .route("/api/assistant/key", put(assistant::set_key))
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn router(hub: Hub, shutdown: CancellationToken, options: &Options) -> Router {
     let allowed = guard::AllowedHosts::new(&options.allowed_hosts);
     let (humans, gate, persons) = people(&hub, options);
@@ -331,6 +336,7 @@ pub fn router(hub: Hub, shutdown: CancellationToken, options: &Options) -> Route
         .route("/api/media/{name}", get(rest::media))
         .route("/api/command", post(rest::command))
         .route("/api/alexa", post(alexa_home::directive))
+        .route("/api/netatmo/{token}", post(netatmo_hook::push))
         .route("/api/ambiances", get(rest::ambiances))
         .route("/api/ambiance", post(rest::ambiance))
         .route("/api/labels/{id}", put(rest::set_label))
@@ -410,6 +416,9 @@ pub fn router(hub: Hub, shutdown: CancellationToken, options: &Options) -> Route
                 Arc::new(alexa_home::Alexa::open(config, data_dir))
             },
         ))))
+        .layer(Extension(netatmo_hook::NetatmoGate(
+            options.netatmo.clone(),
+        )))
         .layer(Extension(humans))
         .layer(Extension(persons))
         .layer(DefaultBodyLimit::max(BODY))

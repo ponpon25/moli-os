@@ -24,6 +24,7 @@ moli-reolink.workspace = true
 moli-unifi.workspace = true
 moli-verisure.workspace = true
 moli-hitachi.workspace = true
+moli-netatmo.workspace = true
 moli-sonos.workspace = true
 moli-bambu.workspace = true
 moli-esphome.workspace = true

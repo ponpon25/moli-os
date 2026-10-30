@@ -15,6 +15,7 @@ moli-history.workspace = true
 moli-host.workspace = true
 moli-homekit.workspace = true
 moli-phones.workspace = true
+moli-netatmo.workspace = true
 moli-energy.workspace = true
 moli-assistant.workspace = true
 moli-automation.workspace = true

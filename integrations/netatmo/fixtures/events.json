@@ -1,0 +1,13 @@
+{
+  "body": {
+    "home": {
+      "id": "5e0000000000000000000001",
+      "events": [
+        {"id": "e3", "type": "incoming_call", "time": 1700000300, "module_id": "aa:bb:cc:dd:ee:ff", "message": "Sonnette"},
+        {"id": "e2", "type": "human", "time": 1700000200, "module_id": "aa:bb:cc:dd:ee:ff"},
+        {"id": "e1", "type": "missed_call", "time": 1700000100, "module_id": "aa:bb:cc:dd:ee:ff"}
+      ]
+    }
+  },
+  "status": "ok"
+}

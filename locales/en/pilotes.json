@@ -596,5 +596,14 @@
   "pilotes.garage.acteur": "door {name}",
   "pilotes.garage.inconnue": "unknown door",
   "pilotes.garage.ordre_inconnu": "unknown order for a garage door",
-  "pilotes.garage.course": "Travel time"
+  "pilotes.garage.course": "Travel time",
+  "pilotes.netatmo.sonnerie": "Ring",
+  "pilotes.netatmo.visiteur": "Visitor",
+  "pilotes.netatmo.dernier_evenement": "Last event",
+  "pilotes.netatmo.identifiants_manquants": "Netatmo credentials missing: store `client_id`, `client_secret` and `refresh_token` with `moli-os secrets set {instance} <name>` (value through a pipe), and restart",
+  "pilotes.netatmo.connexion_refusee": "Netatmo refused the credentials ({why}): make a new token on dev.netatmo.com, store it (`secrets set {instance} refresh_token`), then `moli-os secrets forget {instance} login_locked` and restart (no other attempt is made)",
+  "pilotes.netatmo.connexion_suspendue": "sign-in suspended after Netatmo refused: make a new token, then `moli-os secrets forget {instance} login_locked` and restart",
+  "pilotes.netatmo.coffre_indisponible": "secret store unavailable",
+  "pilotes.netatmo.coffre_requis": "the Netatmo driver needs the secret store: {problem}",
+  "pilotes.netatmo.lecture_seule": "the doorbell takes no orders"
 }

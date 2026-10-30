@@ -1,0 +1,32 @@
+[integration]
+id = "netatmo"
+name = "Sonnette vidéo Netatmo (compte Netatmo Connect)"
+brands = ["Netatmo", "Legrand"]
+models = ["Smart Video Doorbell"]
+transport = "https"
+driver = "netatmo"
+crate = "moli-netatmo"
+
+[discovery]
+# No discovery on the LAN: the doorbells are listed by the owner's account.
+mdns = []
+ssdp = []
+ports = [443]
+
+[needs]
+# client_id, client_secret (the app made on dev.netatmo.com) and refresh_token (its token
+# generator, scope read_doorbell): typed by a person, stored with `moli-os secrets set`.
+secrets = ["client_id", "client_secret", "refresh_token"]
+vars = []
+options = []
+
+[origin]
+reused = "aucun code repris ; API Netatmo Connect (Security) ; fixtures fictives"
+author = "agent"
+
+# Replayed by the crate's tests (crates/moli-netatmo/src).
+[[fixture]]
+file = "fixtures/homesdata.json"
+
+[[fixture]]
+file = "fixtures/events.json"

@@ -1,0 +1,15 @@
+{
+  "body": {
+    "homes": [
+      {
+        "id": "5e0000000000000000000001",
+        "name": "Maison",
+        "modules": [
+          {"id": "aa:bb:cc:dd:ee:ff", "type": "NDB", "name": "Sonnette"},
+          {"id": "aa:bb:cc:dd:ee:fe", "type": "NACamera", "name": "Autre"}
+        ]
+      }
+    ]
+  },
+  "status": "ok"
+}

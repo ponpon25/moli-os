@@ -378,6 +378,7 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
         household: Some(household),
         phones: gates.phones,
         machines: gates.machines,
+        netatmo: gates.netatmo,
         weather: weather(&config),
         homekit,
         alexa: config.alexa.clone(),
@@ -916,6 +917,7 @@ const KINDS: &[&str] = &[
     "unifi",
     "verisure",
     "hitachi",
+    "netatmo",
     "tuya",
     "helpers",
     "presence",
@@ -1004,6 +1006,7 @@ fn spawn_household(
 struct Gateways {
     phones: Option<moli_phones::Gateway>,
     machines: Option<moli_host::agents::Agents>,
+    netatmo: Option<moli_netatmo::Hook>,
 }
 
 fn spawn_drivers(
@@ -1021,6 +1024,12 @@ fn spawn_drivers(
                 let (gateway, phones_driver) = moli_phones::open(options, &config.server.data_dir)?;
                 gates.phones = Some(gateway);
                 Arc::new(phones_driver)
+            }
+            "netatmo" => {
+                let options = driver.options.clone().try_into().with_context(context)?;
+                let (hook, netatmo) = moli_netatmo::Netatmo::open(options, &driver.id);
+                gates.netatmo = Some(hook);
+                Arc::new(netatmo)
             }
             "host" => {
                 let options = driver.options.clone().try_into().with_context(context)?;
@@ -1040,6 +1049,7 @@ fn spawn_drivers(
     Ok((tasks, gates))
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_driver(
     config: &DriverConfig,
     data_dir: &std::path::Path,
@@ -1097,6 +1107,9 @@ fn build_driver(
             config.options.clone().try_into().with_context(context)?,
         )),
         "hitachi" => Arc::new(moli_hitachi::Hitachi::new(
+            config.options.clone().try_into().with_context(context)?,
+        )),
+        "netatmo" => Arc::new(moli_netatmo::Netatmo::new(
             config.options.clone().try_into().with_context(context)?,
         )),
         "unifi" => Arc::new(moli_unifi::Unifi::new(

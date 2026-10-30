@@ -596,5 +596,14 @@
   "pilotes.garage.acteur": "porte {name}",
   "pilotes.garage.inconnue": "porte inconnue",
   "pilotes.garage.ordre_inconnu": "ordre inconnu pour une porte de garage",
-  "pilotes.garage.course": "Durée de course"
+  "pilotes.garage.course": "Durée de course",
+  "pilotes.netatmo.sonnerie": "Sonnerie",
+  "pilotes.netatmo.visiteur": "Visiteur",
+  "pilotes.netatmo.dernier_evenement": "Dernier événement",
+  "pilotes.netatmo.identifiants_manquants": "identifiants Netatmo manquants : ranger `client_id`, `client_secret` et `refresh_token` avec `moli-os secrets set {instance} <nom>` (valeur par un tube), et redémarrer",
+  "pilotes.netatmo.connexion_refusee": "Netatmo refuse les identifiants ({why}) : refaire un jeton sur dev.netatmo.com, le ranger (`secrets set {instance} refresh_token`), puis `moli-os secrets forget {instance} login_locked` et redémarrer (aucune autre tentative n'est faite)",
+  "pilotes.netatmo.connexion_suspendue": "connexion suspendue après un refus de Netatmo : refaire un jeton, puis `moli-os secrets forget {instance} login_locked` et redémarrer",
+  "pilotes.netatmo.coffre_indisponible": "coffre de secrets indisponible",
+  "pilotes.netatmo.coffre_requis": "le pilote Netatmo a besoin du coffre de secrets : {problem}",
+  "pilotes.netatmo.lecture_seule": "la sonnette ne reçoit aucun ordre"
 }

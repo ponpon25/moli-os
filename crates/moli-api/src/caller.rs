@@ -46,6 +46,9 @@ pub(crate) enum Via {
     /// The Alexa skill's relay (AWS Lambda), with the shared token: it
     /// reaches one route only (`/api/alexa`), where the token is checked.
     Alexa,
+    /// Netatmo's servers pushing an event, to one route only
+    /// (`/api/netatmo/{token}`), where the token is checked.
+    Netatmo,
 }
 
 /// What [`identify`] needs: the Access verifier, and whether this house is
@@ -59,6 +62,8 @@ pub(crate) struct Gate {
     pub(crate) proxies: Arc<[IpAddr]>,
     /// The Alexa skill (`[alexa]`): its route, and the name only it answers on.
     pub(crate) alexa: Option<crate::alexa_home::AlexaConfig>,
+    /// A `netatmo` driver runs: its push route is open to the Internet.
+    pub(crate) netatmo: bool,
 }
 
 /// What a guest may reach: the dashboard, what it reads of its rooms (the
@@ -169,6 +174,7 @@ impl Caller {
             Via::Outside => "outside",
             Via::Phone => "phone",
             Via::Alexa => "alexa",
+            Via::Netatmo => "netatmo",
             Via::Visitor => "visitor",
             Via::Person => "person",
         }
@@ -313,7 +319,28 @@ fn phone_report(path: &str) -> Option<&str> {
         .then_some(id)
 }
 
+/// `/api/netatmo/{token}`: Netatmo's push (the token is the route's to check).
+fn netatmo_push(method: &Method, path: &str) -> bool {
+    *method == Method::POST
+        && path.strip_prefix("/api/netatmo/").is_some_and(|t| {
+            !t.is_empty()
+                && t.len() <= 128
+                && t.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+}
+
+/// Netatmo's servers, on their one route (the address's token is checked there).
+fn netatmo_caller() -> Caller {
+    Caller {
+        key: "netatmo".to_owned(),
+        via: Via::Netatmo,
+        person: None,
+    }
+}
+
 /// Middleware: identifies the caller and leaves it in the request.
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn identify(
     State(gate): State<Gate>,
     mut request: Request,
@@ -333,12 +360,18 @@ pub(crate) async fn identify(
         _ => None,
     };
     let mut caller = classify(peer, request.headers(), email, &gate.proxies);
-    // The name given to Amazon answers the skill's route, nothing else.
+    // The name given to Amazon answers the skill's route and Netatmo's push.
+    let (method, path) = (request.method(), request.uri().path());
+    let pushed = gate.netatmo && netatmo_push(method, path);
     let host = header(request.headers(), "host").unwrap_or_default();
     if crate::alexa_home::is_skill_host(gate.alexa.as_ref(), host)
-        && request.uri().path() != "/api/alexa"
+        && path != "/api/alexa"
+        && !pushed
     {
         return StatusCode::NOT_FOUND.into_response();
+    }
+    if caller.via == Via::Outside && pushed {
+        caller = netatmo_caller();
     }
     // The skill's relay carries the shared token (checked by the route).
     if caller.via == Via::Outside
@@ -442,6 +475,15 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_netatmos_push_route_is_recognised() {
+        assert!(netatmo_push(&Method::POST, "/api/netatmo/abcDEF-123_x"));
+        assert!(!netatmo_push(&Method::GET, "/api/netatmo/abc"));
+        assert!(!netatmo_push(&Method::POST, "/api/netatmo/"));
+        assert!(!netatmo_push(&Method::POST, "/api/netatmo/a/b"));
+        assert!(!netatmo_push(&Method::POST, "/api/command"));
+    }
+
     use super::*;
 
     fn headers(pairs: &[(&'static str, &str)]) -> HeaderMap {

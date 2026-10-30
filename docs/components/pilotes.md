@@ -474,6 +474,27 @@ pièces ; il commande ensuite les membres en origine `system` (journal : `lumina
 - **Pas encore** : recevoir (parler à Moli depuis Olvid).
 - **Vérifié** : encodage protobuf et trames gRPC par tests ; contre un vrai daemon : voir
   `integrations/olvid/README.md`.
+## `netatmo` : sonnette vidéo Netatmo, compte Netatmo Connect (`crates/moli-netatmo`)
+
+- **Passe par le cloud de Netatmo**, avec une application du propriétaire (dev.netatmo.com) : la sonnette
+  n'a pas d'API locale. Lecture seule.
+- **Session** : `POST /oauth2/token` (`refresh_token`) → jeton d'accès de 3 h. Le jeton de rafraîchissement
+  est à usage unique : le nouveau est rangé au coffre avant tout autre usage ; un refus (`login_locked`)
+  arrête le pilote jusqu'à ce qu'un humain le lève.
+- **Temps réel** : webhook de Netatmo. Avec `public_url` et le secret `webhook_token`, le pilote donne à
+  Netatmo `{public_url}/api/netatmo/{jeton}` (`POST /api/addwebhook`, redonné chaque heure). La route
+  (`crates/moli-api/src/netatmo_hook.rs`) est ouverte à Internet, mais ne fait que **réveiller** le pilote
+  (jeton comparé par empreintes, 404 sinon) : les événements sont relus par l'API signée, 2 s et 6 s
+  après la poussée aussi (la liste peut avoir un instant de retard). Sur le nom donné à Amazon
+  (`[alexa] host`), seules `/api/alexa` et cette route répondent.
+- **Filet** : `GET /api/getevents?home_id=…` toutes les 60 s avec webhook, 10 s sans (500
+  appels/heure/utilisateur : 8 s au plus bas), `GET /api/homestatus` toutes les 2 minutes pour la disponibilité. La première lecture ne fait
+  qu'enregistrer l'historique ; un événement de plus de 2 minutes (après une panne) est noté dans
+  `last_event` sans sonner.
+- **Points** : `ring` (impulsion à chaque appui : `incoming_call`), `visitor` (impulsion, personne vue),
+  `last_event` (type brut). Les automatisations réagissent à `ring` (carillon sur une enceinte, notification).
+- **Pas fait** : vidéo ; noms d'événements et webhook non confirmés sur une vraie sonnette.
+
 ## `hitachi` : climatiseurs Hitachi, compte airCloud Go (`crates/moli-hitachi`)
 
 - **Passe par le cloud de Hitachi**, avec le compte du foyer (l'appli *airCloud Go*). Les clims
@@ -611,6 +632,7 @@ ni pièce native). Il ne déplace jamais rien. Sans argument : plan à blanc ; `
 | `olvid` | `moli-olvid` | gRPC (HTTP/2) vers le daemon Olvid | `notify` (message), appairage | daemon Olvid 2.0 (voir README) |
 | `phones` | `moli-phones` | rapports HTTP de l'appli (jeton) | `notify` (notification) | iPhone (appli Moli) |
 | `telegram` | `moli-telegram` | HTTPS, API des bots | `notify` (message) | oui (API des bots) |
+| `netatmo` | `moli-netatmo` | REST du compte Netatmo Connect (cloud), lecture périodique | non (lecture) | pas encore (cible : Smart Video Doorbell) |
 | `hitachi` | `moli-hitachi` | REST + WebSocket STOMP du compte airCloud Go (cloud) | oui : marche, mode, consigne, vitesse | pas encore (cibles : RAK-DJ25RHAE, RAK-DJ35RHAE) |
 | `zwave` | `moli-zwave` | websocket local du serveur Z-Wave JS | oui, selon les valeurs | pas encore (cible : Qubino Flush 1D Relay) |
 | `rfxtrx` | `moli-rfxtrx` | série USB 38 400 bauds (SDK RFXtrx) | non | RFXtrx433E, sondes Oregon THGN132 |

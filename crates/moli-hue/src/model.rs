@@ -661,9 +661,12 @@ impl Index {
         let write = self.writes.get(&(device.clone(), Arc::from(key)))?;
         let (light, body) = match (write, value) {
             (Write::On { light }, Value::Bool(on)) => (light, json!({ "on": { "on": on } })),
-            (Write::Brightness { light }, v) => {
-                (light, json!({ "dimming": { "brightness": v.as_f64()? } }))
-            }
+            // A level asked of a lamp that is off lights it (the bridge
+            // ignores dimming alone on a lamp that is off), like Hue's app.
+            (Write::Brightness { light }, v) => (
+                light,
+                json!({ "on": { "on": true }, "dimming": { "brightness": v.as_f64()? } }),
+            ),
             #[allow(clippy::cast_possible_truncation)]
             (Write::Mirek { light }, v) => (
                 light,
@@ -887,6 +890,14 @@ mod tests {
             "/clip/v2/resource/light/00000000-0000-4000-8000-00000000015b"
         );
         assert_eq!(body, json!({"on": {"on": true}}));
+        let (_, body) = load
+            .index
+            .encode(&lamp.id, "brightness", &Value::Int(40))
+            .unwrap();
+        assert_eq!(
+            body,
+            json!({"on": {"on": true}, "dimming": {"brightness": 40.0}})
+        );
         let (_, body) = load
             .index
             .encode(&lamp.id, "color_temp", &Value::Float(300.4))

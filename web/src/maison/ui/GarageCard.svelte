@@ -5,14 +5,15 @@
   import Icon from './Icon.svelte';
 
   /** A garage door: a small drawing, its slats rising and falling at the
-   *  door's own pace. There is no sensor, so no ceremony: the whole card is
-   *  one button, a tap opens or closes, and stops the door while it moves. */
+   *  door's own pace, each way. No ceremony: one button opens or closes,
+   *  and stops the door while it moves. */
   let { id, name = null } = $props();
 
   const d = $derived(device(id));
   const state = $derived(value(id, 'state') ?? 'closed');
   const target = $derived(value(id, 'target') ?? 'closed');
   const travel = $derived(Number(value(id, 'travel')) || 20);
+  const travelClose = $derived(Number(value(id, 'travel_close')) || travel);
   const assumed = $derived(value(id, 'assumed') === true);
   const online = $derived(reachable(id));
   const busy = $derived(pending(id, 'target') || pending(id, 'press'));
@@ -35,8 +36,9 @@
     const up = state === 'opening';
     from = pos;
     const started = changed ?? Date.now();
+    const secs = up ? travel : travelClose;
     const tick = () => {
-      const done = Math.max(0, (Date.now() - started) / 1000 / travel);
+      const done = Math.max(0, (Date.now() - started) / 1000 / secs);
       pos = up ? Math.min(1, from + done) : Math.max(0, from - done);
       if ((up && pos < 1) || (!up && pos > 0)) frame = requestAnimationFrame(tick);
     };

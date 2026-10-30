@@ -597,6 +597,7 @@
   "pilotes.garage.inconnue": "porte inconnue",
   "pilotes.garage.ordre_inconnu": "ordre inconnu pour une porte de garage",
   "pilotes.garage.course": "Durée de course",
+  "pilotes.garage.course_fermeture": "Durée de fermeture",
   "pilotes.netatmo.sonnerie": "Sonnerie",
   "pilotes.netatmo.visiteur": "Visiteur",
   "pilotes.netatmo.dernier_evenement": "Dernier événement",

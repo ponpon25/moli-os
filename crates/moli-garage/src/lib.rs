@@ -21,6 +21,7 @@
 //! relay = "zwave:…/switch"            # the relay's on/off point
 //! # contact = "z2m:…/contact"         # a sensor on the door (true = closed)
 //! travel = 20                          # seconds from closed to open
+//! # travel_close = 18                  # from open to closed (default: travel)
 //! ```
 
 use std::sync::Arc;
@@ -59,9 +60,12 @@ pub struct Door {
     /// A sensor on the door (`device/key`, true when closed).
     #[serde(default)]
     pub contact: Option<String>,
-    /// Seconds the door takes from one end to the other (default 20).
+    /// Seconds the door takes to open (default 20).
     #[serde(default = "default_travel")]
     pub travel: u64,
+    /// Seconds it takes to close, when not the same.
+    #[serde(default)]
+    pub travel_close: Option<u64>,
 }
 
 fn default_travel() -> u64 {
@@ -83,7 +87,10 @@ pub fn check(doors: &[Door]) -> Result<(), String> {
                 return Err(format!("{}: {point:?} is not a point (device/key)", d.id));
             }
         }
-        if !(3..=180).contains(&d.travel) {
+        if ![d.travel, d.closing()]
+            .iter()
+            .all(|t| (3..=180).contains(t))
+        {
             return Err(format!("{}: travel from 3 to 180 seconds", d.id));
         }
     }
@@ -93,6 +100,11 @@ pub fn check(doors: &[Door]) -> Result<(), String> {
 impl Door {
     fn relay_point(&self) -> PointId {
         PointId::from(self.relay.as_str())
+    }
+
+    /// Seconds from open to closed.
+    fn closing(&self) -> u64 {
+        self.travel_close.unwrap_or(self.travel)
     }
 
     fn contact_point(&self) -> Option<PointId> {
@@ -241,6 +253,20 @@ fn device(id: DeviceId, instance: &InstanceId, door: &Door) -> Device {
         unit: None,
         semantic,
     };
+    let seconds = |key: &str, label: String| PointSpec {
+        unit: Some(Unit::Second),
+        ..point(
+            key,
+            label,
+            Kind::Numeric {
+                min: Some(3.0),
+                max: Some(180.0),
+                step: Some(1.0),
+            },
+            false,
+            Semantic::Config,
+        )
+    };
     let words = |list: &[&str]| Kind::Enum {
         values: list.iter().map(|w| Arc::from(*w)).collect(),
     };
@@ -282,21 +308,12 @@ fn device(id: DeviceId, instance: &InstanceId, door: &Door) -> Device {
                 false,
                 Semantic::Other,
             ),
-            // How long a journey takes: what the dashboard animates.
-            PointSpec {
-                unit: Some(Unit::Second),
-                ..point(
-                    "travel",
-                    moli_i18n::tr!("pilotes.garage.course"),
-                    Kind::Numeric {
-                        min: Some(3.0),
-                        max: Some(180.0),
-                        step: Some(1.0),
-                    },
-                    false,
-                    Semantic::Config,
-                )
-            },
+            // How long a journey takes, each way: what the dashboard animates.
+            seconds("travel", moli_i18n::tr!("pilotes.garage.course")),
+            seconds(
+                "travel_close",
+                moli_i18n::tr!("pilotes.garage.course_fermeture"),
+            ),
         ],
     }
 }
@@ -340,18 +357,20 @@ fn publish(ctx: &DriverCtx, door: &Door, live: &Live) {
     ctx.set_state(&live.id, "state", Value::from(phase.word()));
     ctx.set_state(&live.id, "target", Value::from(live.belief.target()));
     ctx.set_state(&live.id, "assumed", Value::Bool(door.contact.is_none()));
-    ctx.set_state(
-        &live.id,
-        "travel",
-        Value::Int(i64::try_from(door.travel).unwrap_or(20)),
-    );
+    for (key, secs) in [("travel", door.travel), ("travel_close", door.closing())] {
+        ctx.set_state(&live.id, key, Value::Int(i64::try_from(secs).unwrap_or(20)));
+    }
 }
 
 /// The door moves (or stops): its journey ends after its travel time.
 fn moved(ctx: &DriverCtx, door: &Door, live: &mut Live, belief: Belief) {
     live.belief = belief;
-    live.arrives = matches!(belief.phase, Phase::Opening | Phase::Closing)
-        .then(|| Instant::now() + Duration::from_secs(door.travel));
+    live.arrives = match belief.phase {
+        Phase::Opening => Some(door.travel),
+        Phase::Closing => Some(door.closing()),
+        _ => None,
+    }
+    .map(|secs| Instant::now() + Duration::from_secs(secs));
     publish(ctx, door, live);
 }
 
@@ -626,11 +645,17 @@ mod tests {
             relay: relay.into(),
             contact: None,
             travel,
+            travel_close: None,
         };
         assert!(check(&[door("garage", "zwave:a-37/switch", 20)]).is_ok());
         assert!(check(&[door("a/b", "zwave:a-37/switch", 20)]).is_err());
         assert!(check(&[door("garage", "zwave:a-37", 20)]).is_err());
         assert!(check(&[door("garage", "zwave:a-37/switch", 1)]).is_err());
+        let mut slow = door("garage", "zwave:a-37/switch", 16);
+        slow.travel_close = Some(14);
+        assert!(check(&[slow.clone()]).is_ok());
+        slow.travel_close = Some(500);
+        assert!(check(&[slow]).is_err());
         assert!(
             check(&[
                 door("garage", "zwave:a-37/switch", 20),

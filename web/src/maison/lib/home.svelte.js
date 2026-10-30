@@ -446,7 +446,28 @@ function humanError(message) {
   return message;
 }
 
-const lastLevel = new Map();
+// The level each dimmer last had while on (a Z-Wave level reads 0 when
+// off): what it comes back to, and what its slider shows meanwhile. Kept
+// on this device across visits.
+const lastLevel = new Map(
+  (() => {
+    try {
+      return Object.entries(JSON.parse(readPref('maison-last-level', '{}')));
+    } catch {
+      return [];
+    }
+  })(),
+);
+
+/** A dimmer seen at level `v`: remembered when on. */
+export function noteLevel(id, v) {
+  if (!(v > 0) || lastLevel.get(id) === v) return;
+  lastLevel.set(id, v);
+  savePref('maison-last-level', JSON.stringify(Object.fromEntries(lastLevel)));
+}
+
+/** The level a dimmer had last time it was on, if seen. */
+export const lastLevelOf = (id) => lastLevel.get(id) ?? null;
 
 /** Switches a light on or off, whatever its power point is (a bool, « ON »,
  *  or the level of a dimmer that has no switch). */
@@ -454,7 +475,7 @@ export function setPower(d, on, label) {
   const lv = levelKey(d);
   if (lv) {
     const now = Number(value(d.id, lv)) || 0;
-    if (now > 0) lastLevel.set(d.id, now);
+    noteLevel(d.id, now);
     const max = d.points.find((p) => p.key === lv)?.kind?.max ?? 100;
     return act(`${d.id}/${lv}`, on ? (lastLevel.get(d.id) ?? max) : 0, label);
   }
@@ -471,7 +492,7 @@ export function toggle(id, label, point = null) {
   if (lv) {
     // Off is level 0; back on, the level it had (or full).
     const now = Number(value(id, lv)) || 0;
-    if (now > 0) lastLevel.set(id, now);
+    noteLevel(id, now);
     const max = d.points.find((p) => p.key === lv)?.kind?.max ?? 100;
     return act(`${id}/${lv}`, now > 0 ? 0 : (lastLevel.get(id) ?? max), label ?? nameOf(id));
   }

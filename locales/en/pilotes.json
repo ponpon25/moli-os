@@ -597,6 +597,7 @@
   "pilotes.garage.inconnue": "unknown door",
   "pilotes.garage.ordre_inconnu": "unknown order for a garage door",
   "pilotes.garage.course": "Travel time",
+  "pilotes.garage.course_fermeture": "Closing time",
   "pilotes.netatmo.sonnerie": "Ring",
   "pilotes.netatmo.visiteur": "Visitor",
   "pilotes.netatmo.dernier_evenement": "Last event",

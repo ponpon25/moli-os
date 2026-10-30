@@ -1,11 +1,12 @@
 <script>
-  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey, inWall, hub } from '../lib/home.svelte.js';
+  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey, inWall, hub, setPower, noteLevel, lastLevelOf } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import LightTile from './LightTile.svelte';
 
   /** A light (or any on/off thing): tap to switch. With `dimmer`, dimmable
-   *  lights show their level and a slider, colour lamps a palette (whites
+   *  lights show their level and a slider (greyed at the last level while
+   *  off; moving it lights the lamp), colour lamps a palette (whites
    *  by temperature, colours as « #rrggbb »). A room's tile (`members`:
    *  its lamps) offers the palette when one of them takes it. */
   // `also`: other lights switched with this one (one tile for the kitchen
@@ -23,9 +24,12 @@
   const dimSpec = $derived(d?.points.find((p) => p.key === dimKey)?.kind);
   const top = $derived(levelKey(d) ? (dimSpec?.max ?? 100) : 100);
   // The level asked, until the light says it took it: the slider does not
-  // jump back to the old one meanwhile.
+  // jump back to the old one meanwhile. A dimmer off (level 0) shows the
+  // level it last had.
+  const raw = $derived(hub.pending[`${id}/${dimKey}`] ?? value(id, dimKey));
+  $effect(() => noteLevel(id, Number(raw)));
   const level = $derived.by(() => {
-    const v = hub.pending[`${id}/${dimKey}`] ?? value(id, dimKey);
+    const v = Number(raw) > 0 ? raw : (lastLevelOf(id) ?? raw);
     return v == null ? null : (v / top) * 100;
   });
   const dimmable = $derived(dimmer && d?.points.some((p) => p.key === dimKey && p.access?.write));
@@ -94,8 +98,12 @@
   }
   function commitLevel(e) {
     const v = Number(e.currentTarget.value);
+    const was = on;
     dragging = null;
     act(`${id}/${dimKey}`, Math.round((v / 100) * top), label);
+    // Off, the level lights a Hue, Zigbee or Z-Wave lamp by itself; one
+    // whose switch is apart is switched on too.
+    if (!was && !levelKey(d)) setPower(d, true, label);
   }
 
   // Colour (« #rrggbb ») and white temperature, where the lamp takes them.
@@ -162,8 +170,8 @@
     </span>
     <span class="switch" aria-hidden="true"><i></i><em>{on ? t('commun.lampe.allumee') : t('commun.lampe.eteinte')}</em></span>
   </button>
-  {#if on && (dimmable || canColor || canWhite)}
-    <div class="controls">
+  {#if on ? dimmable || canColor || canWhite : dimmable && ok && !cut}
+    <div class="controls" class:asleep={!on}>
       {#if dimmable}
         <input
           class="level"
@@ -175,12 +183,12 @@
           onchange={commitLevel}
           aria-label={t('commun.lampe.luminosite', { label })} />
       {/if}
-      {#if bulbs.length > 1}
+      {#if on && bulbs.length > 1}
         <button class="apart" class:open={apart} onclick={() => (apart = !apart)} aria-expanded={apart} title={t('commun.lampe.ampoule_par_ampoule')} aria-label={t('commun.action', { label, action: t('commun.lampe.ampoule_par_ampoule').toLowerCase() })}>
           <Icon name="light-group" size={18} />
         </button>
       {/if}
-      {#if canColor || canWhite}
+      {#if on && (canColor || canWhite)}
         <button
           class="swatch-toggle"
           class:open={palette}
@@ -190,7 +198,7 @@
           aria-label={t('commun.lampe.couleur', { label })}><i></i></button>
       {/if}
     </div>
-    {#if palette}
+    {#if on && palette}
       <div class="palette" role="group" aria-label={t('commun.lampe.couleurs', { label })}>
         {#if canWhite}
           {#each WHITES as [key, kelvin, look] (kelvin)}
@@ -207,7 +215,7 @@
         {/if}
       </div>
     {/if}
-    {#if apart}
+    {#if on && apart}
       <div class="bulbs">
         {#each bulbs as m (m)}
           <LightTile id={m} compact dimmer />
@@ -481,6 +489,18 @@
     margin: 0;
     accent-color: var(--warm);
     height: 28px;
+  }
+
+  /* Off: the level it would come back to, greyed. */
+  .asleep .level {
+    accent-color: var(--ink-3);
+    filter: grayscale(1);
+    opacity: 0.6;
+  }
+
+  .asleep .level:hover,
+  .asleep .level:focus-visible {
+    opacity: 0.85;
   }
 
   /* The current colour, ringed by the hue wheel. */

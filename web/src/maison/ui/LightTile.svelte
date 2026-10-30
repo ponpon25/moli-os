@@ -1,5 +1,5 @@
 <script>
-  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey, inWall } from '../lib/home.svelte.js';
+  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey, inWall, hub } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import LightTile from './LightTile.svelte';
@@ -22,8 +22,10 @@
   const dimKey = $derived(levelKey(d) ?? 'brightness');
   const dimSpec = $derived(d?.points.find((p) => p.key === dimKey)?.kind);
   const top = $derived(levelKey(d) ? (dimSpec?.max ?? 100) : 100);
+  // The level asked, until the light says it took it: the slider does not
+  // jump back to the old one meanwhile.
   const level = $derived.by(() => {
-    const v = value(id, dimKey);
+    const v = hub.pending[`${id}/${dimKey}`] ?? value(id, dimKey);
     return v == null ? null : (v / top) * 100;
   });
   const dimmable = $derived(dimmer && d?.points.some((p) => p.key === dimKey && p.access?.write));

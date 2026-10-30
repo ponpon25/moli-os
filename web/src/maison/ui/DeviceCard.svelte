@@ -1,5 +1,5 @@
 <script>
-  import { device, nameOf, reachable, value, act, pending, num, deviceKind } from '../lib/home.svelte.js';
+  import { device, nameOf, reachable, value, act, pending, num, deviceKind, hub } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
 
@@ -55,7 +55,7 @@
         </div>
       {:else if typeOf(p) === 'numeric'}
         <span>{label(p)} <b class="num">{say(p)}</b></span>
-        <input type="range" min={p.kind.min ?? 0} max={p.kind.max ?? 100} step={p.kind.step ?? 1} value={value(id, p.key) ?? p.kind.min ?? 0} aria-label={label(p)} onchange={(e) => act(`${id}/${p.key}`, Number(e.currentTarget.value), label(p))} />
+        <input type="range" min={p.kind.min ?? 0} max={p.kind.max ?? 100} step={p.kind.step ?? 1} value={hub.pending[`${id}/${p.key}`] ?? value(id, p.key) ?? p.kind.min ?? 0} aria-label={label(p)} onchange={(e) => act(`${id}/${p.key}`, Number(e.currentTarget.value), label(p))} />
       {:else}
         <form onsubmit={(e) => (e.preventDefault(), send(p))}>
           <input bind:value={typed[p.key]} placeholder={label(p)} aria-label={label(p)} />

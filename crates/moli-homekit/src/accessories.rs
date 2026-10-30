@@ -271,6 +271,12 @@ pub enum Conv {
         lo: f64,
         hi: f64,
     },
+    /// A dimmer's level ⇄ HAP's 0–100 % through the eye's curve
+    /// (`moli_core::dim`), whole steps.
+    Perceived {
+        lo: f64,
+        hi: f64,
+    },
     /// An integer in the same unit (mired).
     Int,
     /// Kelvins (WiZ, Tapo) ⇄ HAP's mireds.
@@ -705,7 +711,7 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
                     C_BRIGHTNESS,
                     "int",
                     READ_WRITE_NOTIFY,
-                    Bind::Point(id(&level.key), Conv::Percent { lo, hi }),
+                    Bind::Point(id(&level.key), Conv::Perceived { lo, hi }),
                     "Brightness",
                 )
                 .meta(percent_meta()),
@@ -1563,6 +1569,9 @@ pub fn to_hap(conv: Conv, value: &Value) -> Option<Json> {
             let span = (hi - lo).max(f64::EPSILON);
             json!(((v - lo) * 100.0 / span).round().clamp(0.0, 100.0) as i64)
         }
+        Conv::Perceived { lo, hi } => {
+            json!(moli_core::dim::percent_of(value.as_f64()?, lo, hi).round() as i64)
+        }
         Conv::Int => json!(value.as_f64()?.round() as i64),
         Conv::Kelvin => json!((1e6 / value.as_f64()?.max(1.0)).round() as i64),
         Conv::Clamped { lo, hi } => json!(value.as_f64()?.clamp(lo, hi)),
@@ -1601,6 +1610,9 @@ pub fn from_hap(conv: Conv, json: &Json) -> Option<Value> {
             };
             Some(Value::Float(if on { hi } else { lo }))
         }
+        Conv::Perceived { lo, hi } => Some(Value::Int(
+            moli_core::dim::level_of(json.as_f64()?, lo, hi).round() as i64,
+        )),
         Conv::Percent { lo, hi } => {
             let pct = json.as_f64()?.clamp(0.0, 100.0);
             Some(Value::Float(lo + pct * (hi - lo) / 100.0))
@@ -1816,6 +1828,14 @@ mod tests {
         assert_eq!(to_hap(on, &Value::Float(10.0)), Some(json!(true)));
         assert_eq!(from_hap(on, &json!(true)), Some(Value::Float(99.0)));
         assert_eq!(from_hap(on, &json!(0)), Some(Value::Float(0.0)));
+        // Its brightness follows the eye: 30 % is level 9, level 25 is 50 %.
+        assert!(matches!(
+            &light.chars[2].bind,
+            Bind::Point(_, Conv::Perceived { .. })
+        ));
+        let dim = Conv::Perceived { lo: 0.0, hi: 99.0 };
+        assert_eq!(from_hap(dim, &json!(30)), Some(Value::Int(9)));
+        assert_eq!(to_hap(dim, &Value::Int(25)), Some(json!(50)));
     }
 
     #[test]

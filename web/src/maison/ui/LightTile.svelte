@@ -1,5 +1,5 @@
 <script>
-  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey, inWall, hub, setPower, noteLevel, lastLevelOf } from '../lib/home.svelte.js';
+  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey, inWall, hub, setPower, noteLevel, lastLevelOf, percentOf, levelFor } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import LightTile from './LightTile.svelte';
@@ -19,7 +19,8 @@
   const busy = $derived(pending(id, point));
   const label = $derived(nameOf(id, name));
   // The point that dims: « brightness », or the level of a dimmer that has
-  // no on/off (Z-Wave), whose own range (0–99) the slider follows.
+  // no on/off (Z-Wave), whose own range (0–99) the slider follows through
+  // the eye's curve (as HomeKit and Alexa do).
   const dimKey = $derived(levelKey(d) ?? 'brightness');
   const dimSpec = $derived(d?.points.find((p) => p.key === dimKey)?.kind);
   const top = $derived(levelKey(d) ? (dimSpec?.max ?? 100) : 100);
@@ -30,7 +31,8 @@
   $effect(() => noteLevel(id, Number(raw)));
   const level = $derived.by(() => {
     const v = Number(raw) > 0 ? raw : (lastLevelOf(id) ?? raw);
-    return v == null ? null : (v / top) * 100;
+    if (v == null) return null;
+    return levelKey(d) ? percentOf(Number(v), top) : (v / top) * 100;
   });
   const dimmable = $derived(dimmer && d?.points.some((p) => p.key === dimKey && p.access?.write));
 
@@ -100,7 +102,7 @@
     const v = Number(e.currentTarget.value);
     const was = on;
     dragging = null;
-    act(`${id}/${dimKey}`, Math.round((v / 100) * top), label);
+    act(`${id}/${dimKey}`, levelKey(d) ? levelFor(v, top) : Math.round((v / 100) * top), label);
     // Off, the level lights a Hue, Zigbee or Z-Wave lamp by itself; one
     // whose switch is apart is switched on too.
     if (!was && !levelKey(d)) setPower(d, true, label);

@@ -67,6 +67,7 @@ La correspondance se fait par **sens** (`Semantic`), jamais par marque :
 | Dans Moli | Dans HomeKit |
 |---|---|
 | un point `on_off` inscriptible, avec luminosité / température de couleur / couleur (`#rrggbb`) | **Lumière** (On, Brightness, ColorTemperature en mireds : une plage au-delà de 1000 est en kelvins et convertie, Hue, Saturation) |
+| un variateur sans interrupteur (un seul niveau `brightness`, 0 = éteint ; Z-Wave) | **Lumière** : On = niveau au-dessus du minimum (allumer = plein), Brightness selon la courbe de l'œil (`moli_core::dim`, aussi pour Alexa et le curseur du tableau de bord) |
 | un `on_off` inscriptible avec une puissance (`power`) | **Prise** |
 | un `on_off` inscriptible seul | **Interrupteur** |
 | une **porte de garage** (deux points `garage_door` : la position lue, `open`/`closed` écrit ; `portes:…`) | **Porte de garage** (position, cible, obstruction toujours fausse) ; le relais et le capteur derrière elle (`members`) ne sont plus montrés seuls |

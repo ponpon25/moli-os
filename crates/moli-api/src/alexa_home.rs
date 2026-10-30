@@ -358,6 +358,25 @@ impl Endpoint<'_> {
         self.view.state.get(&spec.key).map(|s| &s.value)
     }
 
+    /// A brightness as Alexa says it: a dimmer's level through the eye's
+    /// curve (`moli_core::dim`), any other linearly.
+    #[allow(clippy::cast_possible_truncation)] // clamped to 0..=100
+    fn percent(&self, spec: &PointSpec, value: &Value) -> Option<i32> {
+        if !self.level {
+            return percent(spec, value);
+        }
+        let (lo, hi) = range(spec);
+        Some(moli_core::dim::percent_of(value.as_f64()?, lo, hi).round() as i32)
+    }
+
+    fn level_at(&self, spec: &PointSpec, pct: f64) -> Value {
+        if !self.level {
+            return from_percent(spec, pct);
+        }
+        let (lo, hi) = range(spec);
+        integral(spec, moli_core::dim::level_of(pct, lo, hi))
+    }
+
     fn time(&self, spec: &PointSpec) -> String {
         let ms = self
             .view
@@ -643,7 +662,7 @@ fn properties(e: &Endpoint<'_>) -> Vec<Json> {
         ));
     }
     if let Some(b) = e.brightness
-        && let Some(pct) = e.value(b).and_then(|v| percent(b, v))
+        && let Some(pct) = e.value(b).and_then(|v| e.percent(b, v))
     {
         out.push(property(
             "Alexa.BrightnessController",
@@ -718,13 +737,13 @@ async fn order(
                         number("brightnessDelta").ok_or_else(|| invalid("brightnessDelta"))?;
                     let now = e
                         .value(b)
-                        .and_then(|v| percent(b, v))
+                        .and_then(|v| e.percent(b, v))
                         .map_or(0.0, f64::from);
                     now + delta
                 }
                 _ => return Err(unsupported()),
             };
-            send(hub, e.point(b), from_percent(b, pct)).await
+            send(hub, e.point(b), e.level_at(b, pct)).await
         }
         ("Alexa.ColorController", "SetColor") => {
             let c = e.color.ok_or_else(unsupported)?;
@@ -1008,8 +1027,10 @@ mod tests {
         assert!(
             props
                 .iter()
-                .any(|p| p["name"] == "brightness" && p["value"] == 30)
+                .any(|p| p["name"] == "brightness" && p["value"] == 55),
+            "level 30 of 99, through the eye's curve"
         );
+        assert_eq!(e.level_at(e.on, 30.0), Value::Int(9));
         assert_eq!(from_percent(e.on, 100.0), Value::Int(99));
         assert_eq!(from_percent(e.on, 30.0), Value::Int(30), "29.7, whole");
         assert_eq!(from_percent(e.on, 0.0), Value::Int(0));

@@ -6,6 +6,7 @@
 //! agree on one vocabulary.
 
 pub mod color;
+pub mod dim;
 mod event;
 mod id;
 mod model;

@@ -483,6 +483,15 @@ export function setPower(d, on, label) {
   if (key) return act(`${d.id}/${key}`, typeof value(d.id, key) === 'string' ? (on ? 'ON' : 'OFF') : on, label);
 }
 
+/** A dimmer's level (0–top) as the percent people see, and back: the
+ *  eye's square curve, fine at the bottom (moli_core::dim, the same for
+ *  HomeKit and Alexa). Above 0 % a level is never off. */
+export const percentOf = (level, top) => 100 * Math.sqrt(Math.min(1, Math.max(0, level / top)));
+export function levelFor(pct, top) {
+  const p = Math.min(1, Math.max(0, pct / 100));
+  return p === 0 ? 0 : Math.max(1, Math.round(top * p * p));
+}
+
 /** The point that dims a light: its brightness, or the level of a dimmer. */
 export const dimKey = (d) => levelKey(d) ?? (d?.points.some((p) => p.key === 'brightness' && p.access?.write) ? 'brightness' : null);
 

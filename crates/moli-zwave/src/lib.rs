@@ -197,6 +197,7 @@ async fn session(ws: &mut WebSocket, ctx: &mut DriverCtx) -> anyhow::Result<Sess
     let mut pending: HashMap<String, CommandRequest> = HashMap::new();
     let mut sent = 0u64;
     let mut again: Option<tokio::time::Instant> = None;
+    let mut revive = Revive::default();
     let mut ping = tokio::time::interval(Duration::from_secs(30));
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let outcome = loop {
@@ -211,6 +212,7 @@ async fn session(ws: &mut WebSocket, ctx: &mut DriverCtx) -> anyhow::Result<Sess
                 };
                 match message["type"].as_str() {
                     Some("event") => {
+                        revive.on_event(&message["event"]);
                         if on_event(ctx, &mut net, &message["event"]) {
                             again = Some(tokio::time::Instant::now() + Duration::from_secs(3));
                         }
@@ -247,6 +249,7 @@ async fn session(ws: &mut WebSocket, ctx: &mut DriverCtx) -> anyhow::Result<Sess
                 }
             }
             () = until(again) => break Session::Again,
+            () = until(revive.next()) => revive.ping_due(ws, &mut sent).await?,
             _ = ping.tick() => ws.ping().await?,
         }
     };
@@ -254,6 +257,50 @@ async fn session(ws: &mut WebSocket, ctx: &mut DriverCtx) -> anyhow::Result<Sess
         command.reply(Err("z-wave network read again".into()));
     }
     Ok(outcome)
+}
+
+/// Z-Wave JS says a module dead after one missed reply and keeps it so
+/// until it next speaks (an hour for a dimmer at rest): Moli asks it again
+/// shortly after.
+#[derive(Default)]
+struct Revive(HashMap<u16, tokio::time::Instant>);
+
+impl Revive {
+    const AFTER: Duration = Duration::from_secs(20);
+
+    fn on_event(&mut self, event: &Json) {
+        if event["source"] == "node"
+            && event["event"] == "dead"
+            && let Some(node) = event["nodeId"].as_u64().and_then(|n| u16::try_from(n).ok())
+        {
+            self.0
+                .entry(node)
+                .or_insert_with(|| tokio::time::Instant::now() + Self::AFTER);
+        }
+    }
+
+    fn next(&self) -> Option<tokio::time::Instant> {
+        self.0.values().min().copied()
+    }
+
+    /// Pings the modules whose time has come (the answer brings them back
+    /// alive, or not: Z-Wave JS says so by event).
+    async fn ping_due(&mut self, ws: &mut WebSocket, sent: &mut u64) -> anyhow::Result<()> {
+        let now = tokio::time::Instant::now();
+        let due: Vec<u16> = self
+            .0
+            .iter()
+            .filter(|(_, when)| **when <= now)
+            .map(|(node, _)| *node)
+            .collect();
+        for node in due {
+            self.0.remove(&node);
+            *sent += 1;
+            let order = json!({"command": "node.ping", "nodeId": node, "messageId": format!("ping-{sent}")});
+            ws.send_text(&order.to_string()).await?;
+        }
+        Ok(())
+    }
 }
 
 async fn until(when: Option<tokio::time::Instant>) {
@@ -519,5 +566,20 @@ mod tests {
             change(&mut net, &event("alive", 2, json!({}))),
             Change::Online(relay, true)
         );
+    }
+
+    #[tokio::test]
+    async fn a_dead_module_is_asked_again_once() {
+        let mut revive = Revive::default();
+        revive.on_event(&json!({"source": "node", "event": "alive", "nodeId": 30}));
+        assert_eq!(revive.next(), None);
+        let before = tokio::time::Instant::now();
+        revive.on_event(&json!({"source": "node", "event": "dead", "nodeId": 40}));
+        let first = revive.next().expect("asked again");
+        assert!(first >= before + Revive::AFTER);
+        // Said dead again meanwhile: still one ping, at the first time.
+        revive.on_event(&json!({"source": "node", "event": "dead", "nodeId": 40}));
+        assert_eq!(revive.next(), Some(first));
+        assert_eq!(revive.0.len(), 1);
     }
 }

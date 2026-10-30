@@ -1780,7 +1780,12 @@ mod tests {
             vec![
                 point("ep1.level", range(0.0, 99.0), true, Semantic::Brightness),
                 point("ep2.level", range(0.0, 99.0), true, Semantic::Brightness),
-                point("ep1.sensor.power", range(0.0, 250.0), false, Semantic::Power),
+                point(
+                    "ep1.sensor.power",
+                    range(0.0, 250.0),
+                    false,
+                    Semantic::Power,
+                ),
             ],
         );
         let c = catalog(std::slice::from_ref(&dimmer));

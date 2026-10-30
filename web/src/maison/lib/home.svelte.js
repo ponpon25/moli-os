@@ -197,11 +197,12 @@ export function levelKey(d) {
 const truthy = (v) => v === true || v === 'ON' || v === 'on' || v === 1;
 
 /** Really on, now. An unreachable device is not (a bulb cut at the wall
- *  switch keeps its last « on » on the bridge); a group (a Hue room) is on
- *  when one of its lamps that answers is (D12). */
+ *  switch keeps its last « on » on the bridge), save a module in the wall:
+ *  its lamp stays as it last said; a group (a Hue room) is on when one of
+ *  its lamps that answers is (D12). */
 export function isOn(id, point = null) {
   const d = device(id);
-  if (!d || d.online === false) return false;
+  if (!d || (d.online === false && !inWall(d))) return false;
   if (!point && isGroup(d) && d.members?.length) return d.members.some((m) => m !== id && isOn(m));
   const lv = point ? null : levelKey(d);
   if (lv) return Number(value(id, lv)) > 0;
@@ -220,10 +221,14 @@ export function fixtureOf(id) {
   return null;
 }
 
+/** A module in the wall (a Z-Wave dimmer): it feeds the lamp, so when it
+ *  goes quiet it is the module that does not answer, not the lamp cut. */
+export const inWall = (d) => !!levelKey(d);
+
 /** A lamp without power: cut at the wall switch (or at its relay). */
 export function unpowered(id) {
   const d = device(id);
-  if (!d) return false;
+  if (!d || inWall(d)) return false;
   if (isFixture(d)) return value(id, 'powered') === false;
   return d.online === false && ['light', 'group'].includes(deviceKind(d));
 }

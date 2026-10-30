@@ -1,5 +1,5 @@
 <script>
-  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey } from '../lib/home.svelte.js';
+  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey, inWall } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import LightTile from './LightTile.svelte';
@@ -14,7 +14,7 @@
 
   const d = $derived(device(id));
   const ok = $derived(reachable(id) || also.some(reachable));
-  const on = $derived((reachable(id) && isOn(id, point)) || also.some((a) => reachable(a) && isOn(a)));
+  const on = $derived(isOn(id, point) || also.some((a) => reachable(a) && isOn(a)));
   const busy = $derived(pending(id, point));
   const label = $derived(nameOf(id, name));
   // The point that dims: « brightness », or the level of a dimmer that has
@@ -30,6 +30,9 @@
 
   // A bulb cut at the wall switch: off, and only the switch brings it back.
   const cut = $derived(!!d && !isFixture(d) && unpowered(id));
+  // A module in the wall said unreachable may well answer the next order
+  // (Z-Wave gives up on a module after one missed reply): greyed, still tappable.
+  const retry = $derived(!!d && inWall(d));
   const state = $derived(
     !d
       ? t('commun.lampe.introuvable')
@@ -149,7 +152,7 @@
 </script>
 
 <div class="tile" class:on class:busy class:off-grid={!ok || !d || cut} class:compact>
-  <button class="hit" onclick={tap} disabled={!d || (!ok && !cut)} aria-pressed={on} aria-label={t('commun.action', { label, action: state })}>
+  <button class="hit" onclick={tap} disabled={!d || (!ok && !cut && !retry)} aria-pressed={on} aria-label={t('commun.action', { label, action: state })}>
     <span class="bulb" style:background={tint} style:color={tintInk} style:--glow={tint && `${tint}66`}><Icon name={icon} size={compact ? 22 : 26} /></span>
     <span class="text">
       <b>{label}</b>

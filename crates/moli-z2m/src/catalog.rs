@@ -254,17 +254,24 @@ fn flatten(
         "text" => (Kind::Text, None),
         _ => return,
     };
-    let codec = Codec {
-        binary,
-        gettable: expose.access & ACCESS_GET != 0,
-        numeric_enum: !expose.values.is_empty() && expose.values.iter().all(Json::is_number),
-    };
     let unit = expose.unit.as_deref().and_then(Unit::parse);
     // A calibration offset in °C is configuration, not a temperature reading.
     let semantic = if expose.category.as_deref() == Some("config") {
         Semantic::Config
     } else {
         Semantic::infer(&key, unit.as_ref())
+    };
+    // Z2M's `contact` is true when closed, Moli's too; its exposes call the
+    // open side "on" (`value_on: false`), which would turn it upside down.
+    let binary = if semantic == Semantic::Contact {
+        Some((Json::Bool(true), Json::Bool(false)))
+    } else {
+        binary
+    };
+    let codec = Codec {
+        binary,
+        gettable: expose.access & ACCESS_GET != 0,
+        numeric_enum: !expose.values.is_empty() && expose.values.iter().all(Json::is_number),
     };
     // Z2M converters expect composites (color {x, y}…) as a whole: writing
     // one member alone is rejected. Members are read-only until a composite
@@ -430,6 +437,20 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(values["water_leak"], Value::Bool(false));
+
+        // Z2M `contact: false` is open, though its expose says `value_on: false`.
+        let door = catalog.by_name("0x00124b0000000006").unwrap();
+        let values: HashMap<_, _> = door
+            .decode(&state("0x00124b0000000006"))
+            .into_iter()
+            .collect();
+        assert_eq!(values["contact"], Value::Bool(false), "open");
+        let mut closed = Map::new();
+        closed.insert("contact".into(), json!(true));
+        assert_eq!(
+            door.decode(&closed),
+            [("contact".into(), Value::Bool(true))]
+        );
     }
 
     #[test]

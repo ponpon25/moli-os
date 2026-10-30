@@ -102,6 +102,12 @@ impl Door {
     fn relay_device(&self) -> Option<DeviceId> {
         self.relay_point().split().map(|(d, _)| d)
     }
+
+    /// The relay and the sensor: shown through the door, not on their own.
+    fn members(&self) -> Vec<DeviceId> {
+        let contact = self.contact_point().and_then(|p| p.split().map(|(d, _)| d));
+        self.relay_device().into_iter().chain(contact).collect()
+    }
 }
 
 /// Where the door is.
@@ -216,9 +222,10 @@ fn sensed(belief: Belief, closed: bool) -> Belief {
             last_up: false,
         },
         // Not shut while Moli thought it was (the remote, the button in the
-        // garage): it is open, no matter how far.
+        // garage): it just left, so it is on its way up for one journey. A
+        // close asked meanwhile then stops it first, as the motor needs.
         (false, Phase::Closed) => Belief {
-            phase: Phase::Open,
+            phase: Phase::Opening,
             last_up: true,
         },
         (false, _) => belief,
@@ -245,7 +252,7 @@ fn device(id: DeviceId, instance: &InstanceId, door: &Door) -> Device {
         model: Some(moli_i18n::tr!("pilotes.garage.modele").into()),
         description: None,
         native_room: door.room.as_deref().map(Into::into),
-        members: door.relay_device().into_iter().collect(),
+        members: door.members(),
         points: vec![
             point(
                 "state",
@@ -596,8 +603,12 @@ mod tests {
     #[test]
     fn the_sensor_wins() {
         assert_eq!(sensed(at(Phase::Opening, true), true).phase, Phase::Closed);
-        // Not shut, whoever opened it: open.
-        assert_eq!(sensed(at(Phase::Closed, false), false).phase, Phase::Open);
+        // Not shut, whoever opened it: on its way up, then open.
+        let left = sensed(at(Phase::Closed, false), false);
+        assert_eq!(left.phase, Phase::Opening);
+        assert_eq!(left.arrived().phase, Phase::Open);
+        // Closing it before it is up: stop, then down.
+        assert_eq!(left.presses_to(false), 2);
         // Still moving: the sensor does not cut the journey short.
         assert_eq!(
             sensed(at(Phase::Closing, false), false).phase,

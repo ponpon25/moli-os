@@ -338,11 +338,13 @@ pub struct Accessory {
 }
 
 /// A service before identifiers are given.
+#[derive(Clone)]
 struct ServiceSpec {
     kind: &'static str,
     chars: Vec<CharSpec>,
 }
 
+#[derive(Clone)]
 struct CharSpec {
     kind: &'static str,
     format: &'static str,
@@ -994,7 +996,12 @@ pub fn kinds_of(device: &Device) -> Vec<Kinds> {
     services_of(device, "", false).1
 }
 
-/// The stream management service of a camera.
+/// Stream management services per camera. A phone holds one for a
+/// notification's preview and opens the camera on another: with a single
+/// service, it says "in use" without even asking (HAP-NodeJS's streamCount).
+const STREAM_SERVICES: usize = 2;
+
+/// The stream management services of a camera.
 #[allow(clippy::too_many_lines)] // the services HomeKit wants on a camera, listed
 fn camera_services(camera: &Device, talk: bool) -> Vec<ServiceSpec> {
     let device = &camera.id;
@@ -1095,13 +1102,17 @@ fn camera_services(camera: &Device, talk: bool) -> Vec<ServiceSpec> {
     });
     let mut services = vec![microphone];
     services.extend(speaker);
-    services.push(ServiceSpec {
+    let stream = ServiceSpec {
         kind: SVC_CAMERA,
         chars,
-    });
+    };
+    services.push(stream.clone());
     // A camera with a bell (a `ring` point): the Home app shows a video
     // doorbell, and a press rings every phone with a picture.
     services.extend(ring_of(camera).map(doorbell_service));
+    // The other stream services come last: the ones above keep their
+    // identifiers, which the Home app's subscriptions name.
+    services.extend(std::iter::repeat_n(stream, STREAM_SERVICES - 1));
     services
 }
 
@@ -1328,20 +1339,23 @@ impl Catalog {
         Some(&self.accessories[a].services[s].chars[c])
     }
 
-    /// The `(aid, iid)` of a camera's streaming status.
-    pub fn camera_status(&self, device: &DeviceId) -> Option<(u64, u64)> {
-        self.accessories.iter().find_map(|a| {
-            a.services
-                .iter()
-                .flat_map(|s| &s.chars)
-                .find_map(|c| match &c.bind {
-                    Bind::Camera {
-                        device: d,
-                        what: CameraChar::Status,
-                    } if d == device => Some((a.aid, c.iid)),
-                    _ => None,
-                })
-        })
+    /// The `(aid, iid)` of a camera's streaming statuses, one per service.
+    pub fn camera_status(&self, device: &DeviceId) -> Vec<(u64, u64)> {
+        self.accessories
+            .iter()
+            .flat_map(|a| {
+                a.services
+                    .iter()
+                    .flat_map(|s| &s.chars)
+                    .filter_map(move |c| match &c.bind {
+                        Bind::Camera {
+                            device: d,
+                            what: CameraChar::Status,
+                        } if d == device => Some((a.aid, c.iid)),
+                        _ => None,
+                    })
+            })
+            .collect()
     }
 
     /// The device whose camera accessory `aid` is.
@@ -1894,7 +1908,7 @@ mod tests {
         );
         let camera = Entry::camera(bell.device.clone(), &Label::default(), true);
         let c = catalog(&[camera]);
-        assert_eq!(types(&c, 2), ["3E", "112", "113", "110", "121"]);
+        assert_eq!(types(&c, 2), ["3E", "112", "113", "110", "121", "110"]);
         let ring = PointId::new(&bell.device.id, "ring");
         let watched = c.watching(&ring);
         assert_eq!(watched.len(), 1);
@@ -1905,7 +1919,7 @@ mod tests {
         // Without a bell, a plain camera.
         let cam = view("cam", vec![]);
         let c = catalog(&[Entry::camera(cam.device.clone(), &Label::default(), false)]);
-        assert_eq!(types(&c, 2), ["3E", "112", "110"]);
+        assert_eq!(types(&c, 2), ["3E", "112", "110", "110"]);
     }
 
     #[test]

@@ -463,7 +463,7 @@ impl Shared {
 
     /// Tells the controllers watching the camera that its status changed.
     pub(crate) fn camera_changed(&self, device: &DeviceId) {
-        if let Some(pair) = self.catalog().camera_status(device) {
+        for pair in self.catalog().camera_status(device) {
             let _ = self.updates.send(pair);
         }
     }

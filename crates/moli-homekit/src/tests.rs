@@ -1063,7 +1063,10 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
             })
             .unwrap_or_default()
     };
-    assert_eq!(services("fake:cam#camera"), ["3E", "112", "113", "110"]);
+    assert_eq!(
+        services("fake:cam#camera"),
+        ["3E", "112", "113", "110", "110"]
+    );
 
     // What the camera supports.
     let (aid, supported) = find(&db, "fake:cam#camera", "114");

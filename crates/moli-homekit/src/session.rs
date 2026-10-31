@@ -65,7 +65,7 @@ struct Conn {
     /// The address this connection reached us at (the phone's view of us).
     local: Option<IpAddr>,
     /// The last `SetupEndpoints` answer, per camera accessory, for the phone to read.
-    camera_replies: HashMap<u64, Vec<u8>>,
+    camera_replies: HashMap<(u64, u64), Vec<u8>>,
     /// A timed write announced by `PUT /prepare`: its `pid` and its end.
     timed: Option<(u64, std::time::Instant)>,
 }
@@ -582,7 +582,10 @@ impl Conn {
                 ..
             }
         ) {
-            let reply = self.camera_replies.get(&aid).map_or(&[][..], Vec::as_slice);
+            let reply = self
+                .camera_replies
+                .get(&(aid, c.iid))
+                .map_or(&[][..], Vec::as_slice);
             return Ok(Json::String(camera::b64(reply)));
         }
         self.shared.read(c)
@@ -805,7 +808,7 @@ impl Conn {
                         .await
                     {
                         Ok(reply) => {
-                            self.camera_replies.insert(aid, reply);
+                            self.camera_replies.insert((aid, c.iid), reply);
                             OK
                         }
                         Err(status) => status,

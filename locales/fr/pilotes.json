@@ -620,5 +620,15 @@
   "pilotes.netatmo.connexion_suspendue": "connexion suspendue après un refus de Netatmo : refaire un jeton, puis `moli-os secrets forget {instance} login_locked` et redémarrer",
   "pilotes.netatmo.coffre_indisponible": "coffre de secrets indisponible",
   "pilotes.netatmo.coffre_requis": "le pilote Netatmo a besoin du coffre de secrets : {problem}",
-  "pilotes.netatmo.lecture_seule": "la sonnette ne reçoit aucun ordre"
+  "pilotes.netatmo.lecture_seule": "la sonnette ne reçoit aucun ordre",
+  "pilotes.homekit.sonnerie": "Sonnerie",
+  "pilotes.homekit.bouton": "Bouton",
+  "pilotes.homekit.mouvement": "Mouvement",
+  "pilotes.homekit.lecture_seule": "cet accessoire HomeKit ne reçoit aucun ordre de Moli",
+  "pilotes.homekit.coffre_requis": "un accessoire HomeKit a besoin du coffre de secrets pour garder son appairage",
+  "pilotes.homekit.code_manquant": "code HomeKit manquant : retirer l'accessoire de l'app Maison, puis ranger son code à 8 chiffres avec `moli-os secrets set {instance} setup_code` (valeur par un tube) et redémarrer",
+  "pilotes.homekit.code_faux": "l'accessoire refuse le code HomeKit : vérifier les 8 chiffres, le ranger de nouveau (`secrets set {instance} setup_code`) et redémarrer (aucun autre essai n'est fait)",
+  "pilotes.homekit.deja_appaire": "l'accessoire est déjà appairé (à l'app Maison sans doute) : le retirer de Maison, ranger de nouveau le code (`secrets set {instance} setup_code`) et redémarrer",
+  "pilotes.homekit.appairage_refuse": "l'accessoire refuse l'appairage : le redémarrer, ranger de nouveau le code (`secrets set {instance} setup_code`) et redémarrer Moli",
+  "pilotes.homekit.appairage_perdu": "l'accessoire ne reconnaît plus Moli (réinitialisé ou appairé ailleurs) : `moli-os secrets forget {instance} pairing`, ranger son code (`secrets set {instance} setup_code`) et redémarrer"
 }

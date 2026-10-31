@@ -249,8 +249,14 @@ fn room_device(
     let mut device = device(ctx, id, &room.name, model, speaks);
     if speaks {
         for (key, label) in [
-            ("announce_volume", moli_i18n::tr!("pilotes.sonos.volume_annonce")),
-            ("chime_volume", moli_i18n::tr!("pilotes.sonos.volume_carillon")),
+            (
+                "announce_volume",
+                moli_i18n::tr!("pilotes.sonos.volume_annonce"),
+            ),
+            (
+                "chime_volume",
+                moli_i18n::tr!("pilotes.sonos.volume_carillon"),
+            ),
         ] {
             device.points.push(PointSpec {
                 unit: Some(Unit::Percent),
@@ -675,8 +681,10 @@ impl Voices {
                     pin,
                     ctx.media_publisher(),
                 );
-                self.announcers
-                    .insert(room.uuid.clone(), (room.host.clone(), Arc::clone(&announcer)));
+                self.announcers.insert(
+                    room.uuid.clone(),
+                    (room.host.clone(), Arc::clone(&announcer)),
+                );
                 announcer
             }
         };

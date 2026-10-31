@@ -34,15 +34,18 @@ mod accessories;
 mod audio;
 mod bigint;
 mod camera;
+pub mod controller;
 mod crypto;
 mod http;
 mod mdns;
+pub mod remote;
 mod rtp;
 mod session;
 mod setup;
 mod srp;
 mod srtp;
 mod store;
+mod stream;
 mod tlv;
 
 #[cfg(test)]
@@ -55,7 +58,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use moli_core::{DeviceId, Event, InstanceId, PointId};
+use moli_core::{DeviceId, Event, InstanceId, PointId, Value};
 use moli_runtime::Hub;
 use ring::digest;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -167,6 +170,9 @@ pub(crate) struct Shared {
     /// The alarm mode just asked for, shown as the target until the panel
     /// answers (arming takes a while): `(HomeKit target, asked at)`.
     pending_arm: Mutex<HashMap<PointId, (i64, std::time::Instant)>>,
+    /// The last press of a button (a doorbell's), read back as the event's
+    /// value while it is fresh.
+    presses: Mutex<HashMap<PointId, std::time::Instant>>,
     pub failures: AtomicU32,
     next_conn: AtomicU64,
     /// The port the listener got (the configured one, or the system's for 0).
@@ -182,6 +188,8 @@ impl std::fmt::Debug for Shared {
 /// Pair-setup attempts allowed before the bridge refuses (HAP says 100).
 /// How long an asked alarm mode is shown before the panel's word returns.
 const ARM_PENDING: Duration = Duration::from_secs(90);
+/// How long a press reads back as one (the events go out within it).
+const PRESS_FRESH: Duration = Duration::from_secs(3);
 
 pub(crate) const MAX_FAILURES: u32 = 100;
 
@@ -275,6 +283,28 @@ impl Shared {
         }
     }
 
+    /// A point changed: its watchers hear of it. A press is only news when
+    /// it happens (yes), not when the point falls back to no.
+    fn state_changed(&self, point: &PointId, value: &Value) {
+        let catalog = self.catalog();
+        for pair in catalog.watching(point) {
+            let press = matches!(
+                catalog.find(pair.0, pair.1).map(|c| &c.bind),
+                Some(accessories::Bind::Press(_))
+            );
+            if press {
+                if *value != Value::Bool(true) {
+                    continue;
+                }
+                self.presses
+                    .lock()
+                    .expect("presses lock")
+                    .insert(point.clone(), std::time::Instant::now());
+            }
+            let _ = self.updates.send(*pair);
+        }
+    }
+
     // ---- values -------------------------------------------------------------
 
     /// The alarm took an order: its target stays the asked one for a while,
@@ -343,6 +373,17 @@ impl Shared {
         match &c.bind {
             Bind::Static(v) => Ok(v.clone()),
             Bind::Identify => Err(ST_WRITE_ONLY),
+            // A single press while it is fresh (the event being sent);
+            // otherwise nothing, as HAP wants.
+            Bind::Press(point) => {
+                let fresh = self
+                    .presses
+                    .lock()
+                    .expect("presses lock")
+                    .get(point)
+                    .is_some_and(|at| at.elapsed() < PRESS_FRESH);
+                Ok(if fresh { Json::from(0) } else { Json::Null })
+            }
             Bind::Camera { device, what } => {
                 use camera::CameraChar::{
                     Selected, Setup, Status, SupportedAudio, SupportedRtp, SupportedVideo,
@@ -856,6 +897,7 @@ pub async fn start(
         streams: camera::Streams::new(cancel.clone()),
         setup_owner: Mutex::new(None),
         pending_arm: Mutex::new(HashMap::new()),
+        presses: Mutex::new(HashMap::new()),
         failures: AtomicU32::new(0),
         next_conn: AtomicU64::new(1),
         port,
@@ -939,7 +981,7 @@ async fn maintain(shared: Arc<Shared>, cancel: CancellationToken) {
                 shared.rebuild_now();
             }
             event = events.recv() => match event {
-                Ok(Event::State { point, .. }) => shared.refresh(&point),
+                Ok(Event::State { point, value, .. }) => shared.state_changed(&point, &value),
                 Ok(Event::DeviceUpserted { .. } | Event::LabelChanged { .. }) => {
                     due.get_or_insert(tokio::time::Instant::now() + Duration::from_secs(2));
                 }

@@ -51,6 +51,8 @@ const C_OBSTRUCTION: &str = "24";
 const SVC_CAMERA: &str = "110";
 const SVC_MICROPHONE: &str = "112";
 const SVC_SPEAKER: &str = "113";
+const SVC_DOORBELL: &str = "121";
+const C_SWITCH_EVENT: &str = "73";
 const C_VOLUME: &str = "119";
 const C_MUTE: &str = "11A";
 
@@ -177,6 +179,9 @@ pub enum Bind {
         device: DeviceId,
         what: CameraChar,
     },
+    /// A press (a doorbell's button): an event when the point turns yes,
+    /// nothing when it falls back; read, it is null (HAP's rule).
+    Press(PointId),
 }
 
 /// The words an air conditioner's `mode` point uses for the three modes
@@ -990,7 +995,9 @@ pub fn kinds_of(device: &Device) -> Vec<Kinds> {
 }
 
 /// The stream management service of a camera.
-fn camera_services(device: &DeviceId, talk: bool) -> Vec<ServiceSpec> {
+#[allow(clippy::too_many_lines)] // the services HomeKit wants on a camera, listed
+fn camera_services(camera: &Device, talk: bool) -> Vec<ServiceSpec> {
+    let device = &camera.id;
     let chars = [
         (
             C_SUPPORTED_VIDEO,
@@ -1092,7 +1099,42 @@ fn camera_services(device: &DeviceId, talk: bool) -> Vec<ServiceSpec> {
         kind: SVC_CAMERA,
         chars,
     });
+    // A camera with a bell (a `ring` point): the Home app shows a video
+    // doorbell, and a press rings every phone with a picture.
+    services.extend(ring_of(camera).map(doorbell_service));
     services
+}
+
+/// A camera's bell: its `ring` point, if it has one.
+fn ring_of(camera: &Device) -> Option<PointId> {
+    camera
+        .points
+        .iter()
+        .find(|p| &*p.key == "ring" && p.kind == Kind::Binary)
+        .map(|p| PointId::new(&camera.id, &p.key))
+}
+
+/// The bell of a video doorbell: its press, as HAP's programmable switch.
+fn doorbell_service(ring: PointId) -> ServiceSpec {
+    ServiceSpec {
+        kind: SVC_DOORBELL,
+        chars: vec![
+            spec(
+                C_SWITCH_EVENT,
+                "uint8",
+                READ_NOTIFY,
+                Bind::Press(ring),
+                "Programmable Switch Event",
+            )
+            .meta(Meta {
+                min: Some(0.0),
+                max: Some(0.0),
+                step: Some(1.0),
+                valid_values: Some(vec![0]),
+                ..Meta::default()
+            }),
+        ],
+    }
 }
 
 /// The key of a device's camera among HomeKit's choices: the device itself
@@ -1219,7 +1261,7 @@ impl Catalog {
         let mut truncated = false;
         for (key, view) in candidates {
             let services = if view.camera {
-                camera_services(&view.device.id, view.talk)
+                camera_services(&view.device, view.talk)
             } else {
                 services_of(&view.device, &view.name, view.live).0
             };
@@ -1253,7 +1295,10 @@ impl Catalog {
                 for (c, ch) in service.chars.iter().enumerate() {
                     self.index.insert((accessory.aid, ch.iid), (a, s, c));
                     let points: Vec<&PointId> = match &ch.bind {
-                        Bind::Point(p, _) | Bind::Color(p, _) | Bind::ArmTarget(p) => vec![p],
+                        Bind::Point(p, _)
+                        | Bind::Color(p, _)
+                        | Bind::ArmTarget(p)
+                        | Bind::Press(p) => vec![p],
                         Bind::ClimateTarget { on, mode, .. } => vec![on, mode],
                         Bind::ClimateCurrent {
                             on,
@@ -1836,6 +1881,31 @@ mod tests {
         let dim = Conv::Perceived { lo: 0.0, hi: 99.0 };
         assert_eq!(from_hap(dim, &json!(30)), Some(Value::Int(9)));
         assert_eq!(to_hap(dim, &Value::Int(25)), Some(json!(50)));
+    }
+
+    #[test]
+    fn a_camera_with_a_bell_is_a_video_doorbell() {
+        let bell = view(
+            "bell",
+            vec![
+                point("ring", Kind::Binary, false, Semantic::Other),
+                point("motion", Kind::Binary, false, Semantic::Occupancy),
+            ],
+        );
+        let camera = Entry::camera(bell.device.clone(), &Label::default(), true);
+        let c = catalog(&[camera]);
+        assert_eq!(types(&c, 2), ["3E", "112", "113", "110", "121"]);
+        let ring = PointId::new(&bell.device.id, "ring");
+        let watched = c.watching(&ring);
+        assert_eq!(watched.len(), 1);
+        assert!(matches!(
+            &c.find(watched[0].0, watched[0].1).unwrap().bind,
+            Bind::Press(p) if *p == ring
+        ));
+        // Without a bell, a plain camera.
+        let cam = view("cam", vec![]);
+        let c = catalog(&[Entry::camera(cam.device.clone(), &Label::default(), false)]);
+        assert_eq!(types(&c, 2), ["3E", "112", "110"]);
     }
 
     #[test]

@@ -1361,3 +1361,51 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
     let (_, db) = s.json("GET", "/accessories", &Json::Null).await;
     assert_eq!(db["accessories"].as_array().unwrap().len(), 3);
 }
+
+#[tokio::test]
+async fn moli_as_a_controller_pairs_listens_and_hears_an_event() {
+    use crate::controller::{Connection, Error, Pairing};
+    let b = bridge("controller").await;
+    let code = b.homekit.status(true).setup_code.unwrap();
+    let address = format!("127.0.0.1:{}", b.homekit.port());
+
+    // A wrong code is the accessory's refusal, and pairs nobody.
+    let mut wrong = Connection::open(&address).await.unwrap();
+    assert!(matches!(
+        wrong.pair("000-00-000").await,
+        Err(Error::Refused(tlv::ERR_AUTHENTICATION))
+    ));
+    let mut c = Connection::open(&address).await.unwrap();
+    let pairing = c.pair(&code.replace('-', "")).await.expect("paired");
+    let pairing = Pairing::decode(&pairing.encode()).unwrap();
+
+    // Listening: the lamp's `on`, subscribed.
+    let mut listen = Connection::open(&address).await.unwrap();
+    listen.verify(&pairing).await.expect("verified");
+    let db = listen.accessories().await.unwrap();
+    let (aid, on) = find(&db, "fake:lamp", "25");
+    listen.subscribe(&[(aid, on)]).await.unwrap();
+
+    // Another session switches it on: the listener hears it.
+    let mut write = Connection::open(&address).await.unwrap();
+    write.verify(&pairing).await.unwrap();
+    write
+        .json(
+            "PUT",
+            "/characteristics",
+            Some(&json!({ "characteristics": [{ "aid": aid, "iid": on, "value": true }] })),
+        )
+        .await
+        .unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(5), listen.next_event())
+        .await
+        .expect("an event in time")
+        .unwrap();
+    assert_eq!((event.aid, event.iid), (aid, on));
+    assert_eq!(event.value, json!(true));
+
+    // A stranger's keys do not verify.
+    b.homekit.forget_pairings();
+    let mut gone = Connection::open(&address).await.unwrap();
+    assert!(gone.verify(&pairing).await.is_err());
+}

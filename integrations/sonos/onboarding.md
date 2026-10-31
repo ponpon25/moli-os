@@ -6,7 +6,7 @@
    l'enceinte le joint, `http://<ip de Moli>:8790`), `tts` (serveur Piper `hôte:port`),
    `voice`, `volume`, `rooms` (avec `discover` : seules ces pièces parlent, vide = toutes ; pratique pour garder
    les chambres silencieuses). Il faut une clé maître (empreinte du certificat de chaque enceinte épinglée au
-   premier contact). Une phrase qui commence par `[carillon]` est précédée d'un carillon à deux notes ;
+   premier contact). Une phrase qui commence par `[carillon]` est précédée d'un carillon à trois notes (sol, mi, do) ;
    `[carillon]` seul joue le carillon sans parole.
 4. Déclarer `kind = "sonos"`, `discover = true` (ou `host = "<ip>"`) ; `moli-os check-config`, redémarrer.
 5. Tester en journée, volume bas : pause puis lecture ; une annonce courte si configurée.

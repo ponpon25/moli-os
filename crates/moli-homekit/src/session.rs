@@ -769,7 +769,7 @@ impl Conn {
             // A constant that is writable (the camera's microphone settings) is
             // accepted and unused; the permissions already refuse the others.
             Bind::Identify | Bind::Static(_) => OK,
-            Bind::ArmCurrent { .. } | Bind::ClimateCurrent { .. } => ST_READ_ONLY,
+            Bind::ArmCurrent { .. } | Bind::ClimateCurrent { .. } | Bind::Press(_) => ST_READ_ONLY,
             Bind::ClimateTarget { on, mode, modes } => {
                 let Some(target) = value.as_i64().filter(|t| (0..=3).contains(t)) else {
                     return ST_INVALID;

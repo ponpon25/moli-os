@@ -86,8 +86,10 @@ pub struct Announcer {
     /// The speaker's certificate, pinned at first contact.
     pin: Option<String>,
     publisher: MediaPublisher,
-    /// One announcement at a time, in order.
-    turn: tokio::sync::Mutex<()>,
+    /// One announcement at a time, in order: each waits for the one before
+    /// it to have played (its sound is made meanwhile, so a chime followed
+    /// by a sentence leaves no gap).
+    last: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     /// Announcements waiting or playing.
     waiting: std::sync::atomic::AtomicUsize,
 }
@@ -113,7 +115,7 @@ impl Announcer {
             config,
             pin,
             publisher,
-            turn: tokio::sync::Mutex::new(()),
+            last: std::sync::Mutex::new(None),
             waiting: std::sync::atomic::AtomicUsize::new(0),
         })
     }
@@ -122,8 +124,8 @@ impl Announcer {
     /// seconds (speech, then the clip). Refused when too many are waiting;
     /// dropped if it could not start in time; the house is told of a failure.
     pub fn enqueue(self: &Arc<Self>, text: String, levels: Option<Levels>) -> Result<(), String> {
-        let levels = levels.unwrap_or_else(|| self.config.levels());
         use std::sync::atomic::Ordering;
+        let levels = levels.unwrap_or_else(|| self.config.levels());
         if self.waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING {
             self.waiting.fetch_sub(1, Ordering::SeqCst);
             return Err(moli_i18n::tr!(
@@ -131,20 +133,38 @@ impl Announcer {
                 count = MAX_WAITING
             ));
         }
+        let (played, next) = tokio::sync::oneshot::channel::<()>();
+        let before = self
+            .last
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replace(next);
         let this = Arc::clone(self);
         tokio::spawn(async move {
             let since = tokio::time::Instant::now();
-            let outcome = {
-                let _turn = this.turn.lock().await;
-                if since.elapsed() > STALE_AFTER {
-                    Err(anyhow::anyhow!(moli_i18n::tr!(
-                        "pilotes.sonos.trop_tard",
-                        seconds = STALE_AFTER.as_secs()
-                    )))
-                } else {
-                    this.announce(&text, levels).await
+            let sound = this.prepare(&text, levels).await;
+            // The one before has played, failed or been dropped: our turn.
+            if let Some(before) = before {
+                let _ = before.await;
+            }
+            let outcome = match sound {
+                Ok(_) if since.elapsed() > STALE_AFTER => Err(anyhow::anyhow!(moli_i18n::tr!(
+                    "pilotes.sonos.trop_tard",
+                    seconds = STALE_AFTER.as_secs()
+                ))),
+                Ok((url, volume)) => {
+                    let ready = since.elapsed();
+                    let result = this.play(&url, volume).await;
+                    tracing::info!(
+                        ready_ms = u64::try_from(ready.as_millis()).unwrap_or(u64::MAX),
+                        total_ms = u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        "announcement timing (queued, ready to play, played)"
+                    );
+                    result
                 }
+                Err(e) => Err(e),
             };
+            drop(played);
             this.waiting.fetch_sub(1, Ordering::SeqCst);
             if let Err(e) = outcome {
                 tracing::warn!(error = %format!("{e:#}"), "announcement not played");
@@ -161,9 +181,9 @@ impl Announcer {
         Ok(())
     }
 
-    /// Says `text` on this speaker (the caller holds the turn).
-    async fn announce(&self, text: &str, levels: Levels) -> anyhow::Result<()> {
-        let started = tokio::time::Instant::now();
+    /// Makes the sound for `text` and publishes it: its address and the
+    /// volume to play it at.
+    async fn prepare(&self, text: &str, levels: Levels) -> anyhow::Result<(String, u8)> {
         let (tts_host, tts_port) = self
             .config
             .tts
@@ -198,14 +218,7 @@ impl Announcer {
             "{}/api/media/{name}",
             self.config.media_base.trim_end_matches('/')
         );
-        let prepared = started.elapsed();
-        let result = self.play(&url, volume).await;
-        tracing::info!(
-            prepared_ms = prepared.as_millis() as u64,
-            total_ms = started.elapsed().as_millis() as u64,
-            "announcement timing (sound ready, then played)"
-        );
-        result
+        Ok((url, volume))
     }
 
     async fn play(&self, url: &str, volume: u8) -> anyhow::Result<()> {
@@ -263,9 +276,9 @@ impl Announcer {
         .await?;
         refused(&header, &body)?;
         tracing::info!(
-            connected_ms = connected.as_millis() as u64,
-            players_ms = known.as_millis() as u64,
-            accepted_ms = began.elapsed().as_millis() as u64,
+            connected_ms = u64::try_from(connected.as_millis()).unwrap_or(u64::MAX),
+            players_ms = u64::try_from(known.as_millis()).unwrap_or(u64::MAX),
+            accepted_ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX),
             clip = %body,
             "announcement accepted by the speaker"
         );
@@ -390,9 +403,9 @@ fn split_chime(text: &str) -> (bool, &str) {
 
 /// Where the voice starts in a chime-and-voice sound: while the last note
 /// is still ringing out, so the wait is short.
-const VOICE_AT: f64 = 1.3;
-/// Length of the chime: its two notes ring out about this long.
-const CHIME_LEN: f64 = 2.0;
+const VOICE_AT: f64 = 1.7;
+/// Length of the chime: its three notes ring out about this long.
+const CHIME_LEN: f64 = 2.6;
 
 /// A struck tube: its partials (frequency ratio, level, decay per second)
 /// are not harmonic, which is what makes a bell sound like a bell.
@@ -403,13 +416,18 @@ const TUBE: [(f64, f64, f64); 4] = [
     (8.93, 0.08, 9.0),
 ];
 
-/// The samples of a door chime: "ding-dong", a high note (E5), then a
-/// lower one (C5) a little later, each a struck tube ringing out.
+/// The samples of a door chime: "ding-dang-dong", three notes going down
+/// (G5, E5, C5), each a struck tube ringing out.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)] // audio samples, bounded
 fn chime_pcm(rate: u32, gain: f64) -> Vec<i16> {
     let rate_f = f64::from(rate);
     let total = (rate_f * CHIME_LEN) as usize;
     let mut mix = vec![0f64; total];
-    for (freq, start) in [(659.25_f64, 0.0_f64), (523.25, 0.55)] {
+    for (freq, start) in [(783.99_f64, 0.0_f64), (659.25, 0.45), (523.25, 0.9)] {
         let first = (start * rate_f) as usize;
         for (i, out) in mix.iter_mut().enumerate().skip(first) {
             let t = (i - first) as f64 / rate_f;
@@ -486,6 +504,11 @@ fn read_wav(wav: &[u8]) -> Option<(u32, u16, &[u8])> {
 /// volume per clip: it is the louder of the two levels, and the other part
 /// is made quieter in the sound itself. The speech alone when there is no
 /// chime or its format is not the usual 16-bit PCM.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)] // audio samples, bounded
 fn mix(speech: Vec<u8>, chime: bool, levels: Levels) -> (Vec<u8>, u8) {
     if !chime {
         return (speech, levels.voice);
@@ -498,8 +521,10 @@ fn mix(speech: Vec<u8>, chime: bool, levels: Levels) -> (Vec<u8>, u8) {
     let chime = chime_pcm(rate, share(levels.chime));
     let voice_gain = share(levels.voice);
     let voice: Vec<i16> = pcm
-        .chunks_exact(2)
-        .map(|b| (f64::from(i16::from_le_bytes([b[0], b[1]])) * voice_gain) as i16)
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| (f64::from(i16::from_le_bytes(*b)) * voice_gain) as i16)
         .collect();
     let at = (f64::from(rate) * VOICE_AT) as usize;
     let mut mono = vec![0i32; chime.len().max(at + voice.len())];
@@ -536,6 +561,11 @@ pub fn check_text(text: &str) -> anyhow::Result<&str> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 mod tests {
     use super::*;
 
@@ -543,15 +573,25 @@ mod tests {
     fn the_chime_comes_first_and_alone_is_a_sound() {
         assert_eq!(split_chime("[carillon] Bonjour"), (true, "Bonjour"));
         assert_eq!(split_chime("[Carillon]"), (true, ""));
-        assert_eq!(split_chime("Bonjour [carillon]"), (false, "Bonjour [carillon]"));
+        assert_eq!(
+            split_chime("Bonjour [carillon]"),
+            (false, "Bonjour [carillon]")
+        );
         let speech = wav_file(22_050, 1, &vec![1000; 40_000]);
-        let same = Levels { voice: 20, chime: 20 };
+        let same = Levels {
+            voice: 20,
+            chime: 20,
+        };
         let (both, volume) = mix(speech.clone(), true, same);
         assert_eq!(volume, 20);
         let (rate, channels, pcm) = read_wav(&both).unwrap();
         assert_eq!((rate, channels), (22_050, 1));
         let at = (22_050.0 * VOICE_AT) as usize;
-        assert_eq!(pcm.len(), (at + 40_000) * 2, "the voice starts while the chime rings out");
+        assert_eq!(
+            pcm.len(),
+            (at + 40_000) * 2,
+            "the voice starts while the chime rings out"
+        );
         // After the chime has ended only the voice is left.
         let end = (22_050.0 * CHIME_LEN) as usize + 10;
         assert_eq!(&pcm[end * 2..end * 2 + 2], &1000i16.to_le_bytes());
@@ -566,18 +606,34 @@ mod tests {
         let speech = wav_file(22_050, 1, &vec![10_000; 40_000]);
         // The chime louder: the clip plays at the chime's level, the voice
         // is made quieter in the sound.
-        let (wav, volume) = mix(speech.clone(), true, Levels { voice: 10, chime: 40 });
+        let (wav, volume) = mix(
+            speech.clone(),
+            true,
+            Levels {
+                voice: 10,
+                chime: 40,
+            },
+        );
         assert_eq!(volume, 40);
         let (_, _, pcm) = read_wav(&wav).unwrap();
         let end = (22_050.0 * CHIME_LEN) as usize + 10;
         let voice = i16::from_le_bytes([pcm[end * 2], pcm[end * 2 + 1]]);
         assert_eq!(voice, 2500);
         // The voice louder: the chime is made quieter.
-        let (wav, volume) = mix(speech, true, Levels { voice: 40, chime: 10 });
+        let (wav, volume) = mix(
+            speech,
+            true,
+            Levels {
+                voice: 40,
+                chime: 10,
+            },
+        );
         assert_eq!(volume, 40);
         let (_, _, pcm) = read_wav(&wav).unwrap();
         let peak = pcm
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs())
             .take(20_000)
             .max()

@@ -375,7 +375,10 @@ fn new_ring(event: &Event, rung: &mut HashSet<String>) -> Option<i64> {
         // A ring that is the event's own type.
         return rung.insert(marker).then_some(event.time);
     }
-    let told = event.calls.iter().any(|(_, kind, _)| kind.contains("incoming"));
+    let told = event
+        .calls
+        .iter()
+        .any(|(_, kind, _)| kind.contains("incoming"));
     let mut pressed = None;
     for (id, kind, when) in &event.calls {
         if !rung.insert(id.clone()) {
@@ -392,13 +395,7 @@ fn new_ring(event: &Event, rung: &mut HashSet<String>) -> Option<i64> {
 }
 
 /// Says what an event is on the doorbell it came from.
-fn announce(
-    ctx: &DriverCtx,
-    bells: &[Bell],
-    event: &Event,
-    now: i64,
-    rung: &mut HashSet<String>,
-) {
+fn announce(ctx: &DriverCtx, bells: &[Bell], event: &Event, now: i64, rung: &mut HashSet<String>) {
     // An event with no module is the home's only doorbell's.
     let bell = event
         .module
@@ -719,7 +716,10 @@ mod tests {
         assert_eq!(events[1].occasion(), Occasion::Other);
         assert_eq!(events[2].occasion(), Occasion::Other);
         assert_eq!(events[0].subs, ["human"]);
-        assert_eq!(events[0].key, "a+human", "an event that gains content is seen again");
+        assert_eq!(
+            events[0].key, "a+human",
+            "an event that gains content is seen again"
+        );
         assert_eq!(events[0].base, "a");
     }
 
@@ -739,7 +739,8 @@ mod tests {
     #[test]
     fn two_presses_in_one_event_ring_twice_and_an_answer_does_not() {
         let list = |subs: &str| -> Vec<Event> {
-            let text = format!(r#"[{{"id":"e","type":"outdoor","time":100,"subevents":[{subs}]}}]"#);
+            let text =
+                format!(r#"[{{"id":"e","type":"outdoor","time":100,"subevents":[{subs}]}}]"#);
             events_of(&serde_json::from_str::<Vec<Json>>(&text).unwrap())
         };
         let mut rung = HashSet::new();

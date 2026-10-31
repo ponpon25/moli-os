@@ -919,6 +919,7 @@ const KINDS: &[&str] = &[
     "verisure",
     "hitachi",
     "netatmo",
+    "homekit",
     "tuya",
     "helpers",
     "presence",
@@ -1114,6 +1115,9 @@ fn build_driver(
             config.options.clone().try_into().with_context(context)?,
         )),
         "netatmo" => Arc::new(moli_netatmo::Netatmo::new(
+            config.options.clone().try_into().with_context(context)?,
+        )),
+        "homekit" => Arc::new(moli_homekit::remote::Accessory::new(
             config.options.clone().try_into().with_context(context)?,
         )),
         "unifi" => Arc::new(moli_unifi::Unifi::new(

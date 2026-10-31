@@ -1383,6 +1383,7 @@ dependencies = [
  "aes",
  "anyhow",
  "moli-core",
+ "moli-i18n",
  "moli-net",
  "moli-runtime",
  "opus-rs",

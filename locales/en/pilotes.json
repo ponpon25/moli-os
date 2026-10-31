@@ -620,5 +620,15 @@
   "pilotes.netatmo.connexion_suspendue": "sign-in suspended after Netatmo refused: make a new token, then `moli-os secrets forget {instance} login_locked` and restart",
   "pilotes.netatmo.coffre_indisponible": "secret store unavailable",
   "pilotes.netatmo.coffre_requis": "the Netatmo driver needs the secret store: {problem}",
-  "pilotes.netatmo.lecture_seule": "the doorbell takes no orders"
+  "pilotes.netatmo.lecture_seule": "the doorbell takes no orders",
+  "pilotes.homekit.sonnerie": "Ring",
+  "pilotes.homekit.bouton": "Button",
+  "pilotes.homekit.mouvement": "Motion",
+  "pilotes.homekit.lecture_seule": "this HomeKit accessory takes no order from Moli",
+  "pilotes.homekit.coffre_requis": "a HomeKit accessory needs the secret store to keep its pairing",
+  "pilotes.homekit.code_manquant": "HomeKit code missing: remove the accessory from the Home app, then store its 8-digit code with `moli-os secrets set {instance} setup_code` (value through a pipe) and restart",
+  "pilotes.homekit.code_faux": "the accessory refuses the HomeKit code: check the 8 digits, store it again (`secrets set {instance} setup_code`) and restart (nothing else is tried)",
+  "pilotes.homekit.deja_appaire": "the accessory is already paired (to the Home app, most likely): remove it from Home, store the code again (`secrets set {instance} setup_code`) and restart",
+  "pilotes.homekit.appairage_refuse": "the accessory refuses to pair: restart it, store the code again (`secrets set {instance} setup_code`) and restart Moli",
+  "pilotes.homekit.appairage_perdu": "the accessory no longer knows Moli (reset or paired elsewhere): `moli-os secrets forget {instance} pairing`, store its code (`secrets set {instance} setup_code`) and restart"
 }

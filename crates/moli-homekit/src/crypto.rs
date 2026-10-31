@@ -91,8 +91,7 @@ impl Channel {
         }
     }
 
-    /// The controller's side of the same session (tests).
-    #[cfg(test)]
+    /// The controller's side of the same session (Moli as a controller).
     pub fn mirrored(shared: &[u8]) -> Self {
         let accessory = Self::new(shared);
         Self {

@@ -1,0 +1,26 @@
+[integration]
+id = "homekit"
+name = "Accessoire HomeKit (Moli appairé comme l'app Maison)"
+brands = []
+models = []
+# HAP sur IP : appairage SRP, session chiffrée, événements poussés par l'accessoire, sans cloud.
+transport = "tcp"
+driver = "homekit"
+crate = "moli-homekit"
+
+[discovery]
+mdns = ["_hap._tcp"]
+ssdp = []
+ports = []
+
+[needs]
+# Le code HomeKit à 8 chiffres, une fois (`moli-os secrets set <instance> setup_code`) ; l'appairage
+# est ensuite gardé dans le coffre (`pairing`) et le code oublié. L'accessoire doit d'abord être
+# retiré de l'app Maison (un accessoire HomeKit n'a qu'un propriétaire).
+secrets = ["setup_code"]
+vars = []
+options = ["address"]
+
+[origin]
+reused = "aucun code repris ; spécification HAP (contrôleur), tests contre le pont HomeKit de Moli"
+author = "agent"

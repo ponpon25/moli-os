@@ -192,9 +192,40 @@ fn occasion(kind: &str) -> Occasion {
 struct Event {
     /// Netatmo's identifier, or `type:time` when it gave none.
     key: String,
+    /// Netatmo's identifier alone: the same event gains content, so it is
+    /// answered once whatever the key says.
+    base: String,
     module: Option<String>,
     kind: String,
+    /// What the event says it holds (`subevents`): a detection is typed
+    /// `outdoor`, with `human` inside, often added after the event first
+    /// appears.
+    subs: Vec<String>,
+    /// The calls inside the event: (identifier, type, time). Netatmo puts
+    /// several presses close together in one event, each its own call.
+    calls: Vec<(String, String, i64)>,
+    /// The names of the event's fields, to see what Netatmo really sends.
+    fields: String,
     time: i64,
+}
+
+impl Event {
+    /// A ring says so in its own type, or the doorbell's event carries a
+    /// call (`incoming_call`, then `accepted_call` or `missed_call` as it
+    /// goes on); a person is seen as a type or inside an `outdoor` detection.
+    fn occasion(&self) -> Occasion {
+        let calls = self.subs.iter().any(|sub| sub.ends_with("_call"));
+        match occasion(&self.kind) {
+            Occasion::Other if calls => Occasion::Ring,
+            Occasion::Other => self
+                .subs
+                .iter()
+                .map(|sub| occasion(sub))
+                .find(|o| *o != Occasion::Other)
+                .unwrap_or(Occasion::Other),
+            known => known,
+        }
+    }
 }
 
 fn events_of(list: &[Json]) -> Vec<Event> {
@@ -202,13 +233,45 @@ fn events_of(list: &[Json]) -> Vec<Event> {
         .filter_map(|e| {
             let kind = e["type"].as_str()?.to_owned();
             let time = e["time"].as_i64().unwrap_or(0);
-            let key = e["id"]
+            let base = e["id"]
                 .as_str()
                 .map_or_else(|| format!("{kind}:{time}"), str::to_owned);
+            let subs: Vec<String> = ["subevents", "subevent_list", "event_list"]
+                .iter()
+                .flat_map(|list| e[*list].as_array().into_iter().flatten())
+                .filter_map(|sub| sub["type"].as_str().map(str::to_owned))
+                .collect();
+            let key = if subs.is_empty() {
+                base.clone()
+            } else {
+                format!("{base}+{}", subs.join("+"))
+            };
+            let calls: Vec<(String, String, i64)> = ["subevents", "subevent_list", "event_list"]
+                .iter()
+                .flat_map(|list| e[*list].as_array().into_iter().flatten())
+                .filter_map(|sub| {
+                    let kind = sub["type"].as_str()?;
+                    let when = sub["time"].as_i64().unwrap_or(time);
+                    kind.ends_with("_call").then(|| {
+                        let id = sub["id"]
+                            .as_str()
+                            .map_or_else(|| format!("{kind}:{when}"), str::to_owned);
+                        (id, kind.to_owned(), when)
+                    })
+                })
+                .collect();
+            let fields = e
+                .as_object()
+                .map(|o| o.keys().cloned().collect::<Vec<_>>().join(","))
+                .unwrap_or_default();
             Some(Event {
                 key,
+                base: base.clone(),
                 module: e["module_id"].as_str().map(str::to_owned),
                 kind,
+                subs,
+                calls,
+                fields,
                 time,
             })
         })
@@ -297,12 +360,45 @@ impl Seen {
 #[derive(Default)]
 struct Keep {
     seen: Seen,
+    /// The events already rung for, by Netatmo's identifier.
+    rung: HashSet<String>,
     known: Vec<Bell>,
     failures: u32,
 }
 
+/// When the press happened, if this event holds a press not rung for yet:
+/// every call is rung for once, and a call that only says it was answered
+/// or missed rings only when its event never told of the press itself.
+fn new_ring(event: &Event, rung: &mut HashSet<String>) -> Option<i64> {
+    let marker = format!("event:{}", event.base);
+    if event.calls.is_empty() {
+        // A ring that is the event's own type.
+        return rung.insert(marker).then_some(event.time);
+    }
+    let told = event.calls.iter().any(|(_, kind, _)| kind.contains("incoming"));
+    let mut pressed = None;
+    for (id, kind, when) in &event.calls {
+        if !rung.insert(id.clone()) {
+            continue;
+        }
+        if kind.contains("incoming") || (!told && !rung.contains(&marker)) {
+            pressed = Some(*when);
+        }
+    }
+    if pressed.is_some() {
+        rung.insert(marker);
+    }
+    pressed
+}
+
 /// Says what an event is on the doorbell it came from.
-fn announce(ctx: &DriverCtx, bells: &[Bell], event: &Event, now: i64) {
+fn announce(
+    ctx: &DriverCtx,
+    bells: &[Bell],
+    event: &Event,
+    now: i64,
+    rung: &mut HashSet<String>,
+) {
     // An event with no module is the home's only doorbell's.
     let bell = event
         .module
@@ -317,16 +413,30 @@ fn announce(ctx: &DriverCtx, bells: &[Bell], event: &Event, now: i64) {
     if now - event.time > FRESH_SECS {
         return;
     }
-    match occasion(&event.kind) {
+    match event.occasion() {
         Occasion::Ring => {
-            tracing::info!(instance = %ctx.instance(), "netatmo doorbell rung");
-            ctx.pulse_state(&id, "ring", Value::Bool(true));
+            let Some(pressed) = new_ring(event, rung) else {
+                return;
+            };
+            tracing::info!(instance = %ctx.instance(), subs = %event.subs.join(","), age_s = now - pressed, "netatmo doorbell rung");
+            pulse(ctx, &id, "ring");
         }
-        Occasion::Visitor => ctx.pulse_state(&id, "visitor", Value::Bool(true)),
+        Occasion::Visitor => {
+            tracing::info!(instance = %ctx.instance(), kind = %event.kind, subs = %event.subs.join(","), age_s = now - event.time, "netatmo visitor");
+            pulse(ctx, &id, "visitor");
+        }
         Occasion::Other => {
-            tracing::info!(instance = %ctx.instance(), kind = %event.kind, "netatmo event");
+            tracing::info!(instance = %ctx.instance(), kind = %event.kind, subs = %event.subs.join(","), age_s = now - event.time, fields = %event.fields, "netatmo event");
         }
     }
+}
+
+/// An occurrence: the point goes to yes, then back to no at once. The
+/// automations only see a change, so a point left at yes would let the next
+/// ring go unnoticed.
+fn pulse(ctx: &DriverCtx, id: &DeviceId, key: &str) {
+    ctx.pulse_state(id, key, Value::Bool(true));
+    ctx.set_state(id, key, Value::Bool(false));
 }
 
 fn unix_now() -> i64 {
@@ -435,6 +545,10 @@ async fn session(
     for bell in &bells {
         if !keep.known.contains(bell) {
             ctx.upsert_device(device_of(ctx, bell));
+            // At rest: a value left at yes by an earlier run is not a ring.
+            for key in ["ring", "visitor"] {
+                ctx.set_state(&ctx.device_id(&bell.id), key, Value::Bool(false));
+            }
             tracing::info!(instance = %ctx.instance(), "netatmo doorbell found");
         }
     }
@@ -450,6 +564,7 @@ async fn session(
     let mut next_hook = Instant::now();
     let mut quick: Vec<Instant> = Vec::new();
     let mut next_status = Instant::now();
+    let mut soft = 0u32;
     loop {
         if let Err(stop) = sign_in(client, ctx).await {
             return stop;
@@ -485,12 +600,19 @@ async fn session(
         for home in homes {
             match client.events(home, EVENTS).await {
                 Ok(list) => {
+                    soft = 0;
                     let now = unix_now();
                     for event in keep.seen.fresh(events_of(&list)) {
-                        announce(ctx, &bells, &event, now);
+                        announce(ctx, &bells, &event, now, &mut keep.rung);
                     }
                 }
                 Err(ApiError::SessionExpired) => client.forget_session(),
+                // Netatmo answers 503 now and then, often right after a push:
+                // the next read catches up, so a session is not worth ending.
+                Err(e @ (ApiError::Refused(_) | ApiError::Network(_))) if soft < 3 => {
+                    soft += 1;
+                    tracing::warn!(instance = %ctx.instance(), error = %e, "netatmo events not read");
+                }
                 Err(e) => return passing(e),
             }
             if Instant::now() >= next_status {
@@ -505,6 +627,9 @@ async fn session(
                         }
                     }
                     Err(ApiError::SessionExpired) => client.forget_session(),
+                    Err(e @ (ApiError::Refused(_) | ApiError::Network(_))) => {
+                        tracing::warn!(instance = %ctx.instance(), error = %e, "netatmo status not read");
+                    }
                     Err(e) => return passing(e),
                 }
             }
@@ -582,6 +707,63 @@ mod tests {
     }
 
     #[test]
+    fn a_person_seen_in_a_detection_is_a_visitor() {
+        let list: Vec<Json> = serde_json::from_str(
+            r#"[{"id":"a","type":"outdoor","time":1,"subevents":[{"type":"human"}]},
+                {"id":"b","type":"outdoor","time":2,"subevent_list":[{"type":"vehicle"}]},
+                {"id":"c","type":"outdoor","time":3}]"#,
+        )
+        .unwrap();
+        let events = events_of(&list);
+        assert_eq!(events[0].occasion(), Occasion::Visitor);
+        assert_eq!(events[1].occasion(), Occasion::Other);
+        assert_eq!(events[2].occasion(), Occasion::Other);
+        assert_eq!(events[0].subs, ["human"]);
+        assert_eq!(events[0].key, "a+human", "an event that gains content is seen again");
+        assert_eq!(events[0].base, "a");
+    }
+
+    #[test]
+    fn a_call_inside_a_detection_is_a_ring() {
+        let list: Vec<Json> = serde_json::from_str(
+            r#"[{"id":"a","type":"outdoor","time":1,"subevents":[{"type":"accepted_call"}]},
+                {"id":"b","type":"outdoor","time":2,"subevents":[{"type":"incoming_call"}]},
+                {"id":"c","type":"outdoor","time":3,"subevents":[{"type":"missed_call"}]}]"#,
+        )
+        .unwrap();
+        for event in events_of(&list) {
+            assert_eq!(event.occasion(), Occasion::Ring, "{}", event.base);
+        }
+    }
+
+    #[test]
+    fn two_presses_in_one_event_ring_twice_and_an_answer_does_not() {
+        let list = |subs: &str| -> Vec<Event> {
+            let text = format!(r#"[{{"id":"e","type":"outdoor","time":100,"subevents":[{subs}]}}]"#);
+            events_of(&serde_json::from_str::<Vec<Json>>(&text).unwrap())
+        };
+        let mut rung = HashSet::new();
+        let first = list(r#"{"id":"s1","type":"incoming_call","time":110}"#);
+        assert_eq!(new_ring(&first[0], &mut rung), Some(110));
+        assert_eq!(new_ring(&first[0], &mut rung), None, "once per call");
+        // The visitor presses again in the same event.
+        let second = list(
+            r#"{"id":"s1","type":"incoming_call","time":110},{"id":"s2","type":"incoming_call","time":140}"#,
+        );
+        assert_eq!(new_ring(&second[0], &mut rung), Some(140));
+        // Someone answers: no new ring.
+        let answered = list(
+            r#"{"id":"s1","type":"incoming_call","time":110},{"id":"s2","type":"incoming_call","time":140},{"id":"s3","type":"accepted_call","time":150}"#,
+        );
+        assert_eq!(new_ring(&answered[0], &mut rung), None);
+        // An answered call whose press was never seen still rings, once.
+        let mut rung = HashSet::new();
+        let late = list(r#"{"id":"s9","type":"accepted_call","time":120}"#);
+        assert_eq!(new_ring(&late[0], &mut rung), Some(120));
+        assert_eq!(new_ring(&late[0], &mut rung), None);
+    }
+
+    #[test]
     fn history_is_not_announced_and_news_is_once() {
         let events = fixture();
         assert_eq!(events.len(), 3);
@@ -596,8 +778,12 @@ mod tests {
             0,
             Event {
                 key: "new".into(),
+                base: "new".into(),
                 module: None,
                 kind: "incoming_call".into(),
+                subs: Vec::new(),
+                calls: Vec::new(),
+                fields: String::new(),
                 time: 1_800_000_000,
             },
         );

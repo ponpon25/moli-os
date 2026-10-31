@@ -88,8 +88,8 @@ struct Layout {
     model: Option<String>,
     /// `(aid, iid)`, the point key, its role.
     watched: Vec<((u64, u64), &'static str, Role)>,
-    /// Its camera's stream management, if it films.
-    camera: Option<crate::stream::Ids>,
+    /// Its camera's stream managements (one per viewer at once), if it films.
+    camera: Vec<crate::stream::Ids>,
     /// It has a speaker (a person can answer through it).
     speaker: bool,
 }
@@ -113,12 +113,12 @@ fn layout_of(db: &Json) -> Option<Layout> {
         .iter()
         .find(|s| s["type"].as_str().map(short_type).as_deref() == Some(ACCESSORY_INFORMATION));
     let mut watched = Vec::new();
-    let mut camera = None;
+    let mut camera = Vec::new();
     let mut speaker = false;
     for service in services {
         let kind = service["type"].as_str().map(short_type);
         speaker |= kind.as_deref() == Some(SPEAKER);
-        if kind.as_deref() == Some(CAMERA) && camera.is_none() {
+        if kind.as_deref() == Some(CAMERA) {
             let iid_of = |t: &str| {
                 service["characteristics"]
                     .as_array()?
@@ -127,7 +127,7 @@ fn layout_of(db: &Json) -> Option<Layout> {
                     .as_u64()
             };
             if let (Some(setup), Some(selected)) = (iid_of(SETUP_ENDPOINTS), iid_of(SELECTED)) {
-                camera = Some(crate::stream::Ids {
+                camera.push(crate::stream::Ids {
                     aid,
                     setup,
                     selected,
@@ -353,8 +353,12 @@ async fn session(
     let native = native_of(pairing);
     let id = ctx.device_id(&native);
     ctx.upsert_device(device_of(ctx, &native, &layout));
-    if let Some(ids) = layout.camera {
-        let camera = Arc::new(Camera::new(&config.address, pairing.clone(), ids));
+    if !layout.camera.is_empty() {
+        let camera = Arc::new(Camera::new(
+            &config.address,
+            pairing.clone(),
+            layout.camera.clone(),
+        ));
         ctx.provide_live(&id, camera.clone());
         ctx.provide_snapshots(&id, camera.clone());
         if layout.speaker {
@@ -461,7 +465,7 @@ mod tests {
         let layout = layout_of(&doorbell_db()).unwrap();
         assert_eq!(layout.name, "Doorbell");
         assert_eq!(layout.manufacturer.as_deref(), Some("Netatmo"));
-        assert_eq!(layout.camera, None);
+        assert!(layout.camera.is_empty());
         assert_eq!(
             layout.watched,
             vec![

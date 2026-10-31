@@ -1328,7 +1328,8 @@ async fn a_phone_watches_a_camera_in_srtp_and_the_guard_keeps_protected_rooms_ou
         &crate::camera::unb64(read["characteristics"][0]["value"].as_str().unwrap()).unwrap(),
     )
     .unwrap();
-    assert_eq!(status.byte(1), Some(1), "in use while it streams");
+    // One phone watches: a second one still can.
+    assert_eq!(status.byte(1), Some(0), "available while one phone watches");
     let (code, jpeg) = s
         .call(
             "POST",

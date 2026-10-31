@@ -19,6 +19,7 @@
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,25 +31,23 @@ use moli_runtime::media::{
 };
 use ring::rand::{SecureRandom as _, SystemRandom};
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
-use tokio_util::sync::{CancellationToken, DropGuard};
+use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use crate::audio::{FRAME, OpusPipe, RATE};
 use crate::controller::{Connection, Pairing};
 use crate::srtp::{KEY_LEN, Receiver, SALT_LEN, Sender, header_len};
 use crate::tlv::Tlv;
 
-/// The sizes the camera offers, largest first (its supported video
-/// configuration), and the H.264 level each needs.
-const SIZES: [(u16, u16, u8); 4] = [
-    (1920, 1080, 2),
-    (1280, 720, 0),
-    (640, 360, 0),
-    (320, 240, 0),
-];
 const VIDEO_PT: u8 = 99;
 const AUDIO_PT: u8 = 110;
 const COMFORT_PT: u8 = 13;
+/// What the camera is asked for, whoever watches (and the H.264 level).
+const SIZE: (u16, u16, u8) = (1280, 720, 0);
+/// Frames and sound kept for viewers that read late (a few seconds).
+const SHARED_ITEMS: usize = 512;
+/// A viewer is let go after this: a TV left on must not hold the camera.
+const MAX_WATCH: Duration = Duration::from_secs(10 * 60);
 /// The first picture a viewer can start on must come within this.
 const FIRST_PICTURE: Duration = Duration::from_secs(10);
 const REPORT_EVERY: Duration = Duration::from_secs(1);
@@ -71,12 +70,44 @@ struct VoiceOut {
     ssrc: u32,
 }
 
+/// A stream management taken for the shared stream, given back when it
+/// ends (or never started).
+struct Claim {
+    busy: Arc<Mutex<Vec<bool>>>,
+    index: usize,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        if let Some(slot) = self.busy.lock().expect("slots lock").get_mut(self.index) {
+            *slot = false;
+        }
+    }
+}
+
+/// The camera's one stream, shared by everyone who watches it: two Apple
+/// TVs and a phone cost the camera a single stream.
+struct Upstream {
+    generation: u64,
+    items: broadcast::Sender<LiveItem>,
+    info: LiveInfo,
+    viewers: usize,
+    stop: CancellationToken,
+    voice: VoiceOut,
+}
+
+type SharedUpstream = Arc<Mutex<Option<Upstream>>>;
+
 /// One camera of an accessory paired to Moli.
 pub struct Camera {
     address: String,
     pairing: Pairing,
-    ids: Ids,
-    voice: Arc<Mutex<Option<VoiceOut>>>,
+    ids: Vec<Ids>,
+    busy: Arc<Mutex<Vec<bool>>>,
+    upstream: SharedUpstream,
+    /// One stream started at a time: a second viewer waits and joins it.
+    starting: tokio::sync::Mutex<()>,
+    generations: AtomicU64,
 }
 
 impl std::fmt::Debug for Camera {
@@ -104,17 +135,6 @@ fn srtp_params(key: &[u8; KEY_LEN], salt: &[u8; SALT_LEN]) -> Vec<u8> {
 fn keys_of(answer: &Tlv, tag: u8) -> Option<([u8; KEY_LEN], [u8; SALT_LEN])> {
     let t = Tlv::parse(answer.get(tag)?)?;
     Some((t.get(2)?.try_into().ok()?, t.get(3)?.try_into().ok()?))
-}
-
-/// The size to ask for: the largest the viewer takes, at least the smallest.
-fn size_for(want: &LiveWant) -> (u16, u16, u8) {
-    SIZES
-        .iter()
-        .copied()
-        .find(|(w, h, _)| {
-            u32::from(*w) <= want.width.max(320) && u32::from(*h) <= want.height.max(240)
-        })
-        .unwrap_or(SIZES[3])
 }
 
 /// `SelectedRTPStreamConfiguration`: H.264 main, Opus 16 kHz mono, start
@@ -262,41 +282,107 @@ impl Depacketizer {
     }
 }
 
-struct Stream {
+/// One viewer of the shared stream. It starts on a key frame, stops after
+/// [`MAX_WATCH`], and leaving it ends the camera's stream if it was the last.
+struct View {
     info: LiveInfo,
     early: VecDeque<LiveItem>,
-    items: mpsc::Receiver<LiveItem>,
-    _stop: DropGuard,
+    items: broadcast::Receiver<LiveItem>,
+    waiting_key: bool,
+    since: tokio::time::Instant,
+    _viewer: Viewer,
 }
 
-impl LiveStream for Stream {
+/// Counts a viewer of one shared stream (its generation).
+struct Viewer {
+    upstream: SharedUpstream,
+    generation: u64,
+}
+
+impl Drop for Viewer {
+    fn drop(&mut self) {
+        let mut upstream = self.upstream.lock().expect("upstream lock");
+        let last = upstream.as_mut().is_some_and(|up| {
+            if up.generation != self.generation {
+                return false;
+            }
+            up.viewers = up.viewers.saturating_sub(1);
+            up.viewers == 0
+        });
+        if last && let Some(up) = upstream.take() {
+            up.stop.cancel();
+        }
+    }
+}
+
+impl LiveStream for View {
     fn info(&self) -> &LiveInfo {
         &self.info
     }
 
     fn next(&mut self) -> BoxFuture<'_, anyhow::Result<LiveItem>> {
         Box::pin(async move {
-            if let Some(item) = self.early.pop_front() {
+            loop {
+                // A viewer nobody stopped (a TV left on): let go of it.
+                if self.since.elapsed() > MAX_WATCH {
+                    bail!("watched for {} minutes: stopped", MAX_WATCH.as_secs() / 60);
+                }
+                if let Some(item) = self.early.pop_front() {
+                    return Ok(item);
+                }
+                let item = match tokio::time::timeout(SILENT, self.items.recv()).await {
+                    Err(_) => bail!("the camera went silent"),
+                    Ok(Err(broadcast::error::RecvError::Closed)) => bail!("the camera stopped"),
+                    // Frames were missed: start again on the next key frame.
+                    Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                        self.waiting_key = true;
+                        continue;
+                    }
+                    Ok(Ok(item)) => item,
+                };
+                if self.waiting_key {
+                    match &item {
+                        LiveItem::Video(frame) if frame.keyframe => self.waiting_key = false,
+                        _ => continue,
+                    }
+                }
                 return Ok(item);
-            }
-            match tokio::time::timeout(SILENT, self.items.recv()).await {
-                Ok(Some(item)) => Ok(item),
-                Ok(None) => bail!("the camera stopped"),
-                Err(_) => bail!("the camera went silent"),
             }
         })
     }
 }
 
 impl Camera {
+    /// `ids`: the stream managements, at least one.
     #[must_use]
-    pub fn new(address: &str, pairing: Pairing, ids: Ids) -> Self {
+    pub fn new(address: &str, pairing: Pairing, ids: Vec<Ids>) -> Self {
+        let busy = vec![false; ids.len()];
         Self {
             address: address.to_owned(),
             pairing,
             ids,
-            voice: Arc::new(Mutex::new(None)),
+            busy: Arc::new(Mutex::new(busy)),
+            upstream: Arc::new(Mutex::new(None)),
+            starting: tokio::sync::Mutex::new(()),
+            generations: AtomicU64::new(0),
         }
+    }
+
+    /// A free stream management, taken.
+    fn claim(&self) -> anyhow::Result<(Ids, Claim)> {
+        let mut busy = self.busy.lock().expect("slots lock");
+        let index = busy
+            .iter()
+            .position(|b| !b)
+            .context("every stream of the camera is in use")?;
+        busy[index] = true;
+        Ok((
+            self.ids[index],
+            Claim {
+                busy: Arc::clone(&self.busy),
+                index,
+            },
+        ))
     }
 
     async fn session(&self) -> anyhow::Result<Connection> {
@@ -305,8 +391,36 @@ impl Camera {
         Ok(connection)
     }
 
+    /// A new viewer of the stream already running, if one is.
+    fn join(&self) -> Option<View> {
+        let mut upstream = self.upstream.lock().expect("upstream lock");
+        let up = upstream.as_mut().filter(|up| !up.stop.is_cancelled())?;
+        up.viewers += 1;
+        Some(View {
+            info: up.info.clone(),
+            early: VecDeque::new(),
+            items: up.items.subscribe(),
+            waiting_key: true,
+            since: tokio::time::Instant::now(),
+            _viewer: Viewer {
+                upstream: Arc::clone(&self.upstream),
+                generation: up.generation,
+            },
+        })
+    }
+
+    async fn watch(&self) -> anyhow::Result<Box<dyn LiveStream>> {
+        let _one = self.starting.lock().await;
+        if let Some(view) = self.join() {
+            tracing::info!("homekit camera: a viewer joins the stream");
+            return Ok(Box::new(view));
+        }
+        Ok(Box::new(self.start().await?))
+    }
+
     #[allow(clippy::too_many_lines)] // the negotiation, then the relay, in order
-    async fn start(&self, want: LiveWant) -> anyhow::Result<Box<dyn LiveStream>> {
+    async fn start(&self) -> anyhow::Result<View> {
+        let (ids, claim) = self.claim()?;
         let mut connection = self.session().await?;
         let local = connection.local_ip()?;
         let peer = connection.peer_ip()?;
@@ -327,7 +441,7 @@ impl Camera {
             .with(5, srtp_params(&audio_key, &audio_salt))
             .encode();
         let answer = connection
-            .write_tlv(self.ids.aid, self.ids.setup, &request, true)
+            .write_tlv(ids.aid, ids.setup, &request, true)
             .await
             .context("SetupEndpoints")?;
         let answer = Tlv::parse(&answer).context("SetupEndpoints answer")?;
@@ -361,11 +475,13 @@ impl Camera {
             u32::from_be_bytes(random::<4>()),
             u32::from_be_bytes(random::<4>()),
         );
-        let size = size_for(&want);
+        // One size for everyone: a TV's small picture must not become the
+        // phone's.
+        let size = SIZE;
         connection
             .write_tlv(
-                self.ids.aid,
-                self.ids.selected,
+                ids.aid,
+                ids.selected,
                 &selected(&session, 1, size, ssrcs),
                 false,
             )
@@ -376,16 +492,18 @@ impl Camera {
             height = size.1,
             "homekit camera: stream asked"
         );
-        *self.voice.lock().expect("voice lock") = Some(VoiceOut {
+        let voice = VoiceOut {
             socket: Arc::clone(&audio),
             to: audio_to,
             sender: Arc::clone(&audio_out),
             ssrc: ssrcs.1,
-        });
+        };
 
         let stop = CancellationToken::new();
-        let (tx, mut rx) = mpsc::channel::<LiveItem>(256);
-        let (ids, voice, watch) = (self.ids, Arc::clone(&self.voice), stop.clone());
+        let (tx, mut rx) = broadcast::channel::<LiveItem>(SHARED_ITEMS);
+        let watch = stop.clone();
+        let generation = self.generations.fetch_add(1, Ordering::Relaxed);
+        let (upstream, items) = (Arc::clone(&self.upstream), tx.clone());
         tokio::spawn(async move {
             let mut depacketizer = Depacketizer::default();
             let mut decoder = opus_rs::OpusDecoder::new(16_000, 1).ok();
@@ -394,7 +512,6 @@ impl Camera {
             loop {
                 tokio::select! {
                     () = watch.cancelled() => break,
-                    () = tx.closed() => break,
                     _ = reports.tick() => {
                         let report = video_out.protect_rtcp(&receiver_report(ssrcs.0));
                         let _ = video.send_to(&report, video_to).await;
@@ -412,9 +529,7 @@ impl Camera {
                         let marker = clear[1] & 0x80 != 0;
                         let timestamp = u32::from_be_bytes([clear[4], clear[5], clear[6], clear[7]]);
                         for frame in depacketizer.push(&clear[header..], timestamp, marker) {
-                            if tx.send(LiveItem::Video(frame)).await.is_err() {
-                                break;
-                            }
+                            let _ = tx.send(LiveItem::Video(frame));
                         }
                     }
                     got = audio.recv_from(&mut abuf) => {
@@ -435,29 +550,41 @@ impl Camera {
                             .iter()
                             .map(|v| (v * 32768.0).round().clamp(-32768.0, 32767.0) as i16)
                             .collect();
-                        let _ = tx.try_send(LiveItem::Audio(AudioChunk { rate: 16_000, samples }));
+                        let _ = tx.send(LiveItem::Audio(AudioChunk { rate: 16_000, samples }));
                     }
                 }
             }
-            *voice.lock().expect("voice lock") = None;
             let end = selected(&session, 0, size, ssrcs);
             let _ = connection
                 .write_tlv(ids.aid, ids.selected, &end, false)
                 .await;
+            drop(claim);
+            // Gone: the next viewer starts a new one.
+            let mut shared = upstream.lock().expect("upstream lock");
+            if shared
+                .as_ref()
+                .is_some_and(|up| up.generation == generation)
+            {
+                *shared = None;
+            }
             tracing::info!("homekit camera: stream ended");
         });
 
         // A viewer starts on a picture it can decode alone: wait for one,
         // with its parameter sets.
-        let guard = stop.drop_guard();
+        let guard = stop.clone().drop_guard();
         let mut early = VecDeque::new();
         let (mut sps, mut pps) = (Vec::new(), Vec::new());
         let deadline = tokio::time::Instant::now() + FIRST_PICTURE;
         loop {
-            let item = tokio::time::timeout_at(deadline, rx.recv())
+            let item = match tokio::time::timeout_at(deadline, rx.recv())
                 .await
                 .context("no picture from the camera")?
-                .context("the camera stopped")?;
+            {
+                Ok(item) => item,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => bail!("the camera stopped"),
+            };
             let ready = match &item {
                 LiveItem::Video(frame) => {
                     for nal in &frame.nals {
@@ -479,24 +606,39 @@ impl Camera {
             // Nothing before the first key frame is of use.
         }
         tracing::info!("homekit camera: first picture");
-        Ok(Box::new(Stream {
-            info: LiveInfo {
-                width: u32::from(size.0),
-                height: u32::from(size.1),
-                sps,
-                pps,
-                audio_rate: Some(16_000),
-            },
+        let info = LiveInfo {
+            width: u32::from(size.0),
+            height: u32::from(size.1),
+            sps,
+            pps,
+            audio_rate: Some(16_000),
+        };
+        guard.disarm();
+        *self.upstream.lock().expect("upstream lock") = Some(Upstream {
+            generation,
+            items,
+            info: info.clone(),
+            viewers: 1,
+            stop,
+            voice,
+        });
+        Ok(View {
+            info,
             early,
             items: rx,
-            _stop: guard,
-        }))
+            waiting_key: false,
+            since: tokio::time::Instant::now(),
+            _viewer: Viewer {
+                upstream: Arc::clone(&self.upstream),
+                generation,
+            },
+        })
     }
 }
 
 impl LiveSource for Camera {
-    fn open(&self, want: LiveWant) -> BoxFuture<'_, anyhow::Result<Box<dyn LiveStream>>> {
-        Box::pin(self.start(want))
+    fn open(&self, _want: LiveWant) -> BoxFuture<'_, anyhow::Result<Box<dyn LiveStream>>> {
+        Box::pin(self.watch())
     }
 }
 
@@ -504,7 +646,7 @@ impl SnapshotSource for Camera {
     fn snapshot(&self) -> BoxFuture<'_, anyhow::Result<Image>> {
         Box::pin(async move {
             let mut connection = self.session().await?;
-            let bytes = connection.snapshot(self.ids.aid, 1280, 720).await?;
+            let bytes = connection.snapshot(self.ids[0].aid, 1280, 720).await?;
             Ok(Image {
                 content_type: "image/jpeg".into(),
                 bytes,
@@ -554,8 +696,8 @@ impl TalkSink for Voice {
 impl TalkSource for Camera {
     fn open(&self) -> BoxFuture<'_, anyhow::Result<Box<dyn TalkSink>>> {
         Box::pin(async move {
-            let guard = self.voice.lock().expect("voice lock");
-            let Some(out) = guard.as_ref() else {
+            let upstream = self.upstream.lock().expect("upstream lock");
+            let Some(out) = upstream.as_ref().map(|up| &up.voice) else {
                 bail!("nobody is watching the camera: no way to its speaker");
             };
             let pipe = OpusPipe::new(RATE, 24).map_err(|e| anyhow::anyhow!(e))?;
@@ -600,30 +742,102 @@ mod tests {
         assert_eq!(frames[1].timestamp, 300);
     }
 
-    #[test]
-    fn sizes_follow_what_the_viewer_takes() {
-        let want = |width, height| LiveWant {
-            width,
-            height,
-            audio: true,
+    fn frame(timestamp: u32, keyframe: bool) -> LiveItem {
+        LiveItem::Video(VideoFrame {
+            timestamp,
+            nals: vec![vec![if keyframe { 0x65 } else { 0x41 }]],
+            keyframe,
+        })
+    }
+
+    #[tokio::test]
+    async fn viewers_share_one_stream_start_on_a_key_frame_and_the_last_stops_it() {
+        let camera = Camera::new(
+            "127.0.0.1:1",
+            Pairing::decode(&format!("c|{}|a|{}", "07".repeat(32), "09".repeat(32))).unwrap(),
+            vec![Ids {
+                aid: 1,
+                setup: 2,
+                selected: 3,
+            }],
+        );
+        let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let (items, _keep) = broadcast::channel(16);
+        let stop = CancellationToken::new();
+        *camera.upstream.lock().unwrap() = Some(Upstream {
+            generation: 0,
+            items: items.clone(),
+            info: LiveInfo::default(),
+            viewers: 1,
+            stop: stop.clone(),
+            voice: VoiceOut {
+                to: socket.local_addr().unwrap(),
+                socket,
+                sender: Arc::new(Mutex::new(Sender::new(&[1; KEY_LEN], &[2; SALT_LEN]))),
+                ssrc: 1,
+            },
+        });
+        let first = Viewer {
+            upstream: Arc::clone(&camera.upstream),
+            generation: 0,
         };
-        assert_eq!(size_for(&want(1920, 1080)), (1920, 1080, 2));
-        assert_eq!(size_for(&want(1280, 720)), (1280, 720, 0));
-        assert_eq!(size_for(&want(480, 270)), (320, 240, 0));
-        assert_eq!(size_for(&want(0, 0)), (320, 240, 0));
+        // A second viewer joins: the same stream, from its next key frame.
+        let mut second = camera.join().expect("a running stream to join");
+        assert_eq!(camera.upstream.lock().unwrap().as_ref().unwrap().viewers, 2);
+        items.send(frame(1, false)).unwrap();
+        items.send(frame(2, true)).unwrap();
+        items.send(frame(3, false)).unwrap();
+        let LiveItem::Video(f) = second.next().await.unwrap() else {
+            panic!()
+        };
+        assert_eq!((f.timestamp, f.keyframe), (2, true));
+        let LiveItem::Video(f) = second.next().await.unwrap() else {
+            panic!()
+        };
+        assert_eq!(f.timestamp, 3);
+        // The talk goes through the shared stream.
+        assert!(TalkSource::open(&camera).await.is_ok());
+        // One leaves: the stream goes on; the last leaves: it stops.
+        drop(first);
+        assert!(!stop.is_cancelled());
+        drop(second);
+        assert!(stop.is_cancelled());
+        assert!(camera.upstream.lock().unwrap().is_none());
+        assert!(camera.join().is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_viewer_is_let_go_after_ten_minutes() {
+        let (items, rx) = broadcast::channel(16);
+        let mut view = View {
+            info: LiveInfo::default(),
+            early: VecDeque::new(),
+            items: rx,
+            waiting_key: false,
+            since: tokio::time::Instant::now(),
+            _viewer: Viewer {
+                upstream: Arc::new(Mutex::new(None)),
+                generation: 0,
+            },
+        };
+        items.send(frame(1, true)).unwrap();
+        assert!(view.next().await.is_ok());
+        tokio::time::advance(MAX_WATCH + Duration::from_secs(1)).await;
+        items.send(frame(2, true)).unwrap();
+        assert!(view.next().await.is_err());
     }
 
     #[test]
     fn the_start_names_h264_and_opus_and_the_end_only_the_session() {
         let session = [7u8; 16];
-        let start = Tlv::parse(&selected(&session, 1, SIZES[1], (1, 2))).unwrap();
+        let start = Tlv::parse(&selected(&session, 1, SIZE, (1, 2))).unwrap();
         let control = Tlv::parse(start.get(1).unwrap()).unwrap();
         assert_eq!(control.byte(2), Some(1));
         let video = Tlv::parse(start.get(2).unwrap()).unwrap();
         assert_eq!(video.byte(1), Some(0));
         let audio = Tlv::parse(start.get(3).unwrap()).unwrap();
         assert_eq!(audio.byte(1), Some(3));
-        let end = Tlv::parse(&selected(&session, 0, SIZES[1], (1, 2))).unwrap();
+        let end = Tlv::parse(&selected(&session, 0, SIZE, (1, 2))).unwrap();
         assert!(end.get(2).is_none());
     }
 }

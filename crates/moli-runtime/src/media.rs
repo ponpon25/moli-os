@@ -141,7 +141,7 @@ impl std::fmt::Debug for AudioChunk {
 }
 
 /// What a live stream brings, in the order it comes.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum LiveItem {
     Video(VideoFrame),
     Audio(AudioChunk),

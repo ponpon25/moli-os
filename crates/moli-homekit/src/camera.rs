@@ -34,7 +34,7 @@ use crate::srtp::{KEY_LEN, Receiver, SALT_LEN, Sender, header_len};
 use crate::tlv::Tlv;
 
 /// Streams one camera serves at once (waiting for their start included).
-const MAX_PER_CAMERA: usize = 2;
+const MAX_PER_CAMERA: usize = 4;
 /// Streams the bridge serves at once.
 const MAX_TOTAL: usize = 6;
 /// A negotiated stream the phone never started is forgotten after this.
@@ -409,10 +409,11 @@ impl Streams {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// 0 available, 1 in use: a stream is running (what HAP-python and
-    /// HAP-NodeJS report; the phone reads it while it watches).
+    /// 0 available, 1 in use: the camera serves as many viewers as it can
+    /// (HAP-NodeJS's rule). Saying "in use" while one phone watches made
+    /// the Home app refuse a second viewer it could have had.
     pub fn status_of(&self, device: &DeviceId) -> u8 {
-        u8::from(self.lock().active.values().any(|a| &a.device == device))
+        u8::from(self.lock().count(device) >= MAX_PER_CAMERA)
     }
 
     /// Ends a stream (negotiated or running); the devices it served.

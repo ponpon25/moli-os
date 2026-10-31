@@ -48,6 +48,8 @@ const SIZE: (u16, u16, u8) = (1280, 720, 0);
 const SHARED_ITEMS: usize = 512;
 /// A viewer is let go after this: a TV left on must not hold the camera.
 const MAX_WATCH: Duration = Duration::from_secs(10 * 60);
+/// How often a viewer says how far behind the camera it is.
+const BACKLOG_EVERY: Duration = Duration::from_secs(5);
 /// The first picture a viewer can start on must come within this.
 const FIRST_PICTURE: Duration = Duration::from_secs(10);
 const REPORT_EVERY: Duration = Duration::from_secs(1);
@@ -290,6 +292,10 @@ struct View {
     items: broadcast::Receiver<LiveItem>,
     waiting_key: bool,
     since: tokio::time::Instant,
+    /// The most items left waiting behind the one taken, since `told`:
+    /// what this viewer lags behind the camera (about 80 items a second).
+    backlog: usize,
+    told: tokio::time::Instant,
     _viewer: Viewer,
 }
 
@@ -320,6 +326,10 @@ impl LiveStream for View {
         &self.info
     }
 
+    fn backlog(&self) -> usize {
+        self.early.len() + self.items.len()
+    }
+
     fn next(&mut self) -> BoxFuture<'_, anyhow::Result<LiveItem>> {
         Box::pin(async move {
             loop {
@@ -340,6 +350,12 @@ impl LiveStream for View {
                     }
                     Ok(Ok(item)) => item,
                 };
+                self.backlog = self.backlog.max(self.items.len());
+                if self.told.elapsed() >= BACKLOG_EVERY {
+                    tracing::info!(items = self.backlog, "homekit camera: viewer backlog");
+                    self.backlog = 0;
+                    self.told = tokio::time::Instant::now();
+                }
                 if self.waiting_key {
                     match &item {
                         LiveItem::Video(frame) if frame.keyframe => self.waiting_key = false,
@@ -402,6 +418,8 @@ impl Camera {
             items: up.items.subscribe(),
             waiting_key: true,
             since: tokio::time::Instant::now(),
+            backlog: 0,
+            told: tokio::time::Instant::now(),
             _viewer: Viewer {
                 upstream: Arc::clone(&self.upstream),
                 generation: up.generation,
@@ -628,6 +646,8 @@ impl Camera {
             items: rx,
             waiting_key: false,
             since: tokio::time::Instant::now(),
+            backlog: 0,
+            told: tokio::time::Instant::now(),
             _viewer: Viewer {
                 upstream: Arc::clone(&self.upstream),
                 generation,
@@ -815,6 +835,8 @@ mod tests {
             items: rx,
             waiting_key: false,
             since: tokio::time::Instant::now(),
+            backlog: 0,
+            told: tokio::time::Instant::now(),
             _viewer: Viewer {
                 upstream: Arc::new(Mutex::new(None)),
                 generation: 0,

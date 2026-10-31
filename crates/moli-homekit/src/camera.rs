@@ -44,6 +44,9 @@ const CONTROLLER_SILENT: Duration = Duration::from_secs(30);
 /// A camera that sends no key frame is started without one after this.
 const FORCE_START: Duration = Duration::from_secs(5);
 const REPORT_EVERY: Duration = Duration::from_secs(2);
+/// More items than this waiting behind the one being sent (about 100 ms):
+/// the relay is behind the camera and catches up instead of pacing.
+const CATCH_UP: usize = 8;
 /// What the Home app assumes when the phone gives no packet size.
 const DEFAULT_MTU: usize = 1378;
 
@@ -1015,10 +1018,42 @@ async fn relay(
         relayed = sound.is_some(),
         "homekit: the camera's sound"
     );
-    let mut voice = audio
+    let voice = audio
         .filter(|_| shared.hub.has_talk(device))
-        .and_then(|choice| VoiceIn::new(&pending, choice));
-    let audio_socket = Arc::clone(&pending.audio_socket);
+        .and_then(|choice| VoiceIn::new(&pending, choice))
+        .map(|v| Arc::new(tokio::sync::Mutex::new(v)));
+    let listening = sound.is_some() || voice.is_some();
+    // The phone's audio port, read by a task of its own: the voice goes to
+    // the camera as it comes, never waiting while the loop below holds a
+    // frame for its time; the phone's reports on our sound come back here.
+    let (reports, mut phone_reports) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+    let _voice_task = listening.then(|| {
+        let stop = cancel.child_token();
+        let socket = Arc::clone(&pending.audio_socket);
+        let (shared, device, voice) = (Arc::clone(shared), device.clone(), voice.clone());
+        tokio::spawn({
+            let stop = stop.clone();
+            async move {
+                let mut inbound = [0u8; 2048];
+                loop {
+                    let n = tokio::select! {
+                        () = stop.cancelled() => break,
+                        got = socket.recv_from(&mut inbound) => match got {
+                            Ok((n, _)) => n,
+                            Err(_) => continue,
+                        },
+                    };
+                    let datagram = &inbound[..n];
+                    if n >= 8 && (200..=204).contains(&datagram[1]) {
+                        let _ = reports.try_send(datagram.to_vec());
+                    } else if let Some(v) = voice.as_ref() {
+                        v.lock().await.push(&shared, &device, datagram).await;
+                    }
+                }
+            }
+        });
+        stop.drop_guard()
+    });
     let destination = SocketAddr::new(pending.request.address, pending.request.video_port);
     let socket = pending.video_socket;
     let mut srtp = Sender::new(&pending.request.video.key, &pending.request.video.salt);
@@ -1040,11 +1075,12 @@ async fn relay(
     let mut report = tokio::time::interval(REPORT_EVERY);
     report.tick().await;
     let mut inbound = [0u8; 2048];
-    let mut audio_inbound = [0u8; 2048];
     // Counters for the journal (never a key).
     let (mut frames_in, mut key_frames, mut skipped, mut send_errors, mut phone_packets) =
         (0u32, 0u32, 0u32, 0u32, 0u32);
     let mut held_ms = 0u64;
+    // Frames sent at once and sound dropped to catch up with the camera.
+    let (mut hurried, mut dropped_sound) = (0u32, 0u32);
     let mut trace: Vec<String> = Vec::new();
     let mut traced = false;
     let mut nal_counts = [0u32; 32];
@@ -1066,13 +1102,18 @@ async fn relay(
         "homekit: camera stream destination"
     );
     loop {
-        let listening = sound.is_some() || voice.is_some();
         tokio::select! {
             () = cancel.cancelled() => break,
             item = live.next() => {
                 let frame = match item {
                     Ok(LiveItem::Video(frame)) => frame,
                     Ok(LiveItem::Audio(chunk)) => {
+                        // Sound late behind the camera is dropped: a conversation
+                        // wants it now or not at all.
+                        if live.backlog() > CATCH_UP {
+                            dropped_sound += 1;
+                            continue;
+                        }
                         // Sound follows the picture: nothing before it starts.
                         if started && let Some(out) = sound.as_mut() {
                             out.send(&chunk, &mut send_errors).await;
@@ -1156,7 +1197,12 @@ async fn relay(
                         [sps.clone(), pps.clone()].into_iter().flatten().collect();
                     nals.splice(0..0, sets);
                 }
-                let (hold, timestamp) = retimer.frame(frame.timestamp, Instant::now());
+                let (hold, timestamp) = if live.backlog() > CATCH_UP {
+                    hurried += 1;
+                    (Duration::ZERO, retimer.hurry(frame.timestamp, Instant::now()))
+                } else {
+                    retimer.frame(frame.timestamp, Instant::now())
+                };
                 if !hold.is_zero() {
                     held_ms = held_ms.max(u64::try_from(hold.as_millis()).unwrap_or(0));
                     tokio::time::sleep(hold).await;
@@ -1214,6 +1260,8 @@ async fn relay(
                     max_packet,
                     nal_types = %nal_census(&nal_counts),
                     max_hold_ms = held_ms,
+                    hurried,
+                    dropped_sound,
                     "homekit: camera stream counters"
                 );
                 if let Some(r) = last_report {
@@ -1234,7 +1282,7 @@ async fn relay(
                         "homekit: phone_report"
                     );
                 }
-                if let Some(v) = voice.as_ref().filter(|v| v.packets > 0) {
+                if let Some(v) = voice.as_ref().and_then(|v| v.try_lock().ok()).filter(|v| v.packets > 0) {
                     tracing::info!(
                         %device,
                         voice_packets = v.packets,
@@ -1275,24 +1323,11 @@ async fn relay(
             }
             // What the phone sends on the audio port: reports on our sound, and
             // its voice when it talks.
-            received = async {
-                if listening {
-                    audio_socket.recv_from(&mut audio_inbound).await
-                } else {
-                    std::future::pending().await
-                }
-            } => {
-                if let Ok((n, _)) = received {
-                    let datagram = &audio_inbound[..n];
-                    if n >= 8 && (200..=204).contains(&datagram[1]) {
-                        if let Some(out) = sound.as_mut()
-                            && let Err(why) = out.heard(datagram)
-                        {
-                            tracing::warn!(%device, why, bytes = n, "homekit: the phone's audio RTCP cannot be opened");
-                        }
-                    } else if let Some(v) = voice.as_mut() {
-                        v.push(shared, device, datagram).await;
-                    }
+            Some(datagram) = phone_reports.recv() => {
+                if let Some(out) = sound.as_mut()
+                    && let Err(why) = out.heard(&datagram)
+                {
+                    tracing::warn!(%device, why, bytes = datagram.len(), "homekit: the phone's audio RTCP cannot be opened");
                 }
             }
             // What the phone sends back (reports): proof it is still there.

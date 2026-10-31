@@ -164,6 +164,11 @@ pub trait LiveStream: Send {
     fn info(&self) -> &LiveInfo;
     /// The next frame or bit of sound; an error ends the stream.
     fn next(&mut self) -> BoxFuture<'_, anyhow::Result<LiveItem>>;
+    /// Items already waiting behind the next one: how far the reader is
+    /// behind the camera (0 when the source cannot tell).
+    fn backlog(&self) -> usize {
+        0
+    }
 }
 
 /// Opens live streams of a camera on demand. Nothing runs while nobody

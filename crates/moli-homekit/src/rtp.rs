@@ -191,6 +191,24 @@ impl Retimer {
         (hold, out)
     }
 
+    /// For a frame the stream is late to send (others already wait behind
+    /// it): no hold, and a timestamp just after the last one, so the phone
+    /// plays what is behind quickly and the stream gets back to live.
+    pub fn hurry(&mut self, ts: u32, now: Instant) -> u32 {
+        // A quarter of a 30 fps frame: forward, and quick to play.
+        let step = (self.hz / 120.0) as u32;
+        let out = self.last_out.wrapping_add(step.max(1));
+        if !self.started {
+            self.started = true;
+        }
+        self.anchor_ts = ts;
+        self.anchor_at = now;
+        self.out_base = out;
+        self.last_out = out;
+        self.last_at = now;
+        out
+    }
+
     fn anchor(&mut self, ts: u32, at: Instant, now: Instant) {
         self.anchor_ts = ts;
         self.anchor_at = at;
@@ -309,6 +327,21 @@ mod tests {
             last = wait;
         }
         assert!(last < Duration::from_millis(200));
+    }
+
+    #[test]
+    fn a_late_relay_hurries_then_paces_again_from_now() {
+        let t0 = Instant::now();
+        let mut r = Retimer::new(0, t0, 90_000.0);
+        r.frame(0, t0);
+        // Behind the camera: frames go at once, a quarter frame apart.
+        assert_eq!(r.hurry(3000, t0), 750);
+        assert_eq!(r.hurry(6000, t0), 1500);
+        // Back to live: the next frame waits its 33 ms from now, no more.
+        let (wait, out) = r.frame(9000, t0);
+        assert_eq!(out, 4500);
+        assert_eq!(wait.as_millis(), 33);
+        assert_eq!(r.reanchors, 0);
     }
 
     #[test]

@@ -7,13 +7,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, bail};
+use anyhow::Context as _;
 use moli_core::{Access, DeviceId, Kind, PointSpec, Semantic, Unit, Value};
 use moli_net::upnp::{Location, discover, tag, unescape};
-use moli_runtime::DriverCtx;
+use moli_runtime::{CommandRequest, DriverCtx};
 use tokio::task::JoinSet;
 
 use crate::actions::Outcome;
+use crate::announce;
 use crate::apple::AppleMusic;
 use crate::cover::Cover;
 use crate::events::{self, Listener};
@@ -243,8 +244,28 @@ fn room_device(
     room: &Room,
     model: &str,
     apple: bool,
+    speaks: bool,
 ) -> moli_core::Device {
-    let mut device = device(ctx, id, &room.name, model, false);
+    let mut device = device(ctx, id, &room.name, model, speaks);
+    if speaks {
+        for (key, label) in [
+            ("announce_volume", moli_i18n::tr!("pilotes.sonos.volume_annonce")),
+            ("chime_volume", moli_i18n::tr!("pilotes.sonos.volume_carillon")),
+        ] {
+            device.points.push(PointSpec {
+                unit: Some(Unit::Percent),
+                ..control(
+                    key,
+                    label,
+                    Kind::Numeric {
+                        min: Some(0.0),
+                        max: Some(100.0),
+                        step: Some(1.0),
+                    },
+                )
+            });
+        }
+    }
     if apple {
         device.points.push(extra(
             "results",
@@ -515,6 +536,156 @@ struct Home {
     library: Option<(Instant, String)>,
     /// Whether Apple Music is set up (its points are on the rooms).
     apple: bool,
+    /// The rooms that say sentences aloud.
+    voices: Voices,
+}
+
+/// The rooms that speak (`[driver.options.announce]`): one announcer and
+/// one silence per room.
+#[derive(Default)]
+struct Voices {
+    config: Option<announce::Config>,
+    /// By room: the address it was made for, and the announcer.
+    announcers: HashMap<String, (String, Arc<announce::Announcer>)>,
+    /// By room: until when announcements are silenced (ms since epoch).
+    quiet: HashMap<String, u64>,
+    /// By room: how loud the voice and the chime are (what the house set).
+    levels: HashMap<String, announce::Levels>,
+}
+
+impl Voices {
+    fn speaks(&self, room: &Room) -> bool {
+        self.config.as_ref().is_some_and(|c| {
+            c.rooms.is_empty() || c.rooms.iter().any(|r| r.eq_ignore_ascii_case(&room.name))
+        })
+    }
+
+    /// A room's levels survive a restart (the hub keeps the last values);
+    /// a room never set speaks at the configured ones.
+    fn restore_levels(&mut self, ctx: &DriverCtx, id: &DeviceId, uuid: &str) {
+        let Some(config) = &self.config else { return };
+        let level = |key: &str, default: u8| match ctx.current(id, key) {
+            Some(Value::Int(v)) => u8::try_from(v.clamp(0, 100)).unwrap_or(default),
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            Some(Value::Float(v)) => v.round().clamp(0.0, 100.0) as u8,
+            _ => default,
+        };
+        let base = config.levels();
+        let levels = announce::Levels {
+            voice: level("announce_volume", base.voice),
+            chime: level("chime_volume", base.chime),
+        };
+        self.levels.insert(uuid.to_owned(), levels);
+        ctx.set_state(id, "announce_volume", Value::Int(i64::from(levels.voice)));
+        ctx.set_state(id, "chime_volume", Value::Int(i64::from(levels.chime)));
+    }
+
+    /// A silence survives a restart (the hub keeps the last values).
+    fn restore(&mut self, ctx: &DriverCtx, id: &DeviceId, uuid: &str) {
+        self.restore_levels(ctx, id, uuid);
+        let until = match (ctx.current(id, "quiet"), ctx.current(id, "quiet_until")) {
+            (Some(Value::Bool(true)), Some(Value::Int(until))) => u64::try_from(until).ok(),
+            _ => None,
+        }
+        .filter(|u| *u > moli_core::now_ms());
+        if let Some(until) = until {
+            self.quiet.insert(uuid.to_owned(), until);
+        }
+        crate::set_quiet(ctx, id, until);
+    }
+
+    /// A silence that ran out: the room speaks again.
+    fn expire(&mut self, ctx: &DriverCtx) {
+        let now = moli_core::now_ms();
+        let over: Vec<String> = self
+            .quiet
+            .iter()
+            .filter(|(_, until)| **until <= now)
+            .map(|(uuid, _)| uuid.clone())
+            .collect();
+        for uuid in over {
+            self.quiet.remove(&uuid);
+            crate::set_quiet(ctx, &ctx.device_id(&uuid), None);
+        }
+    }
+
+    /// An order of the voice of a room: a sentence to say, or the silence.
+    async fn order(
+        &mut self,
+        ctx: &DriverCtx,
+        room: &Room,
+        command: &CommandRequest,
+    ) -> Result<(), String> {
+        let Some(config) = self.config.clone().filter(|_| self.speaks(room)) else {
+            return Err(moli_i18n::tr!("pilotes.sonos.annonces_non_configurees"));
+        };
+        let id = ctx.device_id(&room.uuid);
+        if matches!(&*command.key, "announce_volume" | "chime_volume") {
+            let level = command
+                .value
+                .as_f64()
+                .ok_or_else(|| moli_i18n::tr!("pilotes.sonos.volume_nombre"))?;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let level = level.round().clamp(0.0, 100.0) as u8;
+            let mut levels = self
+                .levels
+                .get(&room.uuid)
+                .copied()
+                .unwrap_or_else(|| config.levels());
+            if &*command.key == "announce_volume" {
+                levels.voice = level;
+            } else {
+                levels.chime = level;
+            }
+            self.levels.insert(room.uuid.clone(), levels);
+            ctx.set_state(&id, &command.key, Value::Int(i64::from(level)));
+            return Ok(());
+        }
+        if &*command.key == "quiet" {
+            let on = matches!(command.value, Value::Bool(true));
+            let until = on.then(|| {
+                moli_core::now_ms()
+                    + u64::try_from(crate::QUIET_FOR.as_millis()).unwrap_or(u64::MAX)
+            });
+            match until {
+                Some(until) => self.quiet.insert(room.uuid.clone(), until),
+                None => self.quiet.remove(&room.uuid),
+            };
+            crate::set_quiet(ctx, &id, until);
+            return Ok(());
+        }
+        if self
+            .quiet
+            .get(&room.uuid)
+            .is_some_and(|u| *u > moli_core::now_ms())
+        {
+            // Silenced: nothing said, nobody bothered with an error.
+            tracing::info!(room = %room.name, "announcement not said: announcements are silenced");
+            return Ok(());
+        }
+        let announcer = match self.announcers.get(&room.uuid) {
+            Some((host, announcer)) if *host == room.host => Arc::clone(announcer),
+            _ => {
+                let pin =
+                    crate::speaker_pin(&room.host, ctx, &format!("ws_cert_{}", room.uuid)).await;
+                let announcer = announce::Announcer::new(
+                    &room.host,
+                    &room.uuid,
+                    config,
+                    pin,
+                    ctx.media_publisher(),
+                );
+                self.announcers
+                    .insert(room.uuid.clone(), (room.host.clone(), Arc::clone(&announcer)));
+                announcer
+            }
+        };
+        crate::speak(
+            Some(&announcer),
+            &command.value,
+            self.levels.get(&room.uuid).copied(),
+        )
+    }
 }
 
 /// The next player to call back (never, without a listener).
@@ -555,9 +726,6 @@ fn with_group(home: &Home, who: &HashSet<String>) -> HashSet<String> {
 
 #[allow(clippy::too_many_lines)] // one arm per order, one entry per point
 pub(crate) async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
-    if config.announce.is_some() {
-        bail!(moli_i18n::tr!("pilotes.sonos.annonces_decouverte"));
-    }
     let mut seeds: Vec<String> = config.host.iter().cloned().collect();
     for host in found().await {
         if !seeds.contains(&host) {
@@ -587,6 +755,7 @@ pub(crate) async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<
         file_identifiers(ctx, settings).await;
     }
     home.apple = apple.is_some();
+    home.voices.config.clone_from(&config.announce);
     let mut dirty: HashSet<String> = HashSet::new();
     let mut settle: Option<tokio::time::Instant> = None;
     let mut lost = 0u32;
@@ -597,6 +766,14 @@ pub(crate) async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<
                 let Some(command) = command else { return Ok(()) };
                 let ask = home.shown.get(&command.device.id).map(|known| known.room.clone());
                 let result = match ask {
+                    Some(room)
+                        if matches!(
+                            &*command.key,
+                            "announce" | "quiet" | "announce_volume" | "chime_volume"
+                        ) =>
+                    {
+                        home.voices.order(ctx, &room, &command).await
+                    }
                     Some(room) if matches!(&*command.key, "playing" | "mute" | "volume") => {
                         apply(target(&room, &command.key), &command)
                             .await
@@ -660,6 +837,7 @@ pub(crate) async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<
                 refresh(ctx, &groups, &mut home, Some(&wanted)).await;
             }
             _ = tick.tick() => {
+                home.voices.expire(ctx);
                 if first {
                     first = false;
                 } else {
@@ -850,7 +1028,11 @@ async fn refresh(
             .unwrap_or_else(PoisonError::into_inner)
             .clone_from(&room.leader_host);
         if changed {
-            ctx.upsert_device(room_device(ctx, &id, room, &model, home.apple));
+            let speaks = home.voices.speaks(room);
+            ctx.upsert_device(room_device(ctx, &id, room, &model, home.apple, speaks));
+            if speaks {
+                home.voices.restore(ctx, &id, &room.uuid);
+            }
             ctx.provide_cover(
                 &id,
                 Arc::new(Cover {

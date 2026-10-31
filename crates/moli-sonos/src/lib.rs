@@ -478,7 +478,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
             host,
             &udn,
             settings.clone(),
-            speaker_pin(host, ctx).await,
+            speaker_pin(host, ctx, WS_CERT).await,
             ctx.media_publisher(),
         )),
         None => None,
@@ -505,7 +505,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
                         tracing::info!("announcement not said: announcements are silenced");
                         Ok(())
                     } else {
-                        speak(announcer.as_ref(), &command.value)
+                        speak(announcer.as_ref(), &command.value, None)
                     };
                     command.reply(result);
                     continue;
@@ -553,7 +553,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
 }
 
 /// The silence's two points (until: ms since epoch, 0 when not silenced).
-fn set_quiet(ctx: &DriverCtx, id: &DeviceId, until: Option<u64>) {
+pub(crate) fn set_quiet(ctx: &DriverCtx, id: &DeviceId, until: Option<u64>) {
     ctx.set_state(id, "quiet", Value::Bool(until.is_some()));
     let until = i64::try_from(until.unwrap_or(0)).unwrap_or(i64::MAX);
     ctx.set_state(id, "quiet_until", Value::Int(until));
@@ -561,7 +561,11 @@ fn set_quiet(ctx: &DriverCtx, id: &DeviceId, until: Option<u64>) {
 
 /// Queues an announcement (it takes seconds: speech, then the clip) and
 /// answers at once; a failure later is told to the house.
-fn speak(announcer: Option<&Arc<announce::Announcer>>, value: &Value) -> Result<(), String> {
+pub(crate) fn speak(
+    announcer: Option<&Arc<announce::Announcer>>,
+    value: &Value,
+    levels: Option<announce::Levels>,
+) -> Result<(), String> {
     let announcer =
         announcer.ok_or_else(|| moli_i18n::tr!("pilotes.sonos.annonces_non_configurees"))?;
     let Value::Text(text) = value else {
@@ -570,13 +574,13 @@ fn speak(announcer: Option<&Arc<announce::Announcer>>, value: &Value) -> Result<
     let text = announce::check_text(text)
         .map_err(|e| e.to_string())?
         .to_owned();
-    announcer.enqueue(text)
+    announcer.enqueue(text, levels)
 }
 
 /// The fingerprint of the speaker's local API certificate: pinned at first
 /// contact, then required. Without it, announcements still work, unpinned.
-async fn speaker_pin(host: &str, ctx: &DriverCtx) -> Option<String> {
-    if let Some(pin) = ctx.secret(WS_CERT) {
+pub(crate) async fn speaker_pin(host: &str, ctx: &DriverCtx, secret: &str) -> Option<String> {
+    if let Some(pin) = ctx.secret(secret) {
         return Some(pin);
     }
     let probe = moli_net::PinnedHttps::new(host, 1443, None).ok()?;
@@ -586,7 +590,7 @@ async fn speaker_pin(host: &str, ctx: &DriverCtx) -> Option<String> {
     }
     let seen = probe.seen_fingerprint()?;
     if ctx.can_store_secrets()
-        && let Err(e) = ctx.store_secret(WS_CERT, &seen).await
+        && let Err(e) = ctx.store_secret(secret, &seen).await
     {
         tracing::warn!(error = %e, "sonos certificate not stored");
     }

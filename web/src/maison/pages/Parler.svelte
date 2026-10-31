@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { hub, roomOf, hidden, nameOf, act, clock, relative, home } from '../lib/home.svelte.js';
+  import { hub, roomOf, hidden, nameOf, act, clock, relative, home, value } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
 
@@ -53,10 +53,19 @@
   let recent = $state(load('parler-phrases', []));
   let text = $state('');
   let busy = $state(false);
+  /** A door chime before the sentence, on the speakers that play clips (Sonos). */
+  let chime = $state(load('parler-carillon', false));
   /** id → 'ok' | 'held' | 'error', for the last sentence. */
   let results = $state({});
 
   const picked = $derived(speakers.filter((s) => chosen.includes(s.id)));
+  /** The Sonos that play clips: how loud their voice and chime are (their own points). */
+  const loud = $derived(
+    picked
+      .filter((s) => s.key === 'announce' && hub.devices[s.id]?.points?.some((p) => p.key === 'announce_volume'))
+      .map((s) => ({ ...s, voice: value(s.id, 'announce_volume'), chime: value(s.id, 'chime_volume') })),
+  );
+  const chimes = $derived(picked.some((s) => s.key === 'announce'));
   const ready = $derived(text.trim().length > 0 && text.length <= MAX && picked.some((s) => s.online) && !busy);
 
   function toggle(id) {
@@ -72,7 +81,9 @@
     const sentence = text.trim();
     const targets = picked.filter((s) => s.online);
     const outcomes = await Promise.all(
-      targets.map((s) => act(`${s.id}/${s.key}`, sentence, t('parler.dire_sur', { nom: s.name }))),
+      targets.map((s) =>
+        act(`${s.id}/${s.key}`, chime && s.key === 'announce' ? `[carillon] ${sentence}` : sentence, t('parler.dire_sur', { nom: s.name })),
+      ),
     );
     results = Object.fromEntries(targets.map((s, i) => [s.id, outcomes[i]]));
     recent = [sentence, ...recent.filter((r) => r !== sentence)].slice(0, KEEP);
@@ -127,6 +138,41 @@
       maxlength={MAX}
       placeholder={t('parler.placeholder')}
     ></textarea>
+    {#if chimes}
+      <label class="muted chime">
+        <input
+          type="checkbox"
+          bind:checked={chime}
+          onchange={() => keep('parler-carillon', chime)}
+        />
+        {t('parler.carillon')}
+      </label>
+    {/if}
+    {#each loud as s (s.id)}
+      <div class="levels muted">
+        <span>{s.name}</span>
+        <label>
+          {t('parler.volume_voix')} {s.voice ?? '–'} %
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={s.voice ?? 0}
+            onchange={(e) => act(`${s.id}/announce_volume`, Number(e.currentTarget.value), t('parler.volume_voix'))}
+          />
+        </label>
+        <label>
+          {t('parler.volume_carillon')} {s.chime ?? '–'} %
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={s.chime ?? 0}
+            onchange={(e) => act(`${s.id}/chime_volume`, Number(e.currentTarget.value), t('parler.volume_carillon'))}
+          />
+        </label>
+      </div>
+    {/each}
     <div class="row">
       <span class="muted count" class:over={text.length > MAX - 20}>{text.length} / {MAX}</span>
       <button class="btn primary" disabled={!ready}>
@@ -232,6 +278,24 @@
     gap: 12px;
   }
 
+  .levels {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    font-size: 0.9em;
+  }
+  .levels label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .chime {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9em;
+  }
   .count.over {
     color: var(--danger, #b3261e);
   }

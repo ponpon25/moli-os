@@ -1484,6 +1484,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-meteofrance"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "http",
+ "http-body-util",
+ "moli-core",
+ "moli-i18n",
+ "moli-net",
+ "moli-runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "moli-moonraker"
 version = "0.1.0"
 dependencies = [
@@ -1583,6 +1600,7 @@ dependencies = [
  "moli-igd",
  "moli-ipp",
  "moli-lights",
+ "moli-meteofrance",
  "moli-moonraker",
  "moli-net",
  "moli-netatmo",

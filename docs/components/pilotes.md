@@ -644,6 +644,7 @@ ni pièce native). Il ne déplace jamais rien. Sans argument : plan à blanc ; `
 | `olvid` | `moli-olvid` | gRPC (HTTP/2) vers le daemon Olvid | `notify` (message), appairage | daemon Olvid 2.0 (voir README) |
 | `phones` | `moli-phones` | rapports HTTP de l'appli (jeton) | `notify` (notification) | iPhone (appli Moli) |
 | `telegram` | `moli-telegram` | HTTPS, API des bots | `notify` (message) | oui (API des bots) |
+| `meteofrance` | `moli-meteofrance` | HTTPS, API officielle Vigilance (clé du portail) | non (lecture) | pas encore (API Vigilance du portail Météo-France) |
 | `netatmo` | `moli-netatmo` | REST du compte Netatmo Connect (cloud), lecture périodique | non (lecture) | pas encore (cible : Smart Video Doorbell) |
 | `hitachi` | `moli-hitachi` | REST + WebSocket STOMP du compte airCloud Go (cloud) | oui : marche, mode, consigne, vitesse | pas encore (cibles : RAK-DJ25RHAE, RAK-DJ35RHAE) |
 | `zwave` | `moli-zwave` | websocket local du serveur Z-Wave JS | oui, selon les valeurs | pas encore (cible : Qubino Flush 1D Relay) |

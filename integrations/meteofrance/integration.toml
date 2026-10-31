@@ -1,0 +1,29 @@
+[integration]
+id = "meteofrance"
+name = "Vigilance Météo-France"
+brands = ["Météo-France"]
+models = []
+# Internet, the official API (portail-api.meteofrance.fr) over HTTPS.
+transport = "https"
+driver = "meteofrance"
+crate = "moli-meteofrance"
+
+[discovery]
+mdns = []
+ssdp = []
+ports = []
+
+[needs]
+# The API key of the portal (API « Vigilance », free): typed by a person,
+# stored with `moli-os secrets set <instance> api_key`.
+secrets = ["api_key"]
+vars = []
+options = ["department"]
+
+[origin]
+reused = "aucun code repris ; API officielle DonneesPubliquesVigilance (descriptif technique Météo-France du 11/09/2023) ; fixture fictive"
+author = "agent"
+
+# Replayed by the crate's tests (crates/moli-meteofrance/src).
+[[fixture]]
+file = "fixtures/cartevigilance.json"

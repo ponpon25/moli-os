@@ -7,8 +7,8 @@
 //!   under its own path (`rtsp://<host>:8554/<path>`).
 //! - **A password, always**: Digest (the password never travels), user
 //!   `moli` by default, the password in Moli's secret store
-//!   (`moli-os secrets set rtsp password`), read at each request: set or
-//!   changed, it counts at once. No password: nobody is let in.
+//!   (`moli-os secrets set rtsp password`, then a restart), read at each
+//!   request. No password: nobody is let in.
 //! - **The guard**: a camera in a protected room is never served (as from
 //!   HomeKit), and a stream is cut within five seconds if its room becomes
 //!   protected.
@@ -111,7 +111,7 @@ pub async fn start(
         .is_none_or(|p| p.is_empty())
     {
         tracing::warn!(
-            "rtsp: no password yet (moli-os secrets set rtsp password): nobody is let in"
+            "rtsp: no password yet (moli-os secrets set rtsp password, then restart): nobody is let in"
         );
     }
     if config.user.is_empty()

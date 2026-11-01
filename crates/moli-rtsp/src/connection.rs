@@ -50,8 +50,9 @@ pub struct Shared {
 }
 
 impl Shared {
-    /// The password, read from the store at each request: set or changed,
-    /// it counts at once. None: nobody gets in.
+    /// The password, read from the store at each request (one stored by
+    /// this process counts at once; one set from the command line, after a
+    /// restart). None: nobody gets in.
     fn password(&self) -> Option<String> {
         self.hub
             .secret(&InstanceId::from(crate::NAMESPACE), crate::SECRET_PASSWORD)
@@ -341,7 +342,7 @@ async fn handle(
     // Everything else needs the password.
     let password = shared.password();
     if password.is_none() {
-        tracing::warn!(%peer, "rtsp: no password set (moli-os secrets set rtsp password): nobody is let in");
+        tracing::warn!(%peer, "rtsp: no password set (moli-os secrets set rtsp password, then restart): nobody is let in");
     }
     let proved = request
         .header("authorization")

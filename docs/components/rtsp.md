@@ -27,8 +27,9 @@ Le mot de passe va dans le coffre, jamais dans le fichier :
 printf '%s' "<mot de passe>" | moli-os secrets set rtsp password
 ```
 
-Il est relu à chaque requête : le définir ou le changer compte aussitôt, sans redémarrer. Tant qu'il n'y en a
-pas, personne n'entre. Seules les caméras listées sont servies.
+puis redémarrer Moli (la commande écrit le coffre à côté du processus qui tourne, qui le garde en mémoire).
+Tant qu'il n'y a pas de mot de passe, personne n'entre (la surface démarre quand même, et le dit dans le
+journal). Seules les caméras listées sont servies.
 
 Essayer avec VLC : `rtsp://moli:<mot de passe>@<hôte>:8554/sonnette` (ou ffmpeg :
 `ffplay -rtsp_transport tcp rtsp://…`).

@@ -63,6 +63,56 @@ pub struct Dp {
     pub step: Option<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub range: Vec<String>,
+    /// A JSON DP read as several numbers (`{"L1":[2330,144,33],"e":12}`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<Field>,
+}
+
+/// One number inside a JSON DP: its point key, where it sits (`L1.0`:
+/// key `L1`, then index 0) and how to read it. Numbers given as text count.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Field {
+    pub code: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub scale: u32,
+}
+
+impl Field {
+    /// The field as a read-only integer DP, to reuse units and scale.
+    fn dp(&self, id: u32) -> Dp {
+        Dp {
+            id,
+            code: self.code.clone(),
+            kind: DpKind::Integer,
+            writable: false,
+            unit: self.unit.clone(),
+            scale: self.scale,
+            min: None,
+            max: None,
+            step: None,
+            range: Vec::new(),
+            fields: Vec::new(),
+        }
+    }
+
+    fn pick<'a>(&self, json: &'a Json) -> Option<&'a Json> {
+        self.path.split('.').try_fold(json, |at, step| match at {
+            Json::Array(items) => items.get(step.parse::<usize>().ok()?),
+            _ => at.get(step),
+        })
+    }
+
+    fn read(&self, id: u32, json: &Json) -> Option<Value> {
+        let number = match self.pick(json)? {
+            Json::String(s) => Json::from(s.trim().parse::<f64>().ok()?),
+            n @ Json::Number(_) => n.clone(),
+            _ => return None,
+        };
+        self.dp(id).decode(&number)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,12 +142,25 @@ impl Dp {
             "℃" | "°C" | "C" => (Some(Unit::Celsius), 1.0),
             "kwh" | "kWh" | "KWH" | "kW·h" | "度" => (Some(Unit::KiloWattHour), 1.0),
             "mA" => (Some(Unit::Ampere), 0.001),
+            "kW" => (Some(Unit::Watt), 1000.0),
             other => (Unit::parse(other), 1.0),
         }
     }
 
     fn divisor(&self) -> f64 {
         10f64.powi(i32::try_from(self.scale.min(9)).unwrap_or(0))
+    }
+
+    /// The Moli points for this DP: one, or one per field of a JSON DP.
+    fn points(&self) -> Vec<PointSpec> {
+        if self.kind == DpKind::Json && !self.fields.is_empty() {
+            return self
+                .fields
+                .iter()
+                .filter_map(|f| f.dp(self.id).point())
+                .collect();
+        }
+        self.point().into_iter().collect()
     }
 
     /// The Moli point for this DP; `None` for opaque types.
@@ -187,6 +250,9 @@ fn semantic(code: &str, unit: Option<&Unit>) -> Semantic {
         "battery_percentage" | "va_battery" => Semantic::Battery,
         "humidity_value" | "va_humidity" => Semantic::Humidity,
         "temp_current" | "va_temperature" => Semantic::Temperature,
+        // The car's pilot signal (12 V free, 9 V plugged…), not a mains voltage.
+        // The device's own heat (a charger's board), not the room's.
+        "cp_voltage" | "device_temp" => Semantic::Other,
         // A relay (`switch_1`, `switch_2`…) or a light (`switch_led`); a
         // fan's `fan_switch` is not the device's main on/off.
         "switch" | "switch_led" => Semantic::OnOff,
@@ -237,6 +303,13 @@ fn label(code: &str) -> String {
         "tds_in" => "pilotes.tuya.mineraux",
         "percent_control" => "pilotes.tuya.ouverture",
         "control" => "pilotes.tuya.commande",
+        "work_state" => "pilotes.tuya.etat",
+        "charge_switch" => "pilotes.tuya.charge",
+        "charge_current" => "pilotes.tuya.courant_charge",
+        "max_current" => "pilotes.tuya.courant_max",
+        "session_energy" => "pilotes.tuya.energie_session",
+        "cp_voltage" => "pilotes.tuya.signal_pilote",
+        "device_temp" => "pilotes.tuya.temperature_appareil",
         _ => "",
     };
     if !known.is_empty() {
@@ -262,7 +335,7 @@ impl TuyaDevice {
             description: None,
             native_room: self.room.as_deref().map(Into::into),
             members: Vec::new(),
-            points: self.dps.iter().filter_map(Dp::point).collect(),
+            points: self.dps.iter().flat_map(Dp::points).collect(),
         }
     }
 
@@ -272,13 +345,29 @@ impl TuyaDevice {
     }
 
     /// `{"1": true, "18": 120}` → `[(code, value)]`, unknown DPs skipped.
+    /// A JSON DP with fields gives one value per field it holds.
     #[must_use]
     pub fn decode_dps(&self, dps: &serde_json::Map<String, Json>) -> Vec<(String, Value)> {
         let by_id: BTreeMap<u32, &Dp> = self.dps.iter().map(|d| (d.id, d)).collect();
         dps.iter()
-            .filter_map(|(id, raw)| {
-                let dp = by_id.get(&id.parse().ok()?)?;
-                Some((dp.code.clone(), dp.decode(raw)?))
+            .filter_map(|(id, raw)| Some((by_id.get(&id.parse().ok()?)?, raw)))
+            .flat_map(|(dp, raw)| {
+                if dp.fields.is_empty() {
+                    return dp
+                        .decode(raw)
+                        .map(|v| (dp.code.clone(), v))
+                        .into_iter()
+                        .collect();
+                }
+                // Tuya sends JSON DPs as text.
+                let json = match raw {
+                    Json::String(s) => serde_json::from_str(s).unwrap_or(Json::Null),
+                    other => other.clone(),
+                };
+                dp.fields
+                    .iter()
+                    .filter_map(|f| Some((f.code.clone(), f.read(dp.id, &json)?)))
+                    .collect::<Vec<_>>()
             })
             .collect()
     }

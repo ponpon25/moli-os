@@ -14,6 +14,7 @@
 pub mod cloud;
 mod device;
 pub mod model;
+mod products;
 pub mod protocol;
 mod seek;
 
@@ -126,7 +127,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
     let keys = cloud_keys(config, ctx).await;
     let mut silent_seen = false;
     let mut watched = cloud::Watched::new();
-    for dev in file.devices {
+    for dev in file.devices.into_iter().map(products::fill) {
         // Never on the LAN: a battery sensor without an address, a device
         // behind a gateway. The cloud speaks for them, when it can.
         let silent = dev.gateway.is_some()

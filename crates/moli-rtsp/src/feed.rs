@@ -365,8 +365,11 @@ async fn run(hub: Hub, device: DeviceId, first: Pump, start: u32, out: mpsc::Sen
                 if !frame.keyframe {
                     continue;
                 }
-                let gap = now.saturating_duration_since(last_sent);
-                tracing::info!(device = %device, gap_ms = gap.as_millis(), "rtsp: a new stream starts");
+                // The very first frame is no new stream: nothing came before.
+                if clock.last_src.is_some() {
+                    let gap = now.saturating_duration_since(last_sent);
+                    tracing::info!(device = %device, gap_ms = gap.as_millis(), "rtsp: a new stream starts");
+                }
                 clock.rebase(frame.timestamp, now);
             }
             fresh = false;

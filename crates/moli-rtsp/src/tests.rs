@@ -905,6 +905,13 @@ async fn a_recorder_adopts_the_camera_over_onvif() {
             && body.contains(r#"<trt:Profiles token="sub""#)
     );
     assert!(body.contains("<tt:Encoding>H264</tt:Encoding>"));
+    let (code, _, body) = http(at, &ask("GetVideoEncoderConfigurationOptions")).await;
+    assert_eq!(code, 200);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("<tt:ResolutionsAvailable>")
+    );
     let (code, _, body) = http(at, &ask("GetStreamUri")).await;
     assert_eq!(code, 200);
     let body = String::from_utf8(body).unwrap();

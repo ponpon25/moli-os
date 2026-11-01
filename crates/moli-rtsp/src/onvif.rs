@@ -554,6 +554,13 @@ fn answer(camera: &Device, action: &str, xml: &str, host: &str) -> Response {
                     .replace("</tt:VideoEncoderConfiguration>", "</trt:Configuration>")
             ))
         }
+        "GetVideoEncoderConfigurationOptions" => {
+            // One stream, as the camera sends it: nothing to choose.
+            let (w, h, h264) = picture(camera);
+            ok(format!(
+                "<trt:GetVideoEncoderConfigurationOptionsResponse><trt:Options><tt:QualityRange><tt:Min>4</tt:Min><tt:Max>4</tt:Max></tt:QualityRange><tt:H264><tt:ResolutionsAvailable><tt:Width>{w}</tt:Width><tt:Height>{h}</tt:Height></tt:ResolutionsAvailable><tt:GovLengthRange><tt:Min>30</tt:Min><tt:Max>30</tt:Max></tt:GovLengthRange><tt:FrameRateRange><tt:Min>30</tt:Min><tt:Max>30</tt:Max></tt:FrameRateRange><tt:EncodingIntervalRange><tt:Min>1</tt:Min><tt:Max>1</tt:Max></tt:EncodingIntervalRange><tt:H264ProfilesSupported>{h264}</tt:H264ProfilesSupported></tt:H264></trt:Options></trt:GetVideoEncoderConfigurationOptionsResponse>"
+            ))
+        }
         "GetAudioSources" => ok("<trt:GetAudioSourcesResponse/>".to_owned()),
         "GetAudioEncoderConfigurations" => ok("<trt:GetAudioEncoderConfigurationsResponse/>".to_owned()),
         "GetStreamUri" => ok(format!("<trt:GetStreamUriResponse>{}</trt:GetStreamUriResponse>", uri(&rtsp))),

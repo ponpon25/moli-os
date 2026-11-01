@@ -860,7 +860,7 @@ async fn start_rtsp(
         return;
     };
     match moli_rtsp::start(hub.clone(), options, cancel.clone()).await {
-        Ok((_, task)) => tasks.push(task),
+        Ok(started) => tasks.push(started.task),
         // Like HomeKit: a surface that cannot start must not stop the house.
         Err(e) => tracing::error!(error = %e, "rtsp: the surface did not start"),
     }

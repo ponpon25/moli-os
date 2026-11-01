@@ -23,7 +23,9 @@
 
 mod connection;
 mod digest;
+mod discovery;
 mod feed;
+mod onvif;
 mod request;
 
 #[cfg(test)]
@@ -60,6 +62,14 @@ pub struct Config {
     /// The cameras served (`[[rtsp.camera]]`).
     #[serde(default, rename = "camera")]
     pub cameras: Vec<Camera>,
+    /// Answer WS-Discovery probes (port 3702) for the cameras that have an
+    /// `onvif_port`: a recorder finds them by itself.
+    #[serde(default = "yes")]
+    pub discovery: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// One camera served.
@@ -70,6 +80,13 @@ pub struct Camera {
     pub path: String,
     /// The Moli device (one that shows live video).
     pub device: DeviceId,
+    /// Its name for a recorder (default: the path).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Served as an ONVIF device on this HTTP port too (UniFi Protect
+    /// adopts only those). One port per camera.
+    #[serde(default)]
+    pub onvif_port: Option<u16>,
 }
 
 fn default_port() -> u16 {
@@ -90,6 +107,18 @@ pub enum StartError {
     BadUser,
     #[error("cannot listen on port {0}: {1}")]
     Listen(u16, std::io::Error),
+    #[error("ONVIF port {0} given twice")]
+    TwicePort(u16),
+}
+
+/// What started.
+#[derive(Debug)]
+pub struct Started {
+    /// The RTSP address.
+    pub rtsp: SocketAddr,
+    /// Each ONVIF camera's path and address.
+    pub onvif: Vec<(String, SocketAddr)>,
+    pub task: tokio::task::JoinHandle<()>,
 }
 
 fn valid_path(path: &str) -> bool {
@@ -101,11 +130,12 @@ fn valid_path(path: &str) -> bool {
 }
 
 /// Starts the surface; the task ends when `cancel` is.
+#[allow(clippy::too_many_lines)] // the checks, then RTSP, ONVIF and discovery, in order
 pub async fn start(
     hub: Hub,
     config: Config,
     cancel: CancellationToken,
-) -> Result<(SocketAddr, tokio::task::JoinHandle<()>), StartError> {
+) -> Result<Started, StartError> {
     if hub
         .secret(&InstanceId::from(NAMESPACE), SECRET_PASSWORD)
         .is_none_or(|p| p.is_empty())
@@ -122,7 +152,14 @@ pub async fn start(
         return Err(StartError::BadUser);
     }
     let mut cameras = HashMap::new();
+    let mut ports = std::collections::HashSet::new();
     for camera in &config.cameras {
+        if let Some(port) = camera.onvif_port
+            && port != 0
+            && !ports.insert(port)
+        {
+            return Err(StartError::TwicePort(port));
+        }
         if !valid_path(&camera.path) {
             return Err(StartError::BadPath(camera.path.clone()));
         }
@@ -154,7 +191,48 @@ pub async fn start(
         cameras,
         user: config.user,
         nonces: std::sync::Mutex::default(),
+        port: address.port(),
+        seen: std::sync::Mutex::default(),
     });
+    // The ONVIF devices: one HTTP port each. A port that cannot be had
+    // costs that camera its ONVIF side, never the rest.
+    let mut devices = Vec::new();
+    let mut onvif = Vec::new();
+    for camera in &config.cameras {
+        let Some(port) = camera.onvif_port else {
+            continue;
+        };
+        let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::error!(path = %camera.path, port, error = %e, "onvif: cannot listen");
+                continue;
+            }
+        };
+        let Ok(at) = listener.local_addr() else {
+            continue;
+        };
+        let device = Arc::new(onvif::Device {
+            path: camera.path.clone(),
+            name: camera.name.clone().unwrap_or_else(|| camera.path.clone()),
+            id: camera.device.clone(),
+            port: at.port(),
+            shared: Arc::clone(&shared),
+        });
+        tracing::info!(path = %camera.path, port = at.port(), "onvif: serving");
+        onvif::serve(Arc::clone(&device), listener, cancel.clone());
+        onvif.push((camera.path.clone(), at));
+        devices.push(device);
+    }
+    if config.discovery && !devices.is_empty() {
+        match discovery::bind() {
+            Ok(socket) => {
+                let to = SocketAddr::from((discovery::MULTICAST, discovery::PORT));
+                discovery::serve(socket, devices, Some(to), cancel.clone());
+            }
+            Err(e) => tracing::error!(error = %e, "onvif: no discovery (port 3702)"),
+        }
+    }
     let slots = Arc::new(Semaphore::new(MAX_CLIENTS));
     let task = tokio::spawn(async move {
         loop {
@@ -181,5 +259,9 @@ pub async fn start(
             });
         }
     });
-    Ok((address, task))
+    Ok(Started {
+        rtsp: address,
+        onvif,
+        task,
+    })
 }

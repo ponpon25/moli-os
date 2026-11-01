@@ -11,6 +11,13 @@
 //! - Nothing for [`GIVE_UP`]: the feed ends, and with it the connection
 //!   (the recorder will call again).
 //!
+//! - Two streams of one shared source (a HomeKit camera's viewers) carry
+//!   the same timestamps: the timeline simply goes on, and the frames
+//!   already sent by the old one are not sent twice.
+//! - Every [`STATS_EVERY`], what went out is logged (frames, largest gap,
+//!   renewals, reopenings, frames skipped): the way to watch a recorder's
+//!   stream over days.
+//!
 //! Each stream is read by its own task into a small queue, so a slow client
 //! or a slow camera never blocks the other: when a queue is full, frames are
 //! dropped up to the next key frame.
@@ -32,6 +39,10 @@ const FIRST_RETRY: Duration = Duration::from_secs(1);
 const MAX_RETRY: Duration = Duration::from_secs(15);
 /// A renewal that failed is tried again after this.
 const RENEW_RETRY: Duration = Duration::from_secs(30);
+/// How often the feed tells how it goes.
+pub const STATS_EVERY: Duration = Duration::from_secs(5 * 60);
+/// Two timestamps closer than this (2 s at 90 kHz) are of the same clock.
+const SAME_CLOCK: i32 = 2 * 90_000;
 /// Frames waiting between a stream and the feed, and between the feed and
 /// the client (a few seconds of video).
 const QUEUE: usize = 128;
@@ -109,6 +120,8 @@ struct Clock {
     src_base: u32,
     last_out: u32,
     last_at: Instant,
+    /// The source timestamp of the last frame stamped.
+    last_src: Option<u32>,
 }
 
 impl Clock {
@@ -119,6 +132,7 @@ impl Clock {
             src_base: 0,
             last_out: start,
             last_at: now,
+            last_src: None,
         }
     }
 
@@ -136,6 +150,14 @@ impl Clock {
         self.src_base = src;
     }
 
+    /// Whether a new stream starting at `src` is the same source's clock
+    /// (another viewer of a shared stream): then the timeline needs no new
+    /// base.
+    fn continues(&self, src: u32) -> bool {
+        self.last_src
+            .is_some_and(|last| src.wrapping_sub(last).cast_signed().abs() < SAME_CLOCK)
+    }
+
     fn stamp(&mut self, src: u32, now: Instant) -> u32 {
         let mut out = self.out_base.wrapping_add(src.wrapping_sub(self.src_base));
         // A camera whose clock jumped back: a new start, never backwards.
@@ -145,7 +167,52 @@ impl Clock {
         }
         self.last_out = out;
         self.last_at = now;
+        self.last_src = Some(src);
         out
+    }
+}
+
+/// What went out since the last report.
+#[derive(Debug)]
+struct Stats {
+    since: Instant,
+    frames: u32,
+    keyframes: u32,
+    largest_gap: Duration,
+    renewals: u32,
+    reopenings: u32,
+    skipped: u32,
+}
+
+impl Stats {
+    fn new(now: Instant) -> Self {
+        Self {
+            since: now,
+            frames: 0,
+            keyframes: 0,
+            largest_gap: Duration::ZERO,
+            renewals: 0,
+            reopenings: 0,
+            skipped: 0,
+        }
+    }
+
+    fn report(&mut self, device: &DeviceId, now: Instant) {
+        let secs = now
+            .saturating_duration_since(self.since)
+            .as_secs_f64()
+            .max(1.0);
+        tracing::info!(
+            device = %device,
+            fps = format!("{:.1}", f64::from(self.frames) / secs),
+            keyframes = self.keyframes,
+            largest_gap_ms = self.largest_gap.as_millis(),
+            renewals = self.renewals,
+            reopenings = self.reopenings,
+            skipped = self.skipped,
+            "rtsp: feed"
+        );
+        *self = Self::new(now);
     }
 }
 
@@ -199,6 +266,11 @@ async fn run(hub: Hub, device: DeviceId, first: Pump, start: u32, out: mpsc::Sen
     let mut retry = FIRST_RETRY;
     let mut last_sent = now;
     let mut skipping = false;
+    // After a switch to a stream of the same clock: frames up to this
+    // source timestamp were already sent.
+    let mut sent_up_to: Option<u32> = None;
+    let mut stats = Stats::new(now);
+    let mut report = tokio::time::interval_at(now + STATS_EVERY, STATS_EVERY);
 
     let begin_opening = |opening: &mut Option<JoinHandle<Result<Pump, LiveError>>>| {
         let (hub, device) = (hub.clone(), device.clone());
@@ -208,6 +280,10 @@ async fn run(hub: Hub, device: DeviceId, first: Pump, start: u32, out: mpsc::Sen
     loop {
         let (frame, from_candidate) = tokio::select! {
             () = out.closed() => return,
+            _ = report.tick() => {
+                stats.report(&device, Instant::now());
+                continue;
+            }
             () = tokio::time::sleep_until(last_sent + GIVE_UP) => {
                 tracing::warn!(device = %device, "rtsp: no picture for a minute, the client is let go");
                 return;
@@ -219,6 +295,7 @@ async fn run(hub: Hub, device: DeviceId, first: Pump, start: u32, out: mpsc::Sen
                     // The stream ended: the fresh one if there is one, or open again.
                     current = candidate.take();
                     fresh = true;
+                    stats.reopenings += 1;
                     if current.is_none() && opening.is_none() && retry_at.is_none() {
                         begin_opening(&mut opening);
                     }
@@ -277,23 +354,49 @@ async fn run(hub: Hub, device: DeviceId, first: Pump, start: u32, out: mpsc::Sen
             }
             current = candidate.take();
             fresh = true;
-            tracing::debug!(device = %device, "rtsp: the stream is renewed");
+            stats.renewals += 1;
         }
         if fresh {
-            if !frame.keyframe {
-                continue;
+            if clock.continues(frame.timestamp) {
+                // Another viewer of the same stream: same timeline.
+                sent_up_to = clock.last_src;
+                tracing::debug!(device = %device, "rtsp: the stream goes on (same source)");
+            } else {
+                if !frame.keyframe {
+                    continue;
+                }
+                let gap = now.saturating_duration_since(last_sent);
+                tracing::info!(device = %device, gap_ms = gap.as_millis(), "rtsp: a new stream starts");
+                clock.rebase(frame.timestamp, now);
             }
-            clock.rebase(frame.timestamp, now);
             fresh = false;
+        }
+        if let Some(up_to) = sent_up_to {
+            if frame.timestamp.wrapping_sub(up_to).cast_signed() <= 0 {
+                continue; // already sent by the stream before
+            }
+            sent_up_to = None;
         }
         let timestamp = clock.stamp(frame.timestamp, now);
         if skipping && !frame.keyframe {
+            stats.skipped += 1;
             continue;
         }
         skipping = false;
+        let keyframe = frame.keyframe;
         match out.try_send(VideoFrame { timestamp, ..frame }) {
-            Ok(()) => last_sent = now,
-            Err(mpsc::error::TrySendError::Full(_)) => skipping = true,
+            Ok(()) => {
+                stats.frames += 1;
+                stats.keyframes += u32::from(keyframe);
+                stats.largest_gap = stats
+                    .largest_gap
+                    .max(now.saturating_duration_since(last_sent));
+                last_sent = now;
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                stats.skipped += 1;
+                skipping = true;
+            }
             Err(mpsc::error::TrySendError::Closed(_)) => return,
         }
     }

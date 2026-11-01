@@ -1,5 +1,6 @@
-//! HTTP Digest authentication as RTSP uses it (RFC 2069 form, MD5, no
-//! `qop`): what recorders and players send. The password never travels.
+//! HTTP Digest authentication: as RTSP uses it (RFC 2069 form, MD5, no
+//! `qop`), and as HTTP clients answer it (RFC 2617, `qop=auth`, for the
+//! ONVIF snapshot). The password never travels.
 //!
 //! The nonce is the server's, not a connection's: players (VLC) ask for the
 //! password on one connection and answer on the next, with the nonce they
@@ -41,6 +42,13 @@ pub fn nonce() -> String {
 pub fn challenge(nonce: &str, stale: bool) -> String {
     let stale = if stale { ", stale=TRUE" } else { "" };
     format!("Digest realm=\"{REALM}\", nonce=\"{nonce}\", algorithm=MD5{stale}")
+}
+
+/// The challenge of an HTTP resource (`qop="auth"`, what HTTP clients expect).
+#[must_use]
+pub fn http_challenge(nonce: &str, stale: bool) -> String {
+    let stale = if stale { ", stale=TRUE" } else { "" };
+    format!("Digest realm=\"{REALM}\", qop=\"auth\", nonce=\"{nonce}\", algorithm=MD5{stale}")
 }
 
 /// The server's nonces: a new one every [`NONCE_LIFE`], the one before still
@@ -144,15 +152,27 @@ pub fn check(header: &str, method: &str, nonces: &[String], user: &str, password
     ) else {
         return Check::Wrong;
     };
-    if get("qop").is_some() || get("algorithm").is_some_and(|a| !a.eq_ignore_ascii_case("md5")) {
+    if get("algorithm").is_some_and(|a| !a.eq_ignore_ascii_case("md5")) {
         return Check::Wrong;
     }
+    // With `qop=auth`, the client's counter and nonce enter the answer.
+    let qop = match get("qop") {
+        None => None,
+        Some(q) if q.eq_ignore_ascii_case("auth") => match (get("nc"), get("cnonce")) {
+            (Some(nc), Some(cnonce)) if nc.len() <= 16 && cnonce.len() <= 128 => Some((nc, cnonce)),
+            _ => return Check::Wrong,
+        },
+        Some(_) => return Check::Wrong,
+    };
     if !equal(username, user) || realm != REALM || given_nonce.len() > 64 {
         return Check::Wrong;
     }
     let ha1 = md5_hex(&format!("{user}:{REALM}:{password}"));
     let ha2 = md5_hex(&format!("{method}:{uri}"));
-    let expected = md5_hex(&format!("{ha1}:{given_nonce}:{ha2}"));
+    let expected = match qop {
+        None => md5_hex(&format!("{ha1}:{given_nonce}:{ha2}")),
+        Some((nc, cnonce)) => md5_hex(&format!("{ha1}:{given_nonce}:{nc}:{cnonce}:auth:{ha2}")),
+    };
     if !equal(&response.to_ascii_lowercase(), &expected) {
         Check::Wrong
     } else if nonces.iter().any(|n| equal(n, given_nonce)) {
@@ -214,6 +234,31 @@ mod tests {
         let (second, ok) = nonces.now();
         assert_ne!(first, second);
         assert!(ok.contains(&first) && ok.contains(&second));
+    }
+
+    #[test]
+    fn an_http_client_answer_with_qop_is_read() {
+        // RFC 2617 §3.5, with this realm and password.
+        let n = "dcd98b7102dd2f0e8b11d0f600bfb0c093";
+        let ha1 = md5_hex(&format!("moli:{REALM}:pw"));
+        let ha2 = md5_hex("GET:/onvif/snapshot.jpg");
+        let r = md5_hex(&format!("{ha1}:{n}:00000001:0a4f113b:auth:{ha2}"));
+        let header = format!(
+            "Digest username=\"moli\", realm=\"Moli\", nonce=\"{n}\", uri=\"/onvif/snapshot.jpg\", qop=auth, nc=00000001, cnonce=\"0a4f113b\", response=\"{r}\""
+        );
+        assert_eq!(
+            check(&header, "GET", &[n.to_owned()], "moli", "pw"),
+            Check::Proved
+        );
+        assert_eq!(
+            check(&header, "GET", &[n.to_owned()], "moli", "no"),
+            Check::Wrong
+        );
+        let bad_qop = header.replace("qop=auth", "qop=auth-int");
+        assert_eq!(
+            check(&bad_qop, "GET", &[n.to_owned()], "moli", "pw"),
+            Check::Wrong
+        );
     }
 
     #[test]

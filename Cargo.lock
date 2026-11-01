@@ -1745,12 +1745,15 @@ name = "moli-rtsp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "jiff",
  "md-5",
  "moli-core",
  "moli-net",
  "moli-runtime",
  "ring",
  "serde",
+ "socket2",
  "thiserror",
  "tokio",
  "tokio-util",

@@ -546,3 +546,17 @@ async fn wrong_passwords_unknown_paths_and_protected_rooms_are_refused() {
     let (channel, _) = c.packet().await;
     assert_eq!(channel, 0);
 }
+
+#[tokio::test]
+async fn a_player_answers_on_a_new_connection_with_the_nonce_it_was_given() {
+    // VLC: the challenge on one connection, the password asked, the answer
+    // on the next one.
+    let s = setup("vlc", Some(PASSWORD)).await.unwrap();
+    let uri = format!("rtsp://127.0.0.1:{}/door", s.port);
+    let mut first = Client::connect(s.port, PASSWORD).await;
+    first.authenticate(&uri).await;
+    drop(first.writer);
+    let mut second = Client::connect(s.port, PASSWORD).await;
+    second.nonce = first.nonce.clone();
+    assert_eq!(second.send("DESCRIBE", &uri, "").await.code, 200);
+}

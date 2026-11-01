@@ -153,6 +153,7 @@ pub async fn start(
         hub,
         cameras,
         user: config.user,
+        nonces: std::sync::Mutex::default(),
     });
     let slots = Arc::new(Semaphore::new(MAX_CLIENTS));
     let task = tokio::spawn(async move {

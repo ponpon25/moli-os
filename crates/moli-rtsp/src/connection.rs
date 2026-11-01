@@ -47,6 +47,7 @@ pub struct Shared {
     /// Path → camera.
     pub cameras: HashMap<String, DeviceId>,
     pub user: String,
+    pub nonces: std::sync::Mutex<digest::Nonces>,
 }
 
 impl Shared {
@@ -194,7 +195,6 @@ fn interleaved(transport: &str) -> Option<u8> {
 
 /// What one connection has set up so far.
 struct State {
-    nonce: String,
     failures: u32,
     /// The camera described, and its stream, opened for `DESCRIBE`.
     described: Option<(String, DeviceId, Option<Pump>)>,
@@ -240,7 +240,6 @@ pub async fn serve(
         }
     });
     let mut state = State {
-        nonce: digest::nonce(),
         failures: 0,
         described: None,
         session: None,
@@ -344,14 +343,23 @@ async fn handle(
     if password.is_none() {
         tracing::warn!(%peer, "rtsp: no password set (moli-os secrets set rtsp password, then restart): nobody is let in");
     }
-    let proved = request
-        .header("authorization")
-        .zip(password.as_deref())
-        .is_some_and(|(h, password)| {
-            digest::verify(h, &request.method, &state.nonce, &shared.user, password)
-        });
-    if !proved {
-        if request.header("authorization").is_some() {
+    let (nonce, accepted) = shared.nonces.lock().expect("nonces lock").now();
+    let check = match (request.header("authorization"), password.as_deref()) {
+        (Some(h), Some(password)) => {
+            digest::check(h, &request.method, &accepted, &shared.user, password)
+        }
+        (Some(_), None) => digest::Check::Wrong,
+        (None, _) => digest::Check::Stale, // not an attempt: just asked
+    };
+    match check {
+        digest::Check::Proved => {}
+        digest::Check::Stale => {
+            return Next::Reply(Reply::new(401, "Unauthorized").header(
+                "WWW-Authenticate",
+                digest::challenge(&nonce, request.header("authorization").is_some()),
+            ));
+        }
+        digest::Check::Wrong => {
             state.failures += 1;
             tracing::warn!(%peer, "rtsp: wrong password");
             // Slows down guessing.
@@ -359,11 +367,11 @@ async fn handle(
             if state.failures >= MAX_FAILURES {
                 return Next::Close(Reply::new(401, "Unauthorized"));
             }
+            return Next::Reply(
+                Reply::new(401, "Unauthorized")
+                    .header("WWW-Authenticate", digest::challenge(&nonce, false)),
+            );
         }
-        return Next::Reply(
-            Reply::new(401, "Unauthorized")
-                .header("WWW-Authenticate", digest::challenge(&state.nonce)),
-        );
     }
     match request.method.as_str() {
         "DESCRIBE" => {

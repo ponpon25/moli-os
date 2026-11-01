@@ -66,7 +66,9 @@ approbation valide un ordre, pas un regard).
 
 ## Sécurité
 
-- Mot de passe **Digest** (MD5, le mot de passe ne circule pas), nonce neuf par connexion ; seule `OPTIONS`
+- Mot de passe **Digest** (MD5, le mot de passe ne circule pas). Le nonce est celui du serveur, pas d'une
+  connexion (VLC reçoit le défi sur une connexion et répond sur la suivante) : il change toutes les heures,
+  le précédent reste bon, une réponse juste sur un nonce plus ancien est redemandée (`stale`) ; seule `OPTIONS`
   répond sans. Trois mauvais mots de passe et la connexion est fermée, une seconde d'attente après chacun.
   Aucune caméra n'est ouverte avant le bon mot de passe.
 - Bornes : 8 clients à la fois, en-têtes de 8 Kio, corps de 4 Kio, 60 s de silence avant `PLAY`, 10 s pour

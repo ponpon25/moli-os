@@ -1,6 +1,10 @@
 //! HTTP Digest authentication as RTSP uses it (RFC 2069 form, MD5, no
-//! `qop`): what recorders and players send. The password never travels;
-//! the nonce is new for each connection.
+//! `qop`): what recorders and players send. The password never travels.
+//!
+//! The nonce is the server's, not a connection's: players (VLC) ask for the
+//! password on one connection and answer on the next, with the nonce they
+//! were given. It changes every hour; the one before stays good, and an
+//! answer to an older one is told *stale* (asked again, not counted wrong).
 
 use md5::{Digest as _, Md5};
 use ring::rand::{SecureRandom as _, SystemRandom};
@@ -31,10 +35,57 @@ pub fn nonce() -> String {
     hex(&bytes)
 }
 
-/// The challenge header for `nonce`.
+/// The challenge header for `nonce`; `stale`: the password was right, the
+/// nonce too old (the client answers again without asking anyone).
 #[must_use]
-pub fn challenge(nonce: &str) -> String {
-    format!("Digest realm=\"{REALM}\", nonce=\"{nonce}\", algorithm=MD5")
+pub fn challenge(nonce: &str, stale: bool) -> String {
+    let stale = if stale { ", stale=TRUE" } else { "" };
+    format!("Digest realm=\"{REALM}\", nonce=\"{nonce}\", algorithm=MD5{stale}")
+}
+
+/// The server's nonces: a new one every [`NONCE_LIFE`], the one before still
+/// good.
+#[derive(Debug)]
+pub struct Nonces {
+    current: String,
+    previous: String,
+    since: std::time::Instant,
+}
+
+pub const NONCE_LIFE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+impl Default for Nonces {
+    fn default() -> Self {
+        Self {
+            current: nonce(),
+            previous: nonce(),
+            since: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Nonces {
+    /// The nonce to give, and the ones accepted.
+    pub fn now(&mut self) -> (String, [String; 2]) {
+        if self.since.elapsed() >= NONCE_LIFE {
+            self.previous = std::mem::replace(&mut self.current, nonce());
+            self.since = std::time::Instant::now();
+        }
+        (
+            self.current.clone(),
+            [self.current.clone(), self.previous.clone()],
+        )
+    }
+}
+
+/// What an `Authorization` header proves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Check {
+    Proved,
+    /// The right password, on a nonce no longer accepted.
+    Stale,
+    /// Not the password (or not a header Moli reads).
+    Wrong,
 }
 
 /// The parameters of an `Authorization: Digest …` header.
@@ -71,12 +122,12 @@ fn equal(a: &str, b: &str) -> bool {
             == 0
 }
 
-/// Whether `header` proves the password for this `method`, with this
-/// connection's `nonce`.
+/// What `header` proves of the password for this `method`, given the
+/// nonces accepted.
 #[must_use]
-pub fn verify(header: &str, method: &str, nonce: &str, user: &str, password: &str) -> bool {
+pub fn check(header: &str, method: &str, nonces: &[String], user: &str, password: &str) -> Check {
     let Some(params) = params(header) else {
-        return false;
+        return Check::Wrong;
     };
     let get = |name: &str| {
         params
@@ -91,18 +142,24 @@ pub fn verify(header: &str, method: &str, nonce: &str, user: &str, password: &st
         get("uri"),
         get("response"),
     ) else {
-        return false;
+        return Check::Wrong;
     };
     if get("qop").is_some() || get("algorithm").is_some_and(|a| !a.eq_ignore_ascii_case("md5")) {
-        return false;
+        return Check::Wrong;
     }
-    if !equal(username, user) || realm != REALM || !equal(given_nonce, nonce) {
-        return false;
+    if !equal(username, user) || realm != REALM || given_nonce.len() > 64 {
+        return Check::Wrong;
     }
     let ha1 = md5_hex(&format!("{user}:{REALM}:{password}"));
     let ha2 = md5_hex(&format!("{method}:{uri}"));
-    let expected = md5_hex(&format!("{ha1}:{nonce}:{ha2}"));
-    equal(&response.to_ascii_lowercase(), &expected)
+    let expected = md5_hex(&format!("{ha1}:{given_nonce}:{ha2}"));
+    if !equal(&response.to_ascii_lowercase(), &expected) {
+        Check::Wrong
+    } else if nonces.iter().any(|n| equal(n, given_nonce)) {
+        Check::Proved
+    } else {
+        Check::Stale
+    }
 }
 
 #[cfg(test)]
@@ -126,22 +183,37 @@ mod tests {
     #[test]
     fn the_right_password_passes_and_nothing_else() {
         let n = nonce();
+        let ok = [n.clone()];
         let uri = "rtsp://192.168.1.2:8554/door";
         let good = answer("moli", "secret", "DESCRIBE", uri, &n);
-        assert!(verify(&good, "DESCRIBE", &n, "moli", "secret"));
-        assert!(!verify(&good, "DESCRIBE", &n, "moli", "other"));
-        assert!(!verify(&good, "SETUP", &n, "moli", "secret"));
-        assert!(!verify(&good, "DESCRIBE", &nonce(), "moli", "secret"));
-        assert!(!verify(&good, "DESCRIBE", &n, "admin", "secret"));
-        assert!(!verify(
-            "Basic bW9saTpzZWNyZXQ=",
-            "DESCRIBE",
-            &n,
-            "moli",
-            "secret"
-        ));
-        assert!(!verify("Digest garbage", "DESCRIBE", &n, "moli", "secret"));
-        assert!(!verify("", "DESCRIBE", &n, "moli", "secret"));
+        assert_eq!(
+            check(&good, "DESCRIBE", &ok, "moli", "secret"),
+            Check::Proved
+        );
+        assert_eq!(check(&good, "DESCRIBE", &ok, "moli", "other"), Check::Wrong);
+        assert_eq!(check(&good, "SETUP", &ok, "moli", "secret"), Check::Wrong);
+        assert_eq!(
+            check(&good, "DESCRIBE", &[nonce()], "moli", "secret"),
+            Check::Stale
+        );
+        assert_eq!(
+            check(&good, "DESCRIBE", &ok, "admin", "secret"),
+            Check::Wrong
+        );
+        for bad in ["Basic bW9saTpzZWNyZXQ=", "Digest garbage", ""] {
+            assert_eq!(check(bad, "DESCRIBE", &ok, "moli", "secret"), Check::Wrong);
+        }
+    }
+
+    #[test]
+    fn the_nonce_before_stays_good_for_an_hour() {
+        let mut nonces = Nonces::default();
+        let (first, ok) = nonces.now();
+        assert!(ok.contains(&first));
+        nonces.since -= NONCE_LIFE;
+        let (second, ok) = nonces.now();
+        assert_ne!(first, second);
+        assert!(ok.contains(&first) && ok.contains(&second));
     }
 
     #[test]
@@ -156,6 +228,9 @@ mod tests {
             "Digest username=\"moli\",realm=\"Moli\" , nonce=\"{n}\", uri=\"{uri}\", response=\"{}\", algorithm=MD5",
             r.to_ascii_uppercase()
         );
-        assert!(verify(&header, "SETUP", n, "moli", "pw"));
+        assert_eq!(
+            check(&header, "SETUP", &[n.to_owned()], "moli", "pw"),
+            Check::Proved
+        );
     }
 }

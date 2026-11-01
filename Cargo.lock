@@ -1611,6 +1611,7 @@ dependencies = [
  "moli-profile",
  "moli-reolink",
  "moli-rfxtrx",
+ "moli-rtsp",
  "moli-runtime",
  "moli-sonos",
  "moli-tapo",
@@ -1736,6 +1737,23 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml",
+ "tracing",
+]
+
+[[package]]
+name = "moli-rtsp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "md-5",
+ "moli-core",
+ "moli-net",
+ "moli-runtime",
+ "ring",
+ "serde",
+ "thiserror",
+ "tokio",
+ "tokio-util",
  "tracing",
 ]
 

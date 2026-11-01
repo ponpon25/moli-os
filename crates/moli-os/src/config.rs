@@ -62,6 +62,10 @@ pub struct Config {
     /// the encrypted store, never here.
     #[serde(default)]
     pub homekit: Option<moli_homekit::Config>,
+    /// Cameras served again over RTSP, for a video recorder (absent: none).
+    /// The password: `moli-os secrets set rtsp password`.
+    #[serde(default)]
+    pub rtsp: Option<moli_rtsp::Config>,
     /// The Alexa Smart Home skill (absent: Alexa does not reach Moli). Its
     /// shared token lives in the encrypted store (`alexa-skill/token`).
     #[serde(default)]

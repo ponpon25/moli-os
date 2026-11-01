@@ -356,6 +356,7 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
     let (assistant, automations, automating) =
         start_brains(&config, &hub, energy.as_ref(), history.as_ref(), &cancel).await?;
     let homekit = start_homekit(&config, &hub, &cancel, &mut tasks).await;
+    start_rtsp(&config, &hub, &cancel, &mut tasks).await;
     let surfaces = moli_api::Options {
         // The name given to Amazon is one Moli is reached by.
         allowed_hosts: config
@@ -845,6 +846,23 @@ async fn start_homekit(
             tracing::error!(error = %e, "homekit: the bridge did not start");
             None
         }
+    }
+}
+
+/// The cameras served over RTSP, the task added to `tasks`.
+async fn start_rtsp(
+    config: &Config,
+    hub: &Hub,
+    cancel: &CancellationToken,
+    tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+) {
+    let Some(options) = config.rtsp.clone() else {
+        return;
+    };
+    match moli_rtsp::start(hub.clone(), options, cancel.clone()).await {
+        Ok((_, task)) => tasks.push(task),
+        // Like HomeKit: a surface that cannot start must not stop the house.
+        Err(e) => tracing::error!(error = %e, "rtsp: the surface did not start"),
     }
 }
 

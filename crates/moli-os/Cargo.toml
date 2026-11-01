@@ -13,6 +13,7 @@ moli-runtime.workspace = true
 moli-z2m.workspace = true
 moli-api.workspace = true
 moli-homekit.workspace = true
+moli-rtsp.workspace = true
 moli-weather.workspace = true
 moli-hue.workspace = true
 moli-host.workspace = true

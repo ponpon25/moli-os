@@ -110,8 +110,9 @@
     return { line: path.replace(/^M0 100 L/, 'M'), area: `${path} L100 100 Z` };
   });
 
-  // About 17 kWh for 100 km: what the session gave back, in words a driver reads.
-  const km = $derived(typeof energy === 'number' && energy >= 0.5 ? Math.round((energy / 17) * 100) : null);
+  // About 20 kWh for 100 km, charging losses included (what reaches the
+  // battery is less than what the charger gives): the session in km.
+  const km = $derived(typeof energy === 'number' && energy >= 0.5 ? Math.round((energy / 20) * 100) : null);
 
   const label = $derived(nameOf(id, name));
   const kw = $derived(num(power / 1000, power >= 10_000 ? 0 : 1));

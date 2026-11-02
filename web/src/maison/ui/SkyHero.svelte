@@ -9,40 +9,28 @@
   // a pill. A tap opens the detail: the map, the hours and the days to come.
   import { onMount } from 'svelte';
   import { home, hub, device, value, clock, greeting, num, longDate } from '../lib/home.svelte.js';
-  import { sky, watchSky, hours, outlook } from '../lib/sky.svelte.js';
+  import { sky, watchSky, hours, outlook, skyNow } from '../lib/sky.svelte.js';
   import { weatherOf } from '../lib/icons.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import SkyDetail from './SkyDetail.svelte';
 
   const out = $derived(home.config?.outdoor ?? {});
-  const w = $derived(out.weather);
-  const day = $derived(value(w, 'daylight') !== false);
-  const code = $derived(Number(value(w, 'weather_code')));
-  const cover = $derived(Number(value(w, 'cloud_cover') ?? 0));
+  const outside = $derived(skyNow());
+  const w = $derived(outside.w);
+  const day = $derived(outside.day);
+  const code = $derived(outside.code);
+  const cover = $derived(outside.cover);
   const now = $derived(weatherOf(code, day));
   const hhmm = (iso) => (iso ? String(iso).slice(11, 16) : '—');
   const line = $derived(outlook(hours(sky.forecast)));
   let open = $state(false);
 
-  /** What the sky looks like (WMO codes, as the icons read them). */
-  const scene = $derived.by(() => {
-    if (!w || !Number.isFinite(code)) return day ? 'overcast-day' : 'overcast-night';
-    if (code >= 95) return 'storm';
-    if ((code >= 71 && code <= 77) || code === 85 || code === 86) return 'snow';
-    if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return 'rain';
-    if (code === 45 || code === 48) return 'fog';
-    if (code === 3 || cover >= 85) return day ? 'overcast-day' : 'overcast-night';
-    return day ? 'clear-day' : 'clear-night';
-  });
+  /** What the sky looks like, and the warm glow (`skyNow`). */
+  const scene = $derived(outside.scene);
   const clear = $derived(scene === 'clear-day' || scene === 'clear-night');
   const wet = $derived(scene === 'rain' || scene === 'storm');
-
-  /** Within 50 minutes of sunrise or sunset: the warm glow. */
-  const twilight = $derived.by(() => {
-    const near = (iso) => iso && Math.abs(home.now - new Date(String(iso)).getTime()) < 50 * 60_000;
-    return !!w && (near(value(w, 'sunrise')) || near(value(w, 'sunset')));
-  });
+  const twilight = $derived(outside.twilight);
 
   /** Clouds: a few when the sky is clear, many when it is not. */
   const clouds = $derived.by(() => {

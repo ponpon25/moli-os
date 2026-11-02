@@ -179,8 +179,9 @@ fn on_publish(
     if rest == "bridge/devices" {
         return match Catalog::from_bridge_devices(ctx.instance(), &publish.payload) {
             Ok(mut fresh) => {
-                adopt_covers(ctx, &mut fresh, config, covers);
+                reshape_covers(&mut fresh, config);
                 apply_catalog(ctx, catalog, fresh);
+                adopt_covers(ctx, catalog, config, covers);
                 true
             }
             Err(e) => {
@@ -303,30 +304,41 @@ fn on_command(
     command.reply(result);
 }
 
-/// Impulse covers of the fresh catalog: their points reshaped, their
-/// state kept across reloads (restored from the hub after a restart).
+/// Impulse covers show their own points instead of the module's.
+fn reshape_covers(fresh: &mut Catalog, config: &Config) {
+    for ieee in config.impulse_covers.keys() {
+        if let Some(entry) = fresh.by_ieee_mut(ieee) {
+            impulse::reshape(&mut entry.device);
+        }
+    }
+}
+
+/// One state machine per impulse cover, kept across catalog reloads. A new
+/// one starts from the position the hub kept: asked once the device is
+/// published, when the hub has put its cached values back.
 fn adopt_covers(
     ctx: &DriverCtx,
-    fresh: &mut Catalog,
+    catalog: &Catalog,
     config: &Config,
     covers: &mut HashMap<String, Cover>,
 ) {
     covers.retain(|ieee, _| {
-        config.impulse_covers.contains_key(ieee) && fresh.by_ieee(ieee).is_some()
+        config.impulse_covers.contains_key(ieee) && catalog.by_ieee(ieee).is_some()
     });
     for (ieee, cover_config) in &config.impulse_covers {
-        let Some(entry) = fresh.by_ieee_mut(ieee) else {
+        let Some(entry) = catalog.by_ieee(ieee) else {
             continue;
         };
-        impulse::reshape(&mut entry.device);
-        let id = entry.device.id.clone();
+        let id = &entry.device.id;
         covers.entry(ieee.clone()).or_insert_with(|| {
-            let known = match ctx.current(&id, impulse::PERCENT) {
+            let slats_open = ctx.current(id, impulse::SLATS) == Some(Value::Bool(true));
+            let known = match ctx.current(id, impulse::PERCENT) {
                 #[allow(clippy::cast_precision_loss)]
                 Some(Value::Int(i)) => Some(i as f64),
                 Some(Value::Float(f)) => Some(f),
                 _ => None,
-            };
+            }
+            .map(|h| impulse::Spot::at(h, slats_open));
             tracing::info!(device = %id, position = ?known, "impulse cover");
             Cover::new(cover_config.clone(), known, Instant::now())
         });
@@ -370,6 +382,9 @@ fn drive_covers(
         }
         if let Some(shown) = cover.shown_change(now) {
             ctx.set_state(&entry.device.id, impulse::PERCENT, Value::Int(shown));
+        }
+        if let Some(open) = cover.slats_change(now) {
+            ctx.set_state(&entry.device.id, impulse::SLATS, Value::Bool(open));
         }
     }
 }

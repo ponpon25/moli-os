@@ -4,6 +4,7 @@
 // house has no position.
 
 import { t, locale } from '../../lib/i18n.svelte.js';
+import { home, value } from './home.svelte.js';
 
 export const sky = $state({ forecast: null, map: null });
 
@@ -121,4 +122,25 @@ export function outlook(rows) {
 export function dayName(date, i) {
   if (i === 0) return t('maison.meteo.aujourdhui');
   return new Date(`${date}T12:00:00`).toLocaleDateString(locale(), { weekday: 'short' }).replace('.', '');
+}
+
+/** What the sky looks like outside right now, from the weather device
+ *  (WMO codes, as the icons read them): the scene, day or night, and the
+ *  warm glow within 50 minutes of sunrise or sunset. */
+export function skyNow() {
+  const w = home.config?.outdoor?.weather;
+  const day = value(w, 'daylight') !== false;
+  const code = Number(value(w, 'weather_code'));
+  const cover = Number(value(w, 'cloud_cover') ?? 0);
+  let scene;
+  if (!w || !Number.isFinite(code)) scene = day ? 'overcast-day' : 'overcast-night';
+  else if (code >= 95) scene = 'storm';
+  else if ((code >= 71 && code <= 77) || code === 85 || code === 86) scene = 'snow';
+  else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) scene = 'rain';
+  else if (code === 45 || code === 48) scene = 'fog';
+  else if (code === 3 || cover >= 85) scene = day ? 'overcast-day' : 'overcast-night';
+  else scene = day ? 'clear-day' : 'clear-night';
+  const near = (iso) => iso && Math.abs(home.now - new Date(String(iso)).getTime()) < 50 * 60_000;
+  const twilight = !!w && (near(value(w, 'sunrise')) || near(value(w, 'sunset')));
+  return { w, day, code, cover, scene, twilight };
 }

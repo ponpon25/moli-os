@@ -23,7 +23,7 @@
   import SpeakerCard from '../ui/SpeakerCard.svelte';
   import PlayerCard from '../ui/PlayerCard.svelte';
   import { has } from '../lib/speakers.js';
-  import CoverTile from '../ui/CoverTile.svelte';
+  import ShutterCard from '../ui/ShutterCard.svelte';
   import PrinterCard from '../ui/PrinterCard.svelte';
   import PaperPrinterCard from '../ui/PaperPrinterCard.svelte';
   import Remote from '../ui/Remote.svelte';
@@ -466,7 +466,7 @@
       {:else if kind === 'plug'}
         <LightTile id={tile.device} name={tile.label} icon="power" />
       {:else if kind === 'cover'}
-        <CoverTile id={tile.device} name={tile.label} />
+        <ShutterCard id={tile.device} name={tile.label} />
       {:else if kind === 'speaker'}
         {#if has(tile.device, 'group_leader')}
           <!-- A Sonos room: the same player as on the Speakers page. -->

@@ -277,6 +277,7 @@
   "commun.thermo.courbe": "La température des dernières 24 heures",
   "commun.thermo.depuis": "depuis {time}",
   "commun.thermo.releve": "Dernier relevé à {time}",
+  "commun.thermo.hier": "hier {time}",
   "commun.thermo.long.titre": "Historique de {name}",
   "commun.thermo.long.historique": "Historique",
   "commun.thermo.long.fermer": "Fermer",

@@ -127,6 +127,33 @@
       path,
       area: `${path} L${W} ${H} L${p[0][0].toFixed(2)} ${H} Z`,
       at: (pt) => ({ left: x(pt[0]), top: y(pt[1]) }),
+      // A fraction of the width (0..1) back to a moment.
+      when: (f) => t0 + f * (home.now - t0),
+    };
+  });
+
+  // Hovering the curve (a mouse or a pen): the reading nearest the pointer,
+  // its value and the time it was measured.
+  let hover = $state(null);
+  function aim(e) {
+    if (e.pointerType === 'touch' || !chart) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const ts = chart.when(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)));
+    let best = line[0];
+    for (const pt of line) if (Math.abs(pt[0] - ts) < Math.abs(best[0] - ts)) best = pt;
+    hover = best;
+  }
+  const tip = $derived.by(() => {
+    if (!hover || !chart) return null;
+    const pos = chart.at(hover);
+    const today = new Date(hover[0]).toDateString() === new Date(home.now).toDateString();
+    const live = hover[0] === home.now;
+    return {
+      ...pos,
+      value: num(hover[1], 1),
+      time: live ? t('commun.thermo.long.maintenant') : today ? clock(hover[0]) : t('commun.thermo.hier', { time: clock(hover[0]) }),
+      // Near an edge, the bubble leans inward.
+      side: pos.left < 15 ? 'start' : pos.left > 85 ? 'end' : 'mid',
     };
   });
 
@@ -250,7 +277,7 @@
 
   {#if chart}
     <figure class="chart" aria-label={t('commun.thermo.courbe')}>
-      <div class="plot">
+      <div class="plot" role="presentation" onpointermove={aim} onpointerleave={() => (hover = null)}>
       <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" aria-hidden="true">
         <defs>
           <linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
@@ -259,7 +286,7 @@
           </linearGradient>
         </defs>
         <path d={chart.area} fill="url(#{gradient})" />
-        <path d={chart.path} class="curve" pathLength="1" />
+        <path d={chart.path} class="curve" />
       </svg>
       {#if extremes && extremes.hi[1] - extremes.lo[1] >= 0.3}
         {@const lo = chart.at(extremes.lo)}
@@ -270,6 +297,13 @@
       {#if online && typeof temp === 'number'}
         {@const now = chart.at([home.now, temp])}
         <i class="now" style="left: {now.left}%; top: {now.top}%"></i>
+      {/if}
+      {#if tip}
+        <i class="guide" style="left: {tip.left}%"></i>
+        <i class="probe" style="left: {tip.left}%; top: {tip.top}%"></i>
+        <span class="tip {tip.side}" style="left: {tip.left}%; top: {tip.top}%">
+          <b>{tip.value}°</b><em>{tip.time}</em>
+        </span>
       {/if}
       </div>
     </figure>
@@ -560,6 +594,10 @@
     width: 100%;
     height: 100%;
     overflow: visible;
+    /* Drawn from left to right by a widening window (a dash trick with
+       pathLength and non-scaling-stroke left holes in the line). */
+    clip-path: inset(-12px 100% -12px -12px);
+    animation: draw 1.4s var(--ease) 0.1s forwards;
   }
 
   .stop-a {
@@ -578,9 +616,67 @@
     stroke-width: 2.4;
     stroke-linecap: round;
     vector-effect: non-scaling-stroke;
-    stroke-dasharray: 1;
-    stroke-dashoffset: 1;
-    animation: draw 1.4s var(--ease) 0.1s forwards;
+  }
+
+  .plot {
+    cursor: crosshair;
+  }
+
+  .guide {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1px dashed color-mix(in oklch, var(--tone) 55%, transparent);
+    pointer-events: none;
+  }
+
+  .probe {
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    margin: -4.5px 0 0 -4.5px;
+    border-radius: 50%;
+    background: var(--tone);
+    box-shadow: 0 0 0 2.5px var(--surface);
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .tip {
+    position: absolute;
+    z-index: 3;
+    transform: translate(-50%, calc(-100% - 10px));
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.14), 0 0 0 1px color-mix(in oklch, var(--tone) 30%, transparent);
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tip.start {
+    transform: translate(-10px, calc(-100% - 10px));
+  }
+
+  .tip.end {
+    transform: translate(calc(-100% + 10px), calc(-100% - 10px));
+  }
+
+  .tip b {
+    font-weight: 700;
+    color: var(--tone-ink);
+  }
+
+  .tip em {
+    font-style: normal;
+    font-weight: 500;
+    color: var(--ink-3);
   }
 
   .mark,
@@ -642,7 +738,7 @@
 
   @keyframes draw {
     to {
-      stroke-dashoffset: 0;
+      clip-path: inset(-12px -12px -12px -12px);
     }
   }
 
@@ -659,9 +755,9 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .curve {
+    .chart svg {
       animation: none;
-      stroke-dashoffset: 0;
+      clip-path: none;
     }
 
     .now::after {

@@ -665,5 +665,10 @@
   "pilotes.meteofrance.injoignable": "Météo-France unreachable ({cause})",
   "pilotes.meteofrance.reponse": "Météo-France answered {status}",
   "pilotes.meteofrance.sans_json": "Météo-France answered without readable JSON",
-  "pilotes.meteofrance.departement_absent": "department {department} is not on the warning map"
+  "pilotes.meteofrance.departement_absent": "department {department} is not on the warning map",
+  "pilotes.z2m.volet.commande": "Command",
+  "pilotes.z2m.volet.ouverture": "Opening",
+  "pilotes.z2m.volet.position_attendue": "a position in % was expected",
+  "pilotes.z2m.volet.position_inconnue": "shutter position unknown: open or close it fully once",
+  "pilotes.z2m.volet.commande_inconnue": "unknown command: {key}"
 }

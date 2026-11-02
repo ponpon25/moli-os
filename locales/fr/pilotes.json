@@ -665,5 +665,10 @@
   "pilotes.meteofrance.injoignable": "Météo-France injoignable ({cause})",
   "pilotes.meteofrance.reponse": "Météo-France a répondu {status}",
   "pilotes.meteofrance.sans_json": "Météo-France a répondu sans JSON lisible",
-  "pilotes.meteofrance.departement_absent": "le département {department} n'est pas sur la carte de vigilance"
+  "pilotes.meteofrance.departement_absent": "le département {department} n'est pas sur la carte de vigilance",
+  "pilotes.z2m.volet.commande": "Commande",
+  "pilotes.z2m.volet.ouverture": "Ouverture",
+  "pilotes.z2m.volet.position_attendue": "position attendue en %",
+  "pilotes.z2m.volet.position_inconnue": "position du volet inconnue : l'ouvrir ou le fermer complètement une fois",
+  "pilotes.z2m.volet.commande_inconnue": "commande inconnue : {key}"
 }

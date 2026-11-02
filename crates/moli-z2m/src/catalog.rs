@@ -77,6 +77,15 @@ impl Catalog {
     }
 
     #[must_use]
+    pub fn by_ieee(&self, ieee: &str) -> Option<&Entry> {
+        self.entries.get(ieee)
+    }
+
+    pub fn by_ieee_mut(&mut self, ieee: &str) -> Option<&mut Entry> {
+        self.entries.get_mut(ieee)
+    }
+
+    #[must_use]
     pub fn by_id(&self, id: &DeviceId) -> Option<&Entry> {
         self.entries.values().find(|e| &e.device.id == id)
     }

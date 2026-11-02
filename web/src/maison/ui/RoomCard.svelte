@@ -1,5 +1,5 @@
 <script>
-  import { hub, value, act, isOn, powerKey, setPower, dimKey, levelKey, percentOf, protectedRoom, num, nameOf, deviceKind, lampsOf, doorOpen, leak, motion, lowBattery, unpowered, isFixture, note, reachable, quiet, outletsOf } from '../lib/home.svelte.js';
+  import { hub, value, act, isOn, powerKey, setPower, dimKey, levelKey, percentOf, protectedRoom, num, nameOf, deviceKind, lampsOf, doorOpen, leak, motion, lowBattery, unpowered, isFixture, note, reachable, quiet, outletsOf, isCharger, chargerPhase } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import LightTile from './LightTile.svelte';
@@ -25,6 +25,17 @@
       const w = value(d.id, 'cur_power') ?? value(d.id, 'power');
       if (typeof w === 'number' && w >= 3) return [{ tone: 'warm', icon: 'power', text: t('commun.piece.consomme', { name: nameOf(d.id), watts: num(w) }) }];
       return every ? [{ tone: '', icon: 'power', text: t('commun.piece.au_repos', { name: nameOf(d.id) }) }] : [];
+    }
+    // A car charger: whether a car is there, and what it draws.
+    if (isCharger(d)) {
+      const at = chargerPhase(d.id);
+      const w = value(d.id, 'cur_power');
+      if (at === 'charging')
+        return [{ tone: 'good', icon: 'car', text: t('commun.piece.borne_charge', { kw: num((Number(w) || 0) / 1000, 1) }) }];
+      if (at === 'fault') return [{ tone: 'alert', icon: 'alert', text: t('commun.piece.borne_defaut', { name: nameOf(d.id) }) }];
+      if (at === 'off') return every ? [{ tone: '', icon: 'alert', text: t('commun.piece.hors_ligne', { name: nameOf(d.id) }) }] : [];
+      if (at === 'paused' || at === 'plugged') return [{ tone: '', icon: 'car', text: t(`commun.piece.borne_${at}`) }];
+      return every ? [{ tone: '', icon: 'car', text: t('commun.piece.borne_libre', { name: nameOf(d.id) }) }] : [];
     }
     // A silent sensor's last readings are old news: say it is silent.
     if (d.online === false && deviceKind(d) === 'sensor') {

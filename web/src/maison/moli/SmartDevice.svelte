@@ -1,5 +1,5 @@
 <script>
-  import { home, device, deviceKind, nameOf, isSmoke, isThermo } from '../lib/home.svelte.js';
+  import { home, device, deviceKind, nameOf, isSmoke, isThermo, isCharger } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import LightTile from '../ui/LightTile.svelte';
   import ClimateCard from '../ui/ClimateCard.svelte';
@@ -9,6 +9,7 @@
   import SensorCard from '../ui/SensorCard.svelte';
   import SmokeCard from '../ui/SmokeCard.svelte';
   import ThermoCard from '../ui/ThermoCard.svelte';
+  import ChargerCard from '../ui/ChargerCard.svelte';
   import GarageCard from '../ui/GarageCard.svelte';
   import WeatherCard from './WeatherCard.svelte';
 
@@ -42,6 +43,8 @@
   <div class="card tight"><LightTile {id} name={title} icon="flash" /></div>
 {:else if isSmoke(d)}
   <SmokeCard {id} name={title} />
+{:else if isCharger(d)}
+  <ChargerCard {id} name={title} />
 {:else if isThermo(d)}
   <ThermoCard {id} name={title} />
 {:else}

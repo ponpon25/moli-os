@@ -159,6 +159,26 @@ export const isThermo = (d) =>
   d.points.some((p) => ['temperature', 'humidity'].includes(p.key) && !p.access?.write) &&
   !d.points.some((p) => p.access?.write);
 
+/** An electric car charger: it reports a charge's energy and starts or
+ *  pauses it. */
+export const isCharger = (d) =>
+  !!d && d.points.some((p) => p.key === 'session_energy') && d.points.some((p) => p.key === 'charge_switch' && p.access?.write);
+
+/** Where a charger is, from its own word for it: `off` (unreachable),
+ *  `fault`, `charging`, `paused`, `plugged` (a car, no current) or `free`. */
+export function chargerPhase(id) {
+  if (!reachable(id)) return 'off';
+  const raw = String(value(id, 'work_state') ?? '').toUpperCase();
+  if (/FAULT|ERR|ALARM/.test(raw)) return 'fault';
+  if (raw === 'WORKING' || raw === 'CHARGING' || (!raw && value(id, 'charge_switch') === true)) return 'charging';
+  if (raw.startsWith('PAUSE') || raw === 'STOP') return 'paused';
+  if (raw === 'IDLEINS' || raw === 'FINISH' || raw === 'COMPLETE') return 'plugged';
+  if (raw === 'SLEEP' || raw === 'IDLE') return 'free';
+  // No word yet: a pilot signal under 10 V says a car is there.
+  const cp = value(id, 'cp_voltage');
+  return typeof cp === 'number' && cp < 10.5 ? 'plugged' : 'free';
+}
+
 export const motion = (id) => value(id, 'occupancy') === true || value(id, 'pir') === 'pir';
 
 /** A sensor's battery (not a phone's: it charges). */

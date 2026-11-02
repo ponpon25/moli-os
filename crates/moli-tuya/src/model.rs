@@ -66,6 +66,38 @@ pub struct Dp {
     /// A JSON DP read as several numbers (`{"L1":[2330,144,33],"e":12}`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<Field>,
+    /// A state DP that also tells another point's on/off, for a switch the
+    /// device never reports itself (a charger's start/pause).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<Flag>,
+}
+
+/// Another point read from this DP's value: `true` when the value is one of
+/// `on`, `false` otherwise. While it is off, the points in `zeros` read 0:
+/// a power the device stops reporting once it stops, its last word stale.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Flag {
+    pub code: String,
+    pub on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zeros: Vec<String>,
+}
+
+impl Flag {
+    fn read(&self, raw: &Json) -> Vec<(String, Value)> {
+        let Some(said) = raw.as_str().map(str::trim) else {
+            return Vec::new();
+        };
+        let on = self.on.iter().any(|v| v.eq_ignore_ascii_case(said));
+        let zeros = self
+            .zeros
+            .iter()
+            .filter(|_| !on)
+            .map(|code| (code.clone(), Value::Float(0.0)));
+        std::iter::once((self.code.clone(), Value::Bool(on)))
+            .chain(zeros)
+            .collect()
+    }
 }
 
 /// One number inside a JSON DP: its point key, where it sits (`L1.0`:
@@ -95,6 +127,7 @@ impl Field {
             step: None,
             range: Vec::new(),
             fields: Vec::new(),
+            flags: Vec::new(),
         }
     }
 
@@ -345,7 +378,8 @@ impl TuyaDevice {
     }
 
     /// `{"1": true, "18": 120}` → `[(code, value)]`, unknown DPs skipped.
-    /// A JSON DP with fields gives one value per field it holds.
+    /// A JSON DP with fields gives one value per field it holds; a DP with
+    /// flags, its own value and then theirs.
     #[must_use]
     pub fn decode_dps(&self, dps: &serde_json::Map<String, Json>) -> Vec<(String, Value)> {
         let by_id: BTreeMap<u32, &Dp> = self.dps.iter().map(|d| (d.id, d)).collect();
@@ -353,10 +387,12 @@ impl TuyaDevice {
             .filter_map(|(id, raw)| Some((by_id.get(&id.parse().ok()?)?, raw)))
             .flat_map(|(dp, raw)| {
                 if dp.fields.is_empty() {
+                    let flags = dp.flags.iter().flat_map(|f| f.read(raw));
                     return dp
                         .decode(raw)
                         .map(|v| (dp.code.clone(), v))
                         .into_iter()
+                        .chain(flags)
                         .collect();
                 }
                 // Tuya sends JSON DPs as text.

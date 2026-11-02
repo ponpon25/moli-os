@@ -7,8 +7,11 @@
 //! - 102 is JSON: per phase `[0.1 V, 0.1 A, 0.1 kW]`, `p` total power in
 //!   0.1 kW, `e` session energy in 0.1 kWh, `t` temperature in 0.1 °C;
 //!   pushed about once a minute, and not at all while idle.
-//! - 109 says the state in words (`SLEEP` free, `IDLEINS` plugged, `PAUSE`…).
-//! - 140 starts (`true`) or pauses (`false`) a charge; never reported back.
+//! - 109 says the state in words (`SLEEP`/`IDLE` free, `IDLEINS` plugged,
+//!   `WORKING` charging, `PAUSE`…).
+//! - 140 starts (`true`) or pauses (`false`) a charge; never reported back,
+//!   so its point follows 109 (on while `WORKING`), and 102's power and
+//!   current drop to 0 when the charge stops (the charger stays silent).
 //! - 150 is the charge current in A, one of the steps listed in 107.
 //! - 152 is the installation maximum, 106 `cp` the pilot signal in V.
 
@@ -42,7 +45,11 @@ pub fn known_dps(product: Option<&str>) -> Option<Vec<Dp>> {
             { "id": 106, "code": "info", "type": "Json", "fields": [
                 { "code": "cp_voltage", "path": "cp", "unit": "V" },
             ] },
-            { "id": 109, "code": "work_state", "type": "String" },
+            // The charge is on while the state says so: 140 never answers.
+            { "id": 109, "code": "work_state", "type": "String", "flags": [
+                { "code": "charge_switch", "on": ["WORKING", "CHARGING"],
+                  "zeros": ["cur_power", "cur_current"] },
+            ] },
             { "id": 140, "code": "charge_switch", "type": "Boolean", "writable": true },
             { "id": 150, "code": "charge_current", "type": "Integer", "unit": "A",
               "writable": true, "min": 6, "max": 16, "step": 1 },
@@ -80,7 +87,7 @@ mod tests {
         let raw = serde_json::json!({
             "102": "{\"L1\":[2330,144,33],\"L2\":[0,0,0],\"L3\":[0,0,0],\"t\":215,\"p\":33,\"d\":0,\"e\":111}",
             "106": "{\"r\":\"Type B\",\"fv\":\"1.9.1\",\"cp\":\"9.1\",\"t\":\"2850\",\"e\":\"37013\"}",
-            "109": "IDLEINS",
+            "109": "WORKING",
             "150": 16,
             "189": 34,
         });
@@ -92,9 +99,36 @@ mod tests {
         assert_eq!(get("session_energy"), Some(Value::Float(11.1)));
         assert_eq!(get("device_temp"), Some(Value::Float(21.5)));
         assert_eq!(get("cp_voltage"), Some(Value::Float(9.1)));
-        assert_eq!(get("work_state"), Some(Value::Text("IDLEINS".into())));
+        assert_eq!(get("work_state"), Some(Value::Text("WORKING".into())));
+        assert_eq!(get("charge_switch"), Some(Value::Bool(true)));
         assert_eq!(get("charge_current"), Some(Value::Int(16)));
-        assert_eq!(values.len(), 8, "unknown DPs and fields are skipped");
+        assert_eq!(values.len(), 9, "unknown DPs and fields are skipped");
+    }
+
+    #[test]
+    fn the_charge_follows_the_state_and_its_power_drops_when_it_ends() {
+        let dev = charger();
+        let raw = serde_json::json!({ "109": "IDLEINS" });
+        let values = dev.decode_dps(raw.as_object().unwrap());
+        assert_eq!(
+            values,
+            vec![
+                ("work_state".into(), Value::Text("IDLEINS".into())),
+                ("charge_switch".into(), Value::Bool(false)),
+                ("cur_power".into(), Value::Float(0.0)),
+                ("cur_current".into(), Value::Float(0.0)),
+            ]
+        );
+        let raw = serde_json::json!({ "109": "WORKING" });
+        let values = dev.decode_dps(raw.as_object().unwrap());
+        assert_eq!(
+            values,
+            vec![
+                ("work_state".into(), Value::Text("WORKING".into())),
+                ("charge_switch".into(), Value::Bool(true)),
+            ],
+            "a charge starting says nothing of its power yet"
+        );
     }
 
     #[test]

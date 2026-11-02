@@ -173,6 +173,8 @@ pub(crate) struct Shared {
     /// The last press of a button (a doorbell's), read back as the event's
     /// value while it is fresh.
     presses: Mutex<HashMap<PointId, std::time::Instant>>,
+    /// How each shutter moves, by the point it is followed by.
+    covers: Mutex<HashMap<PointId, accessories::CoverMotion>>,
     pub failures: AtomicU32,
     next_conn: AtomicU64,
     /// The port the listener got (the configured one, or the system's for 0).
@@ -285,13 +287,20 @@ impl Shared {
 
     /// A point changed: its watchers hear of it. A press is only news when
     /// it happens (yes), not when the point falls back to no.
-    fn state_changed(&self, point: &PointId, value: &Value) {
+    fn state_changed(self: &Arc<Self>, point: &PointId, value: &Value) {
         let catalog = self.catalog();
+        let mut cover_seen = false;
         for pair in catalog.watching(point) {
-            let press = matches!(
-                catalog.find(pair.0, pair.1).map(|c| &c.bind),
-                Some(accessories::Bind::Press(_))
-            );
+            let bind = catalog.find(pair.0, pair.1).map(|c| &c.bind);
+            if let Some(accessories::Bind::Cover(points, _)) = bind
+                && !cover_seen
+                && let Some((p, conv)) = &points.position
+                && p == point
+            {
+                cover_seen = true;
+                self.cover_seen(point, *conv, value);
+            }
+            let press = matches!(bind, Some(accessories::Bind::Press(_)));
             if press {
                 if *value != Value::Bool(true) {
                     continue;
@@ -306,6 +315,79 @@ impl Shared {
     }
 
     // ---- values -------------------------------------------------------------
+
+    /// A shutter's position was heard: once it holds still, its watchers
+    /// are told it stopped.
+    fn cover_seen(self: &Arc<Self>, point: &PointId, conv: accessories::Conv, value: &Value) {
+        let Some(position) = accessories::to_hap(conv, value).and_then(|j| j.as_i64()) else {
+            return;
+        };
+        let moved = self
+            .covers
+            .lock()
+            .expect("covers lock")
+            .entry(point.clone())
+            .or_default()
+            .seen(position, std::time::Instant::now());
+        if moved {
+            self.refresh_after(point, accessories::COVER_MOVING);
+        }
+    }
+
+    /// A shutter was sent somewhere (HAP's 0–100).
+    pub(crate) fn cover_asked(self: &Arc<Self>, anchor: &PointId, target: i64) {
+        self.covers
+            .lock()
+            .expect("covers lock")
+            .entry(anchor.clone())
+            .or_default()
+            .asked(target, std::time::Instant::now());
+        self.refresh(anchor);
+        self.refresh_after(anchor, accessories::COVER_ASKED);
+    }
+
+    fn refresh_after(self: &Arc<Self>, point: &PointId, delay: Duration) {
+        let (shared, point) = (Arc::clone(self), point.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(delay + Duration::from_millis(100)).await;
+            shared.refresh(&point);
+        });
+    }
+
+    fn cover_read(
+        &self,
+        points: &accessories::CoverPoints,
+        what: accessories::CoverChar,
+    ) -> Result<Json, i32> {
+        use accessories::{CoverChar, ST_COMMUNICATION, ST_WRITE_ONLY};
+        let anchor = points.anchor().ok_or(ST_COMMUNICATION)?;
+        if self.offline(anchor) {
+            return Err(ST_COMMUNICATION);
+        }
+        let motion = self
+            .covers
+            .lock()
+            .expect("covers lock")
+            .get(anchor)
+            .copied()
+            .unwrap_or_default();
+        // A shutter that cannot tell where it is: where it was sent, else
+        // half-way.
+        let current = points
+            .position
+            .as_ref()
+            .and_then(|(p, conv)| accessories::to_hap(*conv, &self.hub.state(p)?.value))
+            .and_then(|j| j.as_i64())
+            .or_else(|| motion.last_asked())
+            .unwrap_or(50);
+        let now = std::time::Instant::now();
+        Ok(serde_json::json!(match what {
+            CoverChar::Current => current,
+            CoverChar::Target => motion.target(current, now),
+            CoverChar::State => motion.state(current, now),
+            CoverChar::Hold => return Err(ST_WRITE_ONLY),
+        }))
+    }
 
     /// The alarm took an order: its target stays the asked one for a while,
     /// then the panel's word is shown again.
@@ -488,6 +570,7 @@ impl Shared {
                     modes.target_of(self.climate_on(on), &mode)
                 ))
             }
+            Bind::Cover(points, what) => self.cover_read(points, *what),
             Bind::ArmTarget(point) => {
                 if self.offline(point) {
                     return Err(ST_COMMUNICATION);
@@ -898,6 +981,7 @@ pub async fn start(
         setup_owner: Mutex::new(None),
         pending_arm: Mutex::new(HashMap::new()),
         presses: Mutex::new(HashMap::new()),
+        covers: Mutex::new(HashMap::new()),
         failures: AtomicU32::new(0),
         next_conn: AtomicU64::new(1),
         port,

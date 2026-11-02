@@ -17,6 +17,10 @@ enceinte → Alexa (Amazon) → AWS Lambda (ce dossier) → https://alexa.exampl
   Un variateur sans interrupteur (Z-Wave : un seul niveau, 0 = éteint) est une lampe : son niveau
   sert d'interrupteur (allumer = plein, éteindre = 0) et se règle en pourcentage, selon la courbe
   de l'œil (`moli_core::dim` : 30 % = niveau 9, 50 % = 25), comme dans HomeKit et le tableau de bord.
+  Un volet (`percent_control`, ou un `control` proposant `open`) est un volet extérieur
+  (`EXTERIOR_BLIND`) avec une plage `Blind.Lift` 0–100 % (`Alexa.RangeController`) : « Alexa, ouvre /
+  ferme le volet du bureau », « mets le volet du bureau à 30 % », « monte / baisse le volet » (±10 %).
+  Le pilote fait le trajet et s'arrête au bon moment.
 - **La garde s'applique** : un ordre d'Alexa part en origine `api`, acteur `alexa`, comme ceux de
   HomeKit. Retenu (pièce protégée, heures calmes, machine), il est dit fait à Alexa et attend
   l'approbation dans le tableau de bord.

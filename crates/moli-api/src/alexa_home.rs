@@ -11,6 +11,10 @@
 //! every real device, not the helpers (virtual switches such as a
 //! presence). The name Alexa hears is the device's voice name.
 //!
+//! A shutter (`percent_control`, or a `control` offering `open`) is an
+//! exterior blind with a `Blind.Lift` range: « ouvre / ferme le volet », «
+//! mets le volet à 30 % ». Its driver takes it there and stops it.
+//!
 //! An order goes to the hub as origin `api`, actor « alexa »: the guard
 //! applies, as for HomeKit (held in a protected room or at quiet hours,
 //! told to Alexa as done, approved in the dashboard).
@@ -345,9 +349,25 @@ struct Endpoint<'a> {
     color: Option<&'a PointSpec>,
     volume: Option<&'a PointSpec>,
     mute: Option<&'a PointSpec>,
+    /// A shutter: no on/off, a range.
+    cover: Option<Cover<'a>>,
     name: String,
     category: &'static str,
 }
+
+/// The points of a shutter.
+#[derive(Clone, Copy)]
+struct Cover<'a> {
+    /// Where it is (`percent_state`, else `percent_control`).
+    position: Option<&'a PointSpec>,
+    /// Where it is sent.
+    set: Option<&'a PointSpec>,
+    /// `open` / `stop` / `close`.
+    control: Option<&'a PointSpec>,
+}
+
+/// Alexa's name of a shutter's range.
+const BLIND_LIFT: &str = "Blind.Lift";
 
 impl Endpoint<'_> {
     fn point(&self, spec: &PointSpec) -> PointId {
@@ -406,6 +426,7 @@ fn tag(key: &str) -> &str {
     key
 }
 
+#[allow(clippy::too_many_lines)] // one block per kind of endpoint
 fn endpoints(views: &[DeviceView], shown: impl Fn(&DeviceView) -> bool) -> Vec<Endpoint<'_>> {
     let mut out = Vec::new();
     for view in views.iter().filter(|v| shown(v)) {
@@ -472,6 +493,7 @@ fn endpoints(views: &[DeviceView], shown: impl Fn(&DeviceView) -> bool) -> Vec<E
                 color,
                 volume,
                 mute,
+                cover: None,
                 name,
                 category,
             });
@@ -494,12 +516,93 @@ fn endpoints(views: &[DeviceView], shown: impl Fn(&DeviceView) -> bool) -> Vec<E
                 color: None,
                 volume: None,
                 mute: None,
-                name: base,
+                cover: None,
+                name: base.clone(),
                 category: "LIGHT",
+            });
+        }
+        if let Some(cover) = cover_of(device) {
+            let Some(anchor) = cover.set.or(cover.control) else {
+                continue;
+            };
+            out.push(Endpoint {
+                id: hex(PointId::new(&device.id, &anchor.key).as_str()),
+                view,
+                on: anchor,
+                level: false,
+                brightness: None,
+                color_temp: None,
+                color: None,
+                volume: None,
+                mute: None,
+                cover: Some(cover),
+                name: base,
+                category: "EXTERIOR_BLIND",
             });
         }
     }
     out
+}
+
+/// A shutter, as the dashboard sees one: a `percent_control`, or a
+/// writable `control` offering `open`.
+fn cover_of(device: &moli_core::Device) -> Option<Cover<'_>> {
+    let numeric = |key: &str| {
+        device
+            .point(key)
+            .filter(|p| matches!(p.kind, Kind::Numeric { .. }))
+    };
+    let set = numeric("percent_control").filter(|p| p.access.write);
+    let position = numeric("percent_state")
+        .or_else(|| numeric("percent_control"))
+        .filter(|p| p.access.read);
+    let control = device.point("control").filter(|p| {
+        p.access.write
+            && matches!(&p.kind, Kind::Enum { values } if values.iter().any(|v| &**v == "open"))
+    });
+    (set.is_some() || control.is_some()).then_some(Cover {
+        position,
+        set,
+        control,
+    })
+}
+
+/// A shutter's range: 0 closed … 100 open, with the words for it.
+fn blind_lift() -> Json {
+    let to = |name: &str, payload: Json| json!({ "name": name, "payload": payload });
+    let action = |action: &str, directive: Json| json!({ "@type": "ActionsToDirective", "actions": [action], "directive": directive });
+    let mut cap = capability("Alexa.RangeController", &["rangeValue"]);
+    cap["instance"] = json!(BLIND_LIFT);
+    cap["capabilityResources"] = json!({
+        "friendlyNames": [{ "@type": "asset", "value": { "assetId": "Alexa.Setting.Opening" } }],
+    });
+    cap["configuration"] = json!({
+        "supportedRange": { "minimumValue": 0, "maximumValue": 100, "precision": 1 },
+        "unitOfMeasure": "Alexa.Unit.Percent",
+    });
+    let adjust = |delta: i32| {
+        to(
+            "AdjustRangeValue",
+            json!({ "rangeValueDelta": delta, "rangeValueDeltaDefault": false }),
+        )
+    };
+    cap["semantics"] = json!({
+        "actionMappings": [
+            action("Alexa.Actions.Close", to("SetRangeValue", json!({ "rangeValue": 0 }))),
+            action("Alexa.Actions.Open", to("SetRangeValue", json!({ "rangeValue": 100 }))),
+            action("Alexa.Actions.Lower", adjust(-10)),
+            action("Alexa.Actions.Raise", adjust(10)),
+        ],
+        "stateMappings": [
+            { "@type": "StatesToValue", "states": ["Alexa.States.Closed"], "value": 0 },
+            {
+                "@type": "StatesToRange",
+                "states": ["Alexa.States.Open"],
+                "range": { "minimumValue": 1, "maximumValue": 100 },
+            },
+        ],
+    });
+    cap
 }
 
 /// A dimmer's level read as on or off.
@@ -535,9 +638,13 @@ fn discovery(endpoints: &[Endpoint<'_>]) -> Json {
         .map(|e| {
             let mut caps = vec![
                 capability("Alexa", &[]),
-                capability("Alexa.PowerController", &["powerState"]),
                 capability("Alexa.EndpointHealth", &["connectivity"]),
             ];
+            if e.cover.is_some() {
+                caps.push(blind_lift());
+            } else {
+                caps.push(capability("Alexa.PowerController", &["powerState"]));
+            }
             if e.brightness.is_some() {
                 caps.push(capability("Alexa.BrightnessController", &["brightness"]));
             }
@@ -646,6 +753,16 @@ fn properties(e: &Endpoint<'_>) -> Vec<Json> {
         json!({ "value": if online { "OK" } else { "UNREACHABLE" } }),
         iso_time(moli_core::now_ms()),
     ));
+    if let Some(cover) = e.cover {
+        if let Some(p) = cover.position
+            && let Some(pct) = e.value(p).and_then(|v| percent(p, v))
+        {
+            let mut lift = property("Alexa.RangeController", "rangeValue", json!(pct), e.time(p));
+            lift["instance"] = json!(BLIND_LIFT);
+            out.push(lift);
+        }
+        return out;
+    }
     let on = e.value(e.on).and_then(|v| {
         if e.level {
             level_on(e.on, v)
@@ -718,6 +835,32 @@ async fn order(
     let invalid = |what: &str| ("INVALID_VALUE", what.to_owned());
     let unsupported = || ("INVALID_DIRECTIVE", format!("{namespace}.{name}"));
     let number = |key: &str| payload[key].as_f64().filter(|n| n.is_finite());
+    if let Some(cover) = e.cover {
+        let pct = match (namespace, name) {
+            ("Alexa.RangeController", "SetRangeValue") => {
+                number("rangeValue").ok_or_else(|| invalid("rangeValue"))?
+            }
+            ("Alexa.RangeController", "AdjustRangeValue") => {
+                let delta = number("rangeValueDelta").ok_or_else(|| invalid("rangeValueDelta"))?;
+                let now = cover
+                    .position
+                    .and_then(|p| e.value(p).and_then(|v| percent(p, v)))
+                    .map_or(if delta > 0.0 { 0.0 } else { 100.0 }, f64::from);
+                now + delta
+            }
+            _ => return Err(unsupported()),
+        };
+        let pct = pct.clamp(0.0, 100.0);
+        return match (cover.set, cover.control) {
+            (Some(set), _) => send(hub, e.point(set), from_percent(set, pct)).await,
+            // Open or closed only: the nearer end.
+            (None, Some(control)) => {
+                let word = if pct >= 50.0 { "open" } else { "close" };
+                send(hub, e.point(control), Value::from(word)).await
+            }
+            (None, None) => Err(unsupported()),
+        };
+    }
     match (namespace, name) {
         // A dimmer's level: full on, its minimum off (as HomeKit does).
         ("Alexa.PowerController", "TurnOn") if e.level => {
@@ -1035,6 +1178,192 @@ mod tests {
         assert_eq!(from_percent(e.on, 30.0), Value::Int(30), "29.7, whole");
         assert_eq!(from_percent(e.on, 0.0), Value::Int(0));
         assert_eq!(level_on(e.on, &Value::Int(0)), Some(false));
+    }
+
+    fn shutter(points: Vec<PointSpec>, position: Option<i64>) -> DeviceView {
+        DeviceView {
+            device: Arc::new(moli_core::Device {
+                id: "z2m:volet".into(),
+                instance: "z2m".into(),
+                native_name: "Volet bureau".into(),
+                manufacturer: None,
+                model: None,
+                description: None,
+                native_room: None,
+                members: Vec::new(),
+                points,
+            }),
+            label: moli_core::Label::default(),
+            online: Some(true),
+            state: position
+                .map(|p| {
+                    (
+                        Arc::from("percent_control"),
+                        moli_core::Sample {
+                            value: Value::Int(p),
+                            ts: 0,
+                        },
+                    )
+                })
+                .into_iter()
+                .collect(),
+            camera: false,
+            printer: false,
+        }
+    }
+
+    fn spec(key: &str, kind: Kind, read: bool, write: bool) -> PointSpec {
+        PointSpec {
+            key: key.into(),
+            label: key.into(),
+            kind,
+            access: moli_core::Access { read, write },
+            unit: None,
+            semantic: Semantic::Other,
+        }
+    }
+
+    fn control(values: &[&str]) -> PointSpec {
+        spec(
+            "control",
+            Kind::Enum {
+                values: values.iter().map(|v| (*v).into()).collect(),
+            },
+            false,
+            true,
+        )
+    }
+
+    fn percent_control() -> PointSpec {
+        spec(
+            "percent_control",
+            Kind::Numeric {
+                min: Some(0.0),
+                max: Some(100.0),
+                step: Some(1.0),
+            },
+            true,
+            true,
+        )
+    }
+
+    #[test]
+    fn a_shutter_is_an_exterior_blind() {
+        let views = [shutter(
+            vec![
+                control(&["open", "stop", "close"]),
+                spec("slats_open", Kind::Binary, true, false),
+                percent_control(),
+            ],
+            Some(30),
+        )];
+        let all = endpoints(&views, |_| true);
+        let [e] = all.as_slice() else {
+            panic!("one endpoint, no switch")
+        };
+        assert_eq!(e.category, "EXTERIOR_BLIND");
+        assert_eq!(e.name, "Volet bureau");
+        assert_eq!(e.id, hex("z2m:volet/percent_control"));
+        let found = discovery(&all);
+        let caps = found["event"]["payload"]["endpoints"][0]["capabilities"]
+            .as_array()
+            .unwrap();
+        assert!(
+            !caps
+                .iter()
+                .any(|c| c["interface"] == "Alexa.PowerController"),
+            "a shutter is not switched"
+        );
+        let range = caps
+            .iter()
+            .find(|c| c["interface"] == "Alexa.RangeController")
+            .expect("a range");
+        assert_eq!(range["instance"], "Blind.Lift");
+        assert_eq!(
+            range["capabilityResources"]["friendlyNames"][0]["value"]["assetId"],
+            "Alexa.Setting.Opening"
+        );
+        assert_eq!(
+            range["configuration"]["supportedRange"]["maximumValue"],
+            100
+        );
+        assert_eq!(
+            range["configuration"]["unitOfMeasure"],
+            "Alexa.Unit.Percent"
+        );
+        let actions = range["semantics"]["actionMappings"].as_array().unwrap();
+        let close = actions
+            .iter()
+            .find(|a| a["actions"][0] == "Alexa.Actions.Close")
+            .unwrap();
+        assert_eq!(close["directive"]["name"], "SetRangeValue");
+        assert_eq!(close["directive"]["payload"]["rangeValue"], 0);
+        let open = actions
+            .iter()
+            .find(|a| a["actions"][0] == "Alexa.Actions.Open")
+            .unwrap();
+        assert_eq!(open["directive"]["payload"]["rangeValue"], 100);
+        assert_eq!(
+            range["semantics"]["stateMappings"][0]["states"][0],
+            "Alexa.States.Closed"
+        );
+        let props = properties(e);
+        let lift = props
+            .iter()
+            .find(|p| p["name"] == "rangeValue")
+            .expect("its position");
+        assert_eq!(lift["namespace"], "Alexa.RangeController");
+        assert_eq!(lift["instance"], "Blind.Lift");
+        assert_eq!(lift["value"], 30);
+        assert!(!props.iter().any(|p| p["name"] == "powerState"));
+    }
+
+    #[test]
+    fn a_shutter_with_only_open_and_close_is_one_too() {
+        let views = [shutter(vec![control(&["open", "close"])], None)];
+        let all = endpoints(&views, |_| true);
+        let [e] = all.as_slice() else {
+            panic!("one endpoint")
+        };
+        assert_eq!(e.category, "EXTERIOR_BLIND");
+        assert!(
+            e.cover
+                .is_some_and(|c| c.set.is_none() && c.position.is_none())
+        );
+        assert!(!properties(e).iter().any(|p| p["name"] == "rangeValue"));
+        // A printer's control (pause, resume) is no shutter.
+        let printer = [shutter(vec![control(&["pause", "resume"])], None)];
+        assert!(endpoints(&printer, |_| true).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_shutter_goes_where_alexa_says() {
+        let hub = Hub::new(moli_runtime::HubOptions::default()).unwrap();
+        let views = [shutter(vec![percent_control()], Some(30))];
+        let all = endpoints(&views, |_| true);
+        let e = &all[0];
+        // Not a device of the hub: the order is refused, after the words
+        // were understood.
+        let set = order(
+            &hub,
+            e,
+            "Alexa.RangeController",
+            "SetRangeValue",
+            &json!({ "rangeValue": 50 }),
+        )
+        .await;
+        assert_eq!(set.unwrap_err().0, "ENDPOINT_UNREACHABLE");
+        let bad = order(
+            &hub,
+            e,
+            "Alexa.RangeController",
+            "SetRangeValue",
+            &json!({}),
+        )
+        .await;
+        assert_eq!(bad.unwrap_err().0, "INVALID_VALUE");
+        let off = order(&hub, e, "Alexa.PowerController", "TurnOff", &json!({})).await;
+        assert_eq!(off.unwrap_err().0, "INVALID_DIRECTIVE");
     }
 
     #[test]

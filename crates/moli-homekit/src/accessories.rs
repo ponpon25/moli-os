@@ -7,7 +7,8 @@
 //! the device has them) or a switch; read-only temperature, humidity,
 //! motion, contact, light level, leak and smoke points are sensors; a
 //! `Control` point `mode` offering `disarmed`/`partial`/`total` is a
-//! security system (`partial` is HomeKit's *Night* arming).
+//! security system (`partial` is HomeKit's *Night* arming); a shutter
+//! (`percent_control`, or a `control` offering `open`) is a window covering.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -48,6 +49,11 @@ const SVC_GARAGE: &str = "41";
 const C_DOOR_CURRENT: &str = "E";
 const C_DOOR_TARGET: &str = "32";
 const C_OBSTRUCTION: &str = "24";
+const SVC_COVERING: &str = "8C";
+const C_POSITION_CURRENT: &str = "6D";
+const C_POSITION_TARGET: &str = "7C";
+const C_POSITION_STATE: &str = "72";
+const C_HOLD: &str = "6F";
 const SVC_CAMERA: &str = "110";
 const SVC_MICROPHONE: &str = "112";
 const SVC_SPEAKER: &str = "113";
@@ -94,6 +100,7 @@ const READ_NOTIFY: &[&str] = &["pr", "ev"];
 const READ_WRITE_NOTIFY: &[&str] = &["pr", "pw", "ev"];
 const READ_ONLY: &[&str] = &["pr"];
 const READ_WRITE: &[&str] = &["pr", "pw"];
+const WRITE_ONLY: &[&str] = &["pw"];
 
 /// HomeKit's security states.
 const ARM_STAY: i64 = 0;
@@ -121,6 +128,8 @@ pub enum Kinds {
     /// Live video (a camera of its own, apart from the device's sensors).
     Camera,
     GarageDoor,
+    /// A shutter, a blind (HAP's window covering).
+    Cover,
 }
 
 impl Kinds {
@@ -140,6 +149,7 @@ impl Kinds {
             Self::Climate => "climate",
             Self::Camera => "camera",
             Self::GarageDoor => "garage_door",
+            Self::Cover => "cover",
         }
     }
 }
@@ -182,6 +192,129 @@ pub enum Bind {
     /// A press (a doorbell's button): an event when the point turns yes,
     /// nothing when it falls back; read, it is null (HAP's rule).
     Press(PointId),
+    /// A characteristic of a shutter.
+    Cover(CoverPoints, CoverChar),
+}
+
+/// The points a shutter is driven by.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CoverPoints {
+    /// Where it is (`percent_state`, else `percent_control`), as HAP's 0–100.
+    pub position: Option<(PointId, Conv)>,
+    /// Where it is sent (`percent_control`).
+    pub set: Option<(PointId, Conv)>,
+    /// `open` / `stop` / `close`.
+    pub control: Option<PointId>,
+}
+
+impl CoverPoints {
+    /// The point its movement is followed by.
+    pub fn anchor(&self) -> Option<&PointId> {
+        self.position
+            .as_ref()
+            .or(self.set.as_ref())
+            .map(|(p, _)| p)
+            .or(self.control.as_ref())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverChar {
+    Current,
+    Target,
+    State,
+    /// Stops it where it is (write only).
+    Hold,
+}
+
+/// HAP's `PositionState`.
+pub const POSITION_CLOSING: i64 = 0;
+pub const POSITION_OPENING: i64 = 1;
+pub const POSITION_STOPPED: i64 = 2;
+/// A shutter whose position changed this recently is moving (the driver
+/// tells it every second along the way).
+pub const COVER_MOVING: std::time::Duration = std::time::Duration::from_millis(2500);
+/// How long an asked position counts as the way it goes, before it moves
+/// (a Bubendorff first pulls its slats apart, the bottom stays still).
+pub const COVER_ASKED: std::time::Duration = std::time::Duration::from_secs(6);
+
+/// What HomeKit is told of a shutter's movement, from the positions seen
+/// and the last position asked.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CoverMotion {
+    last: Option<i64>,
+    /// When it last moved, and whether up.
+    moved: Option<(std::time::Instant, bool)>,
+    asked: Option<(i64, std::time::Instant)>,
+}
+
+impl CoverMotion {
+    /// A position heard; whether it moved. A move the last ask does not
+    /// explain (its own buttons, after it stood still) forgets the ask.
+    pub fn seen(&mut self, position: i64, now: std::time::Instant) -> bool {
+        let Some(last) = self.last.replace(position) else {
+            return false;
+        };
+        if last == position {
+            return false;
+        }
+        let up = position > last;
+        let resumed = self.moving(now).is_none();
+        if let Some((target, at)) = self.asked {
+            let fresh = now.saturating_duration_since(at) < COVER_ASKED;
+            let away = (target > last) != up;
+            if away || (resumed && !fresh) {
+                self.asked = None;
+            }
+        }
+        self.moved = Some((now, up));
+        true
+    }
+
+    pub fn asked(&mut self, target: i64, now: std::time::Instant) {
+        self.asked = Some((target, now));
+    }
+
+    /// The last position asked, however old (a shutter that cannot tell
+    /// where it is).
+    pub fn last_asked(&self) -> Option<i64> {
+        self.asked.map(|(t, _)| t)
+    }
+
+    fn moving(&self, now: std::time::Instant) -> Option<bool> {
+        self.moved
+            .filter(|(at, _)| now.saturating_duration_since(*at) < COVER_MOVING)
+            .map(|(_, up)| up)
+    }
+
+    fn fresh_ask(&self, current: i64, now: std::time::Instant) -> Option<i64> {
+        self.asked
+            .filter(|(t, at)| *t != current && now.saturating_duration_since(*at) < COVER_ASKED)
+            .map(|(t, _)| t)
+    }
+
+    /// HAP's `PositionState`.
+    pub fn state(&self, current: i64, now: std::time::Instant) -> i64 {
+        let up = self
+            .moving(now)
+            .or_else(|| self.fresh_ask(current, now).map(|t| t > current));
+        match up {
+            Some(true) => POSITION_OPENING,
+            Some(false) => POSITION_CLOSING,
+            None => POSITION_STOPPED,
+        }
+    }
+
+    /// HAP's `TargetPosition`: the one asked while it gets there, the end
+    /// it heads for when moved by its own buttons, else where it is.
+    pub fn target(&self, current: i64, now: std::time::Instant) -> i64 {
+        let moving = self.moving(now);
+        self.asked
+            .filter(|(_, at)| moving.is_some() || now.saturating_duration_since(*at) < COVER_ASKED)
+            .map(|(t, _)| t)
+            .or_else(|| moving.map(|up| if up { 100 } else { 0 }))
+            .unwrap_or(current)
+    }
 }
 
 /// The words an air conditioner's `mode` point uses for the three modes
@@ -530,6 +663,11 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
             ],
         });
         kinds.push(Kinds::GarageDoor);
+    }
+
+    if let Some(service) = cover_of(device, name) {
+        services.push(service);
+        kinds.push(Kinds::Cover);
     }
 
     // An air conditioner: a writable on/off, a `mode` choice and a target
@@ -976,6 +1114,83 @@ fn climate_of<'a>(device: &'a Device, name: &str, taken: &mut Vec<&'a str>) -> O
     })
 }
 
+/// A shutter, as the dashboard sees one: a `percent_control`, or a
+/// writable `control` offering `open`.
+fn cover_of(device: &Device, name: &str) -> Option<ServiceSpec> {
+    let id = |key: &str| PointId::new(&device.id, key);
+    let percent = |key: &str| {
+        device
+            .point(key)
+            .filter(|p| matches!(p.kind, Kind::Numeric { .. }))
+            .map(|p| {
+                let (lo, hi) = numeric(p);
+                (p, (id(&p.key), Conv::Percent { lo, hi }))
+            })
+    };
+    let set = percent("percent_control").filter(|(p, _)| writable(p));
+    let state = percent("percent_state").or_else(|| percent("percent_control"));
+    let position = state.filter(|(p, _)| p.access.read).map(|(_, b)| b);
+    let control = device.point("control").filter(|p| {
+        writable(p)
+            && matches!(&p.kind, Kind::Enum { values } if values.iter().any(|v| &**v == "open"))
+    });
+    let stop = control.is_some_and(
+        |p| matches!(&p.kind, Kind::Enum { values } if values.iter().any(|v| &**v == "stop")),
+    );
+    if set.is_none() && control.is_none() {
+        return None;
+    }
+    let points = CoverPoints {
+        position,
+        set: set.map(|(_, b)| b),
+        control: control.map(|p| id(&p.key)),
+    };
+    let bind = |what| Bind::Cover(points.clone(), what);
+    let mut chars = vec![
+        name_char(name),
+        spec(
+            C_POSITION_CURRENT,
+            "uint8",
+            READ_NOTIFY,
+            bind(CoverChar::Current),
+            "Current Position",
+        )
+        .meta(percent_meta()),
+        spec(
+            C_POSITION_TARGET,
+            "uint8",
+            READ_WRITE_NOTIFY,
+            bind(CoverChar::Target),
+            "Target Position",
+        )
+        .meta(percent_meta()),
+        spec(
+            C_POSITION_STATE,
+            "uint8",
+            READ_NOTIFY,
+            bind(CoverChar::State),
+            "Position State",
+        )
+        .meta(Meta {
+            valid_values: Some(vec![POSITION_CLOSING, POSITION_OPENING, POSITION_STOPPED]),
+            ..Meta::default()
+        }),
+    ];
+    if stop {
+        chars.push(spec(
+            C_HOLD,
+            "bool",
+            WRITE_ONLY,
+            bind(CoverChar::Hold),
+            "Hold Position",
+        ));
+    }
+    Some(ServiceSpec {
+        kind: SVC_COVERING,
+        chars,
+    })
+}
+
 fn sensor_kind(p: &PointSpec) -> Option<Kinds> {
     let numeric = matches!(p.kind, Kind::Numeric { .. });
     let binary = p.kind == Kind::Binary;
@@ -1310,6 +1525,18 @@ impl Catalog {
                         | Bind::Color(p, _)
                         | Bind::ArmTarget(p)
                         | Bind::Press(p) => vec![p],
+                        Bind::Cover(points, _) => points
+                            .position
+                            .iter()
+                            .chain(points.set.iter())
+                            .map(|(p, _)| p)
+                            .chain(points.control.iter())
+                            .fold(Vec::new(), |mut all, p| {
+                                if !all.contains(&p) {
+                                    all.push(p);
+                                }
+                                all
+                            }),
                         Bind::ClimateTarget { on, mode, .. } => vec![on, mode],
                         Bind::ClimateCurrent {
                             on,
@@ -1836,6 +2063,120 @@ mod tests {
             .iter()
             .map(|s| s.kind)
             .collect()
+    }
+
+    fn shutter_points() -> Vec<PointSpec> {
+        let mut control = point(
+            "control",
+            Kind::Enum {
+                values: vec!["open".into(), "stop".into(), "close".into()],
+            },
+            true,
+            Semantic::Other,
+        );
+        control.access.read = false;
+        vec![
+            control,
+            point("slats_open", Kind::Binary, false, Semantic::Other),
+            point("percent_control", range(0.0, 100.0), true, Semantic::Other),
+        ]
+    }
+
+    #[test]
+    fn a_shutter_is_a_window_covering() {
+        let volet = view("volet", shutter_points());
+        let c = catalog(std::slice::from_ref(&volet));
+        assert_eq!(types(&c, 2), ["3E", "8C"]);
+        let covering = &c.accessories[1].services[1];
+        let kinds: Vec<_> = covering.chars.iter().map(|ch| ch.kind).collect();
+        assert_eq!(kinds, ["23", "6D", "7C", "72", "6F"]);
+        assert_eq!(kinds_of(&volet.device), [Kinds::Cover]);
+        let Bind::Cover(points, CoverChar::Target) = &covering.chars[2].bind else {
+            panic!("the target is the shutter's");
+        };
+        let percent = PointId::new(&volet.device.id, "percent_control");
+        assert_eq!(points.set.as_ref().map(|(p, _)| p), Some(&percent));
+        assert_eq!(points.anchor(), Some(&percent));
+        assert_eq!(
+            points.control,
+            Some(PointId::new(&volet.device.id, "control"))
+        );
+        // Every characteristic follows the position, once.
+        assert_eq!(c.watching(&percent).len(), 4);
+        assert_eq!(covering.chars[4].perms, ["pw"]);
+        let json = c.structure().to_string();
+        assert!(json.contains(r#""valid-values":[0,1,2]"#));
+    }
+
+    #[test]
+    fn a_shutter_with_only_open_and_close_is_one_too() {
+        let tuya = view(
+            "rideau",
+            vec![point(
+                "control",
+                Kind::Enum {
+                    values: vec!["open".into(), "close".into()],
+                },
+                true,
+                Semantic::Other,
+            )],
+        );
+        let c = catalog(std::slice::from_ref(&tuya));
+        let kinds: Vec<_> = c.accessories[1].services[1]
+            .chars
+            .iter()
+            .map(|ch| ch.kind)
+            .collect();
+        assert_eq!(kinds, ["23", "6D", "7C", "72"], "no stop, no hold");
+        // A printer's control (pause, resume) is no shutter.
+        let printer = view(
+            "printer",
+            vec![point(
+                "control",
+                Kind::Enum {
+                    values: vec!["pause".into(), "resume".into()],
+                },
+                true,
+                Semantic::Other,
+            )],
+        );
+        assert!(kinds_of(&printer.device).is_empty());
+    }
+
+    #[test]
+    fn a_shutter_moves_then_stops() {
+        let t0 = std::time::Instant::now();
+        let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
+        let mut m = CoverMotion::default();
+        assert!(!m.seen(0, t0), "the first position is no move");
+        assert_eq!(m.state(0, t0), POSITION_STOPPED);
+        assert_eq!(m.target(0, t0), 0);
+        // Sent half-way: opening, before it even moves (slats first).
+        m.asked(50, at(10));
+        assert_eq!(m.state(0, at(3000)), POSITION_OPENING);
+        assert_eq!(m.target(0, at(3000)), 50);
+        assert!(m.seen(10, at(4000)));
+        assert_eq!(m.state(10, at(5000)), POSITION_OPENING);
+        assert!(m.seen(30, at(6000)));
+        assert!(m.seen(50, at(8000)));
+        assert_eq!(m.target(50, at(8100)), 50);
+        // Still for a while: stopped, the target where it is.
+        assert_eq!(m.state(50, at(10_600)), POSITION_STOPPED);
+        assert_eq!(m.target(50, at(10_600)), 50);
+        // Its own buttons send it down: closing, headed for the bottom.
+        assert!(m.seen(45, at(20_000)));
+        assert_eq!(m.state(45, at(20_500)), POSITION_CLOSING);
+        assert_eq!(m.target(45, at(20_500)), 0);
+        assert!(!m.seen(45, at(21_000)), "the same position again");
+        assert_eq!(m.state(45, at(23_000)), POSITION_STOPPED);
+        assert_eq!(m.target(45, at(23_000)), 45);
+        // Sent where it is: nothing to wait for.
+        m.asked(45, at(30_000));
+        assert_eq!(m.state(45, at(30_001)), POSITION_STOPPED);
+        // An ask that never moved it lapses.
+        m.asked(80, at(40_000));
+        assert_eq!(m.state(45, at(47_000)), POSITION_STOPPED);
+        assert_eq!(m.target(45, at(47_000)), 45);
     }
 
     #[test]

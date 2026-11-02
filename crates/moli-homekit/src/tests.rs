@@ -520,7 +520,143 @@ async fn count(s: &mut Client) -> usize {
     db["accessories"].as_array().unwrap().len()
 }
 
+/// A shutter as the impulse driver shows one: it goes where it is sent,
+/// in steps, as the driver tells its position along the way.
+struct FakeShutter;
+
+impl Driver for FakeShutter {
+    fn kind(&self) -> &'static str {
+        "fake"
+    }
+
+    fn run<'a>(&'a self, ctx: &'a mut DriverCtx) -> BoxFuture<'a, anyhow::Result<()>> {
+        Box::pin(async move {
+            let mut control = spec(
+                "control",
+                Kind::Enum {
+                    values: vec!["open".into(), "stop".into(), "close".into()],
+                },
+                true,
+                Semantic::Other,
+            );
+            control.access.read = false;
+            ctx.upsert_device(device(
+                ctx,
+                "volet",
+                vec![
+                    control,
+                    spec("slats_open", Kind::Binary, false, Semantic::Other),
+                    spec(
+                        "percent_control",
+                        Kind::Numeric {
+                            min: Some(0.0),
+                            max: Some(100.0),
+                            step: Some(1.0),
+                        },
+                        true,
+                        Semantic::Other,
+                    ),
+                ],
+            ));
+            let volet = ctx.device_id("volet");
+            ctx.set_state(&volet, "percent_control", Value::Int(0));
+            ctx.ready();
+            while let Some(cmd) = ctx.next_command().await {
+                if &*cmd.key == "percent_control" {
+                    // Half-way there first: it is seen moving.
+                    let to = cmd.value.as_f64().unwrap_or(0.0);
+                    ctx.set_state(&volet, "percent_control", Value::Float(to / 2.0));
+                    ctx.set_state(&volet, "percent_control", Value::Float(to));
+                }
+                cmd.reply(Ok(()));
+            }
+            Ok(())
+        })
+    }
+}
+
+/// The values a read gives, as numbers.
+async fn numbers(s: &mut Client, path: &str) -> Vec<i64> {
+    let (_, r) = s.json("GET", path, &Json::Null).await;
+    r["characteristics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["value"].as_i64().unwrap())
+        .collect()
+}
+
 // ---- the tests ---------------------------------------------------------------
+
+#[tokio::test]
+async fn a_shutter_goes_where_the_phone_sends_it() {
+    let b = bridge_with("shutter", Arc::new(FakeShutter)).await;
+    let code = b.homekit.status(true).setup_code.unwrap();
+    let phone = Controller::new("phone-1");
+    let mut client = Client::connect(b.homekit.port()).await;
+    phone.pair(&mut client, &code).await.unwrap();
+    let mut s = Client::connect(b.homekit.port()).await;
+    phone.verify(&mut s).await.unwrap();
+    let (_, db) = s.json("GET", "/accessories", &Json::Null).await;
+    let (aid, current) = find(&db, "fake:volet", "6D");
+    let (_, target) = find(&db, "fake:volet", "7C");
+    let (_, state) = find(&db, "fake:volet", "72");
+    let (_, hold) = find(&db, "fake:volet", "6F");
+    let path = format!("/characteristics?id={aid}.{current},{aid}.{target},{aid}.{state}");
+    assert_eq!(numbers(&mut s, &path).await, [0, 0, 2], "closed, stopped");
+
+    let (status, _) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": aid, "iid": target, "value": 50}]}),
+        )
+        .await;
+    assert_eq!(status, 204);
+    let percent = PointId::new(
+        &DeviceId::new(&InstanceId::from("fake"), "volet"),
+        "percent_control",
+    );
+    wait_for("sent to 50 %", || {
+        b.hub
+            .state(&percent)
+            .is_some_and(|s| s.value.as_f64() == Some(50.0))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        numbers(&mut s, &path).await,
+        [50, 50, 1],
+        "there, and seen rising a moment ago"
+    );
+    let entry = b
+        .hub
+        .journal(5)
+        .into_iter()
+        .find(|e| e.origin == Origin::Api)
+        .expect("journaled as api");
+    assert_eq!(entry.actor.as_deref(), Some("homekit"));
+
+    // Hold: the driver is told to stop.
+    let (status, _) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": aid, "iid": hold, "value": true}]}),
+        )
+        .await;
+    assert_eq!(status, 204);
+    // Its position is not the phone's to write.
+    let (status, bad) = s
+        .json(
+            "PUT",
+            "/characteristics",
+            &json!({"characteristics": [{"aid": aid, "iid": current, "value": 10}]}),
+        )
+        .await;
+    assert_eq!(status, 207);
+    assert_eq!(bad["characteristics"][0]["status"], -70404);
+}
 
 #[tokio::test]
 async fn pairing_needs_the_right_code_and_happens_once() {

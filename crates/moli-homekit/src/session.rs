@@ -19,8 +19,8 @@ use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::accessories::{
-    self, Bind, Characteristic, ColorPart, OK, ST_INVALID, ST_NOT_FOUND, ST_NOTIFY_UNSUPPORTED,
-    ST_READ_ONLY, ST_WRITE_ONLY, hex_to_hs, hs_to_hex, mode_of_arm_target,
+    self, Bind, Characteristic, ColorPart, CoverChar, CoverPoints, OK, ST_INVALID, ST_NOT_FOUND,
+    ST_NOTIFY_UNSUPPORTED, ST_READ_ONLY, ST_WRITE_ONLY, hex_to_hs, hs_to_hex, mode_of_arm_target,
 };
 use crate::camera::{self, CameraChar};
 use crate::crypto::{self, Channel, hkdf32, message_tag};
@@ -840,6 +840,7 @@ impl Conn {
                 }
                 None => ST_INVALID,
             },
+            Bind::Cover(points, what) => self.cover(points, *what, value).await,
             Bind::Color(point, part) => {
                 let Some(n) = value.as_f64().filter(|n| n.is_finite()) else {
                     return ST_INVALID;
@@ -851,6 +852,44 @@ impl Conn {
                 }
                 entry.2.push(index);
                 OK
+            }
+        }
+    }
+
+    /// A shutter sent somewhere, or stopped. Its driver takes it there and
+    /// stops it by itself: a position goes to `percent_control` as it is.
+    async fn cover(&self, points: &CoverPoints, what: CoverChar, value: &Json) -> i32 {
+        let Some(anchor) = points.anchor() else {
+            return ST_NOT_FOUND;
+        };
+        match what {
+            CoverChar::Current | CoverChar::State => ST_READ_ONLY,
+            CoverChar::Hold => match (value, &points.control) {
+                (Json::Bool(false), _) => OK,
+                (_, Some(control)) => self.command(control, Value::from("stop")).await,
+                (_, None) => ST_INVALID,
+            },
+            CoverChar::Target => {
+                let Some(target) = value.as_f64().filter(|t| (0.0..=100.0).contains(t)) else {
+                    return ST_INVALID;
+                };
+                let (point, order) = match (&points.set, &points.control) {
+                    (Some((point, conv)), _) => match accessories::from_hap(*conv, value) {
+                        Some(v) => (point, v),
+                        None => return ST_INVALID,
+                    },
+                    // Open or closed only: the nearer end.
+                    (None, Some(control)) => (
+                        control,
+                        Value::from(if target >= 50.0 { "open" } else { "close" }),
+                    ),
+                    (None, None) => return ST_NOT_FOUND,
+                };
+                let (status, held) = self.command_as(point, order, Origin::Api).await;
+                if status == OK && !held {
+                    self.shared.cover_asked(anchor, target.round() as i64);
+                }
+                status
             }
         }
     }

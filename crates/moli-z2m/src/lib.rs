@@ -206,10 +206,8 @@ fn on_publish(
         for (key, value) in entry.decode(&payload) {
             ctx.set_state(&entry.device.id, &key, value);
         }
-        if let Some(cover) = covers.get_mut(&entry.ieee)
-            && let Some(moving) = payload.get("moving").and_then(|m| m.as_str())
-        {
-            cover.on_module_moving(moving, Instant::now());
+        if let Some(cover) = covers.get_mut(&entry.ieee) {
+            cover.on_report(&payload, Instant::now());
         }
     } else {
         tracing::debug!(topic = %publish.topic, "non-object state payload ignored");
@@ -306,9 +304,9 @@ fn on_command(
 
 /// Impulse covers show their own points instead of the module's.
 fn reshape_covers(fresh: &mut Catalog, config: &Config) {
-    for ieee in config.impulse_covers.keys() {
+    for (ieee, cover) in &config.impulse_covers {
         if let Some(entry) = fresh.by_ieee_mut(ieee) {
-            impulse::reshape(&mut entry.device);
+            impulse::reshape(&mut entry.device, cover);
         }
     }
 }
@@ -372,9 +370,9 @@ fn drive_covers(
         let Some(entry) = catalog.by_ieee(ieee) else {
             continue;
         };
-        for state in cover.fire(now) {
+        for wire in cover.fire(now) {
             let topic = format!("{base}/{}/set", entry.friendly_name);
-            let payload = serde_json::json!({ "state": state }).to_string();
+            let payload = cover.payload(wire).to_string();
             tracing::debug!(%topic, %payload, "impulse");
             if let Err(e) = client.try_publish(topic, QoS::AtLeastOnce, false, payload) {
                 tracing::warn!(error = %e, "impulse not sent");

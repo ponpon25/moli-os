@@ -8,6 +8,11 @@
 //! (`OPEN`/`CLOSE`, then `STOP` to release) and times the travel to know
 //! where the shutter is.
 //!
+//! A module with two independent relays (`relays`) fits such a motor better:
+//! each relay feeds one wire, follows its wall button and opens again by
+//! itself after a short time (its own auto-off, set in the module, which
+//! `pulse` must match). Moli only closes the relay of the wanted way.
+//!
 //! Each such device shows `control` (open, stop, close), `percent_control`
 //! (how high the bottom of the shutter is: 0 on the sill … 100 open) and
 //! `slats_open` (on the sill, the slats pulled apart: light comes through)
@@ -38,6 +43,31 @@ pub struct CoverConfig {
     /// once the bottom is on the sill.
     #[serde(default)]
     pub slack_down: f64,
+    /// The module's relays, for a module with one relay per wire.
+    #[serde(default)]
+    pub relays: Option<Relays>,
+}
+
+/// Which relay feeds which wire: the suffix of the module's `state_…` points
+/// (`l1`, `l2`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Relays {
+    pub up: String,
+    pub down: String,
+}
+
+impl Relays {
+    /// The relays' own points and the wall inputs' settings: closing a relay by
+    /// hand could feed both wires, and no motor current goes through them.
+    fn hides(&self, key: &str) -> bool {
+        key.starts_with("switch_type")
+            || key.starts_with("switch_mode")
+            || [&self.up, &self.down].iter().any(|relay| {
+                key.strip_suffix(relay.as_str())
+                    .is_some_and(|k| k.ends_with('_'))
+            })
+    }
 }
 
 fn default_pulse() -> f64 {
@@ -409,7 +439,10 @@ impl Cover {
             out.push(dir.wire());
             self.impulse(dir, now);
             let pulse = Duration::from_secs_f64(self.config.pulse.max(0.3));
-            self.pending.push((now + pulse, Step::Release));
+            // A relay module ends the impulse by itself.
+            if self.config.relays.is_none() {
+                self.pending.push((now + pulse, Step::Release));
+            }
             self.ready_at = now + pulse + GAP;
             self.echo = Some(Echo {
                 dir,
@@ -423,6 +456,49 @@ impl Cover {
             }
         }
         out
+    }
+
+    /// What to publish for one value returned by `fire`.
+    #[must_use]
+    pub fn payload(&self, wire: &str) -> serde_json::Value {
+        let relay = self.config.relays.as_ref().and_then(|relays| match wire {
+            "OPEN" => Some(&relays.up),
+            "CLOSE" => Some(&relays.down),
+            _ => None,
+        });
+        match relay {
+            Some(relay) => serde_json::json!({ format!("state_{relay}"): "ON" }),
+            None => serde_json::json!({ "state": wire }),
+        }
+    }
+
+    /// A state message from the module.
+    pub fn on_report(
+        &mut self,
+        payload: &serde_json::Map<String, serde_json::Value>,
+        now: Instant,
+    ) {
+        let moving = match &self.config.relays {
+            Some(relays) => {
+                let state = |relay: &str| payload.get(&format!("state_{relay}"))?.as_str();
+                let (up, down) = (state(&relays.up), state(&relays.down));
+                if up.is_none() && down.is_none() {
+                    return;
+                }
+                if up == Some("ON") {
+                    "forward"
+                } else if down == Some("ON") {
+                    "reverse"
+                } else {
+                    "stop"
+                }
+            }
+            None => match payload.get("moving").and_then(|m| m.as_str()) {
+                Some(moving) => moving,
+                None => return,
+            },
+        };
+        self.on_module_moving(moving, now);
     }
 
     /// The module's own `moving` report. The module starting to power a
@@ -498,8 +574,10 @@ impl Cover {
 }
 
 /// Replaces the module's position points with the impulse cover's.
-pub fn reshape(device: &mut Device) {
-    device.points.retain(|p| !HIDDEN.contains(&&*p.key));
+pub fn reshape(device: &mut Device, config: &CoverConfig) {
+    device.points.retain(|p| {
+        !HIDDEN.contains(&&*p.key) && !config.relays.as_ref().is_some_and(|r| r.hides(&p.key))
+    });
     device.points.push(PointSpec {
         key: CONTROL.into(),
         label: moli_i18n::tr!("pilotes.z2m.volet.commande").into(),
@@ -554,6 +632,7 @@ mod tests {
                 pulse: 1.5,
                 slack_up: 0.0,
                 slack_down: 0.0,
+                relays: None,
             },
             pos.map(|h| Spot::at(h, false)),
             t0,
@@ -582,6 +661,108 @@ mod tests {
             }
         }
         out
+    }
+
+    fn relay_cover(pos: Option<f64>, t0: Instant) -> Cover {
+        Cover::new(
+            CoverConfig {
+                travel_up: 40.0,
+                travel_down: 32.0,
+                pulse: 0.5,
+                slack_up: 0.0,
+                slack_down: 0.0,
+                relays: Some(Relays {
+                    up: "l1".into(),
+                    down: "l2".into(),
+                }),
+            },
+            pos.map(|h| Spot::at(h, false)),
+            t0,
+        )
+    }
+
+    fn relays_report(l1: &str, l2: &str) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::json!({ "state_l1": l1, "state_l2": l2, "power_l1": 0 })
+            .as_object()
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn a_relay_module_gets_one_order_and_ends_the_impulse_itself() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(100.0), t0);
+        c.order(PERCENT, &Value::Int(50), t0).unwrap();
+        // No release: closing the relay is all it takes, twice the same way.
+        let sent = run(&mut c, secs(t0, 60.0));
+        assert_eq!(sent, [(0.0, "CLOSE"), (16.0, "CLOSE")]);
+        assert_eq!(c.payload("CLOSE"), serde_json::json!({"state_l2": "ON"}));
+        assert_eq!(c.payload("OPEN"), serde_json::json!({"state_l1": "ON"}));
+        assert!(!c.moving());
+    }
+
+    #[test]
+    fn reversing_never_closes_both_relays_together() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(0.0), t0);
+        c.order(CONTROL, &text("open"), t0).unwrap();
+        c.fire(t0);
+        let t1 = secs(t0, 10.0);
+        c.order(CONTROL, &text("close"), t1).unwrap();
+        // The stop goes on the relay of the way it is moving…
+        assert_eq!(c.fire(t1), ["OPEN"]);
+        // …and the other relay waits until that one has opened again.
+        assert!(c.fire(secs(t1, 0.5)).is_empty());
+        let at = c.deadline().unwrap();
+        assert!(at >= secs(t1, 1.1));
+        assert_eq!(c.fire(at), ["CLOSE"]);
+    }
+
+    #[test]
+    fn relay_reports_follow_the_wall_and_keep_our_timing() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(0.0), t0);
+        c.order(CONTROL, &text("open"), t0).unwrap();
+        c.fire(t0);
+        // Our own relay, seen 0.4 s later: the travel starts then. The same
+        // state repeated is not a second press.
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 0.4));
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 0.5));
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 0.9));
+        assert!(c.moving());
+        assert_eq!(height(&c, secs(t0, 20.4)), Some(50.0));
+        // « Down » pressed on the wall: one impulse, it stops.
+        c.on_report(&relays_report("OFF", "ON"), secs(t0, 10.4));
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 10.9));
+        assert!(!c.moving());
+        assert_eq!(height(&c, secs(t0, 30.0)), Some(25.0));
+        // And down again: it starts on its own.
+        c.on_report(&relays_report("OFF", "ON"), secs(t0, 40.0));
+        assert!(c.moving());
+        // A message about something else changes nothing.
+        c.on_report(&serde_json::Map::new(), secs(t0, 41.0));
+        assert!(c.moving());
+    }
+
+    #[test]
+    fn a_relay_cover_hides_what_could_feed_both_wires() {
+        let relays = Relays {
+            up: "l1".into(),
+            down: "l2".into(),
+        };
+        for key in [
+            "state_l1",
+            "state_l2",
+            "power_l1",
+            "energy_l2",
+            "switch_type_sw1",
+            "switch_mode_sw2",
+        ] {
+            assert!(relays.hides(key), "{key}");
+        }
+        for key in ["action", "linkquality", "state", "l1"] {
+            assert!(!relays.hides(key), "{key}");
+        }
     }
 
     #[test]
@@ -734,6 +915,7 @@ mod tests {
                 pulse: 1.0,
                 slack_up: 3.0,
                 slack_down: 3.0,
+                relays: None,
             },
             Some(Spot::at(0.0, false)),
             t0,

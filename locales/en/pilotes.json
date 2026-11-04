@@ -671,5 +671,10 @@
   "pilotes.z2m.volet.ouverture": "Opening",
   "pilotes.z2m.volet.position_attendue": "a position in % was expected",
   "pilotes.z2m.volet.position_inconnue": "shutter position unknown: open or close it fully once",
-  "pilotes.z2m.volet.commande_inconnue": "unknown command: {key}"
+  "pilotes.z2m.volet.commande_inconnue": "unknown command: {key}",
+  "pilotes.z2m.volet.duree_montee": "Rise time",
+  "pilotes.z2m.volet.duree_descente": "Descent time",
+  "pilotes.z2m.volet.lames_montee": "Slats pulling apart",
+  "pilotes.z2m.volet.lames_descente": "Slats pressing together",
+  "pilotes.z2m.volet.duree_attendue": "A duration in seconds is expected, within the setting's limits"
 }

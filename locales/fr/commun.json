@@ -110,6 +110,8 @@
   "commun.volet.inconnue": "Position inconnue",
   "commun.volet.injoignable": "Injoignable",
   "commun.volet.aria": "Ouverture du volet {label}",
+  "commun.volet.reglages": "Réglages du store",
+  "commun.volet.reglages_aide": "Durées en secondes, à chronométrer sur ce store. La position se recale à chaque arrivée en butée.",
   "commun.lampe.introuvable": "Introuvable",
   "commun.lampe.coupee": "Coupée à l’interrupteur",
   "commun.lampe.injoignable": "Injoignable",

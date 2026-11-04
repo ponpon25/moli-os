@@ -28,9 +28,13 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoverConfig {
-    /// Seconds from fully closed to fully open.
+    /// Seconds from fully closed to fully open. This and the three other
+    /// durations are where a new shutter starts: then they are set from the
+    /// dashboard (`TIMINGS`) and the value set there is the one kept.
+    #[serde(default = "default_travel")]
     pub travel_up: f64,
     /// Seconds from fully open to fully closed.
+    #[serde(default = "default_travel")]
     pub travel_down: f64,
     /// Seconds the module powers the wire for one impulse.
     #[serde(default = "default_pulse")]
@@ -72,6 +76,29 @@ impl Relays {
 
 fn default_pulse() -> f64 {
     1.0
+}
+
+fn default_travel() -> f64 {
+    30.0
+}
+
+/// The durations set from the dashboard: key, shortest, longest (seconds).
+pub const TIMINGS: [(&str, f64, f64); 4] = [
+    ("travel_up", 3.0, 180.0),
+    ("travel_down", 3.0, 180.0),
+    ("slack_up", 0.0, 30.0),
+    ("slack_down", 0.0, 30.0),
+];
+
+/// A number, however it came.
+#[must_use]
+pub fn number(value: &Value) -> Option<f64> {
+    #[allow(clippy::cast_precision_loss)]
+    match value {
+        Value::Int(i) => Some(*i as f64),
+        Value::Float(f) => Some(*f),
+        _ => None,
+    }
 }
 
 /// Pause between the end of one impulse and the next: the module must see
@@ -207,6 +234,36 @@ impl Cover {
         }
     }
 
+    /// One of `TIMINGS`, as it is now.
+    #[must_use]
+    pub fn timing(&self, key: &str) -> Option<f64> {
+        match key {
+            "travel_up" => Some(self.config.travel_up),
+            "travel_down" => Some(self.config.travel_down),
+            "slack_up" => Some(self.config.slack_up),
+            "slack_down" => Some(self.config.slack_down),
+            _ => None,
+        }
+    }
+
+    /// Sets one of `TIMINGS`. A move under way follows the new duration.
+    pub fn set_timing(&mut self, key: &str, value: &Value) -> Result<(), String> {
+        let secs = number(value)
+            .filter(|secs| {
+                TIMINGS
+                    .iter()
+                    .any(|(k, lo, hi)| *k == key && (*lo..=*hi).contains(secs))
+            })
+            .ok_or_else(|| moli_i18n::tr!("pilotes.z2m.volet.duree_attendue"))?;
+        match key {
+            "travel_up" => self.config.travel_up = secs,
+            "travel_down" => self.config.travel_down = secs,
+            "slack_up" => self.config.slack_up = secs,
+            _ => self.config.slack_down = secs,
+        }
+        Ok(())
+    }
+
     /// Seconds spent on the slats, and on the height, for a full travel.
     fn legs(&self, dir: Dir) -> (f64, f64) {
         let (travel, slack) = match dir {
@@ -338,13 +395,9 @@ impl Cover {
                 }
             }
             (PERCENT, v) => {
-                #[allow(clippy::cast_precision_loss)]
-                let target = match v {
-                    Value::Int(i) => *i as f64,
-                    Value::Float(f) => *f,
-                    _ => return Err(moli_i18n::tr!("pilotes.z2m.volet.position_attendue")),
-                }
-                .clamp(0.0, 100.0);
+                let target = number(v)
+                    .ok_or_else(|| moli_i18n::tr!("pilotes.z2m.volet.position_attendue"))?
+                    .clamp(0.0, 100.0);
                 if target >= 100.0 - NEAR {
                     self.go(Dir::Up, now);
                 } else if target <= NEAR {
@@ -578,6 +631,29 @@ pub fn reshape(device: &mut Device, config: &CoverConfig) {
     device.points.retain(|p| {
         !HIDDEN.contains(&&*p.key) && !config.relays.as_ref().is_some_and(|r| r.hides(&p.key))
     });
+    for (key, lo, hi) in TIMINGS {
+        device.points.push(PointSpec {
+            key: key.into(),
+            label: match key {
+                "travel_up" => moli_i18n::tr!("pilotes.z2m.volet.duree_montee"),
+                "travel_down" => moli_i18n::tr!("pilotes.z2m.volet.duree_descente"),
+                "slack_up" => moli_i18n::tr!("pilotes.z2m.volet.lames_montee"),
+                _ => moli_i18n::tr!("pilotes.z2m.volet.lames_descente"),
+            }
+            .into(),
+            kind: Kind::Numeric {
+                min: Some(lo),
+                max: Some(hi),
+                step: Some(0.5),
+            },
+            access: Access {
+                read: true,
+                write: true,
+            },
+            unit: Some(Unit::Second),
+            semantic: Semantic::Config,
+        });
+    }
     device.points.push(PointSpec {
         key: CONTROL.into(),
         label: moli_i18n::tr!("pilotes.z2m.volet.commande").into(),
@@ -742,6 +818,35 @@ mod tests {
         // A message about something else changes nothing.
         c.on_report(&serde_json::Map::new(), secs(t0, 41.0));
         assert!(c.moving());
+    }
+
+    #[test]
+    fn durations_are_set_while_it_runs_and_refused_out_of_range() {
+        let t0 = Instant::now();
+        let mut c = cover(Some(0.0), t0);
+        assert_eq!(c.timing("travel_up"), Some(40.0));
+        c.set_timing("travel_up", &Value::Float(20.5)).unwrap();
+        c.set_timing("slack_down", &Value::Int(2)).unwrap();
+        assert_eq!(c.timing("travel_up"), Some(20.5));
+        assert_eq!(c.timing("slack_down"), Some(2.0));
+        assert!(c.set_timing("travel_up", &Value::Int(2)).is_err());
+        assert!(c.set_timing("slack_up", &Value::Int(31)).is_err());
+        assert!(c.set_timing("travel_down", &text("long")).is_err());
+        assert!(c.set_timing("pulse", &Value::Int(5)).is_err());
+        assert_eq!(c.timing("travel_up"), Some(20.5));
+        // The chronometer follows at once.
+        c.order(CONTROL, &text("open"), t0).unwrap();
+        c.fire(t0);
+        assert_eq!(height(&c, secs(t0, 10.25)), Some(50.0));
+    }
+
+    #[test]
+    fn a_new_shutter_needs_only_its_relays() {
+        let config: CoverConfig =
+            serde_json::from_str(r#"{"relays":{"up":"l1","down":"l2"},"pulse":0.5}"#).unwrap();
+        assert_eq!(config.travel_up, 30.0);
+        assert_eq!(config.travel_down, 30.0);
+        assert_eq!(config.slack_up, 0.0);
     }
 
     #[test]

@@ -147,7 +147,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
             },
             command = ctx.next_command() => match command {
                 Some(command) if !connected => command.reply(Err(UNREACHABLE.into())),
-                Some(command) => on_command(&client, base, &catalog, &mut covers, command),
+                Some(command) => on_command(ctx, &client, base, &catalog, &mut covers, command),
                 None => return Ok(()),
             },
             () = sleep_until(deadline), if deadline.is_some() => {
@@ -275,6 +275,7 @@ fn apply_catalog(ctx: &DriverCtx, current: &mut Catalog, fresh: Catalog) {
 }
 
 fn on_command(
+    ctx: &DriverCtx,
     client: &AsyncClient,
     base: &str,
     catalog: &Catalog,
@@ -285,13 +286,21 @@ fn on_command(
         command.reply(Err("device no longer known to zigbee2mqtt".into()));
         return;
     };
-    if let Some(cover) = covers.get_mut(&entry.ieee)
-        && matches!(&*command.key, impulse::CONTROL | impulse::PERCENT)
-    {
-        // Sent by `drive_covers`, right after (its deadline is now).
-        let result = cover.order(&command.key, &command.value, Instant::now());
-        command.reply(result);
-        return;
+    if let Some(cover) = covers.get_mut(&entry.ieee) {
+        if matches!(&*command.key, impulse::CONTROL | impulse::PERCENT) {
+            // Sent by `drive_covers`, right after (its deadline is now).
+            let result = cover.order(&command.key, &command.value, Instant::now());
+            command.reply(result);
+            return;
+        }
+        if impulse::TIMINGS.iter().any(|(k, ..)| *k == &*command.key) {
+            let result = cover.set_timing(&command.key, &command.value);
+            if result.is_ok() {
+                ctx.set_state(&entry.device.id, &command.key, command.value.clone());
+            }
+            command.reply(result);
+            return;
+        }
     }
     let payload = entry.encode(&command.key, &command.value).to_string();
     let topic = format!("{base}/{}/set", entry.friendly_name);
@@ -330,15 +339,30 @@ fn adopt_covers(
         let id = &entry.device.id;
         covers.entry(ieee.clone()).or_insert_with(|| {
             let slats_open = ctx.current(id, impulse::SLATS) == Some(Value::Bool(true));
-            let known = match ctx.current(id, impulse::PERCENT) {
-                #[allow(clippy::cast_precision_loss)]
-                Some(Value::Int(i)) => Some(i as f64),
-                Some(Value::Float(f)) => Some(f),
-                _ => None,
-            }
-            .map(|h| impulse::Spot::at(h, slats_open));
+            let known = ctx
+                .current(id, impulse::PERCENT)
+                .as_ref()
+                .and_then(impulse::number)
+                .map(|h| impulse::Spot::at(h, slats_open));
             tracing::info!(device = %id, position = ?known, "impulse cover");
-            Cover::new(cover_config.clone(), known, Instant::now())
+            let mut cover = Cover::new(cover_config.clone(), known, Instant::now());
+            // The durations set from the dashboard outlive a restart; the
+            // first time, the dashboard is shown the configured ones.
+            for (key, ..) in impulse::TIMINGS {
+                match ctx.current(id, key) {
+                    Some(saved) => {
+                        if let Err(e) = cover.set_timing(key, &saved) {
+                            tracing::warn!(device = %id, key, error = %e, "saved duration ignored");
+                        }
+                    }
+                    None => {
+                        if let Some(secs) = cover.timing(key) {
+                            ctx.set_state(id, key, Value::Float(secs));
+                        }
+                    }
+                }
+            }
+            cover
         });
     }
 }

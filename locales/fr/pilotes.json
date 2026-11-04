@@ -671,5 +671,10 @@
   "pilotes.z2m.volet.ouverture": "Ouverture",
   "pilotes.z2m.volet.position_attendue": "position attendue en %",
   "pilotes.z2m.volet.position_inconnue": "position du volet inconnue : l'ouvrir ou le fermer complètement une fois",
-  "pilotes.z2m.volet.commande_inconnue": "commande inconnue : {key}"
+  "pilotes.z2m.volet.commande_inconnue": "commande inconnue : {key}",
+  "pilotes.z2m.volet.duree_montee": "Durée de montée",
+  "pilotes.z2m.volet.duree_descente": "Durée de descente",
+  "pilotes.z2m.volet.lames_montee": "Décollement des lames",
+  "pilotes.z2m.volet.lames_descente": "Tassement des lames",
+  "pilotes.z2m.volet.duree_attendue": "Durée en secondes attendue, dans les limites du réglage"
 }

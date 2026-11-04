@@ -4,6 +4,7 @@
   import { skyNow } from '../lib/sky.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
+  import ShutterSettings from './ShutterSettings.svelte';
 
   /** A roller shutter: how open it is, large, and beside it the window as
    *  a tall pill, onto the sky as it is outside right now, the slats rolling
@@ -22,6 +23,9 @@
   const pos = $derived(Math.max(0, Math.min(100, Number(raw ?? 0))));
   const offers = $derived(d?.points.find((p) => p.key === 'control')?.kind.values ?? []);
   const settable = $derived(!!d?.points.find((p) => p.key === 'percent_control')?.access?.write);
+  // Its durations, for a shutter timed by the driver.
+  const tunable = $derived(!!d?.points.find((p) => p.key === 'travel_up')?.access?.write);
+  let tuning = $state(false);
 
   // The sky behind the glass.
   const outside = $derived(skyNow());
@@ -161,6 +165,10 @@
   const tone = $derived(!online ? 'off' : way !== 0 ? 'moving' : shown <= 1 && !slatsOpen ? 'closed' : 'open');
 </script>
 
+{#if tuning}
+  <ShutterSettings {id} {label} onclose={() => (tuning = false)} />
+{/if}
+
 <section
   class="card shutter {tone} {outside.scene}"
   class:night={!outside.day}
@@ -198,6 +206,11 @@
       {#if offers.includes('close')}
         <button class:lit={way < 0} aria-label={t('commun.volet.fermer')} title={t('commun.volet.fermer')} onclick={() => order('close', 'commun.volet.fermer')}>
           <Icon name="chevron-down" size={22} />
+        </button>
+      {/if}
+      {#if tunable}
+        <button class="tune" aria-label={t('commun.volet.reglages')} title={t('commun.volet.reglages')} onclick={() => (tuning = true)}>
+          <Icon name="tune" size={18} />
         </button>
       {/if}
     </div>
@@ -388,6 +401,11 @@
     transition:
       transform 0.15s var(--ease),
       background 0.2s;
+  }
+
+  .buttons button.tune {
+    background: transparent;
+    opacity: 0.7;
   }
 
   .buttons button.lit {

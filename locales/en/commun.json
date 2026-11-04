@@ -110,6 +110,8 @@
   "commun.volet.inconnue": "Position unknown",
   "commun.volet.injoignable": "Unreachable",
   "commun.volet.aria": "{label} shutter opening",
+  "commun.volet.reglages": "Shutter settings",
+  "commun.volet.reglages_aide": "Durations in seconds, to be timed on this shutter. The position resets each time it reaches an end stop.",
   "commun.lampe.introuvable": "Not found",
   "commun.lampe.coupee": "Switched off at the wall",
   "commun.lampe.injoignable": "Unreachable",

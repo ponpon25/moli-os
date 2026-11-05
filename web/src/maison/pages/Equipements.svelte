@@ -35,6 +35,36 @@
   let filter = $state('all');
   /** grouped by where they come from (`source`) or where they are (`room`) */
   let by = $state('source');
+  /** the folded groups, as `by:group`; what is not shown starts folded */
+  let closed = $state(new Set(['state:off']));
+  const VIEW_KEY = 'moli-equipements-view';
+  try {
+    const kept = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}');
+    if (['source', 'room', 'name', 'state'].includes(kept.by)) by = kept.by;
+    if (Array.isArray(kept.closed)) closed = new Set(kept.closed);
+  } catch {
+    // Private window: the choice lasts the visit.
+  }
+  function keepView() {
+    try {
+      localStorage.setItem(VIEW_KEY, JSON.stringify({ by, closed: [...closed] }));
+    } catch {
+      // Same.
+    }
+  }
+  function setBy(next) {
+    by = next;
+    keepView();
+  }
+  /** Searching opens everything, without forgetting what was folded. */
+  function folded(key, open) {
+    if (query.trim() || closed.has(key) === !open) return;
+    const next = new Set(closed);
+    if (open) next.delete(key);
+    else next.add(key);
+    closed = next;
+    keepView();
+  }
   /** the device getting a brand new room */
   let creating = $state(null);
   let draft = $state('');
@@ -63,7 +93,7 @@
   const devices = $derived(
     Object.values(hub.devices)
       .map((d) => ({ d, kind: deviceKind(d), room: roomOf(d), name: nameOf(d.id) }))
-      .sort((a, b) => a.name.localeCompare(b.name)),
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })),
   );
 
   const shown = $derived.by(() => {
@@ -81,17 +111,18 @@
   const groups = $derived.by(() => {
     const map = new Map();
     for (const x of shown) {
-      const k = by === 'room' ? (x.room ?? '') : source(x.d);
+      const k = by === 'room' ? (x.room ?? '') : by === 'name' ? 'all' : by === 'state' ? (deviceOnDashboard(x.d) ? 'on' : 'off') : source(x.d);
       if (!map.has(k)) map.set(k, []);
       map.get(k).push(x);
     }
     const list = [...map.entries()];
+    if (by === 'state') return list.sort((a, b) => (a[0] === 'off') - (b[0] === 'off'));
     if (by === 'room') return list.sort((a, b) => (!a[0]) - (!b[0]) || a[0].localeCompare(b[0]));
     return list.sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
   });
 
   /** Bridges with an interface but no device yet: where pairing starts. */
-  const bridges = $derived(by === 'room' ? [] : (hub.drivers ?? []).filter((x) => x.web && !devices.some((d) => source(d.d) === x.instance)));
+  const bridges = $derived(by !== 'source' ? [] : (hub.drivers ?? []).filter((x) => x.web && !devices.some((d) => source(d.d) === x.instance)));
 
   const unplaced = $derived(devices.filter((x) => !x.room).length);
 
@@ -149,15 +180,15 @@
       {/each}
     </div>
     <div class="chips by" role="radiogroup" aria-label={t('maison.equipements.ranger')}>
-      {#each ['source', 'room'] as b (b)}
-        <button role="radio" aria-checked={by === b} class:on={by === b} onclick={() => (by = b)}>{t(`maison.equipements.par_${b}`)}</button>
+      {#each ['source', 'room', 'name', 'state'] as b (b)}
+        <button role="radio" aria-checked={by === b} class:on={by === b} onclick={() => setBy(b)}>{t(`maison.equipements.par_${b}`)}</button>
       {/each}
     </div>
   </div>
 
   {#if filter === 'all' && !query}
-  <section class="group">
-    <h2>{t('maison.equipements.cartes')} <small>{cards.length}</small></h2>
+  <details class="group" open={!closed.has('cards')} ontoggle={(e) => folded('cards', e.currentTarget.open)}>
+    <summary><h2>{t('maison.equipements.cartes')} <small>{cards.length}</small></h2></summary>
     <ul>
       {#each cards as c (c.id)}
         <li>
@@ -170,16 +201,18 @@
         </li>
       {/each}
     </ul>
-  </section>
+  </details>
   {/if}
 
-  {#each groups as [src, list] (src)}
-    <section class="group">
+  {#each groups as [src, list] (`${by}:${src}`)}
+    <details class="group" open={query.trim() !== '' || !closed.has(`${by}:${src}`)} ontoggle={(e) => folded(`${by}:${src}`, e.currentTarget.open)}>
+      <summary>
       <h2>
-        {by === 'room' ? src || t('maison.equipements.sans_piece') : sourceName(src)} <small>{list.length}</small>
+        {by === 'room' ? src || t('maison.equipements.sans_piece') : by === 'name' ? t('maison.equipements.f_all') : by === 'state' ? t(`maison.equipements.etat_${src}`) : sourceName(src)} <small>{list.length}</small>
         {#if by === 'source' && webOf(src)}<a class="web" href={webOf(src)} target="_blank" rel="noopener noreferrer" title={t('maison.equipements.interface_de', { name: sourceName(src) })}>{t('maison.equipements.interface')} ↗</a>{/if}
         {#if by === 'source' && isRfx(src)}<button class="web" onclick={() => (rfx = src)}>{t('maison.equipements.interface')}</button>{/if}
       </h2>
+      </summary>
       <ul>
         {#each list as x (x.d.id)}
           <li class:off={!reachable(x.d.id)}>
@@ -237,7 +270,7 @@
           </li>
         {/each}
       </ul>
-    </section>
+    </details>
   {:else}
     {#if !bridges.length}<p class="empty">{t('maison.equipements.rien')}</p>{/if}
   {/each}
@@ -337,6 +370,28 @@
   .chips button.on {
     background: var(--warm-soft);
     color: var(--warm-ink);
+  }
+
+  details.group > summary {
+    cursor: pointer;
+    list-style: none;
+  }
+
+  details.group > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  details.group > summary h2::before {
+    content: '›';
+    display: inline-block;
+    width: 14px;
+    font-size: 16px;
+    line-height: 1;
+    transition: transform 0.15s;
+  }
+
+  details.group[open] > summary h2::before {
+    transform: rotate(90deg);
   }
 
   .group h2 {

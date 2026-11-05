@@ -1,0 +1,23 @@
+[package]
+name = "moli-sun"
+description = "Moli OS sun: where the sun is over the house, which walls it reaches, and whether outside is cooler than inside."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+jiff.workspace = true
+moli-core.workspace = true
+moli-i18n.workspace = true
+moli-runtime.workspace = true
+serde.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio-util.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

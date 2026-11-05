@@ -986,6 +986,23 @@ fn spawn_house_drivers(
             cancel.clone(),
         ));
     }
+    if let (Some(sun), Some(latitude), Some(longitude)) = (
+        &config.sun,
+        config.automations.latitude,
+        config.automations.longitude,
+    ) {
+        tasks.push(spawn_driver(
+            hub,
+            InstanceId::from(moli_sun::INSTANCE),
+            Arc::new(moli_sun::Sun::new(
+                hub.clone(),
+                sun.clone(),
+                latitude,
+                longitude,
+            )),
+            cancel.clone(),
+        ));
+    }
     if let Some(energy) = energy {
         tasks.push(spawn_driver(
             hub,

@@ -51,6 +51,10 @@ pub struct Config {
     /// them as instance `portes`.
     #[serde(default, rename = "garage")]
     pub garages: Vec<moli_garage::Door>,
+    /// The sun over the house, as points (needs `[automations]` latitude and
+    /// longitude). Moli runs it as instance `soleil`.
+    #[serde(default)]
+    pub sun: Option<moli_sun::Config>,
     /// The home's own assistant (absent: no conversation in the dashboard).
     /// Its API key: `moli-os secrets set assistant api_key`.
     #[serde(default)]
@@ -365,6 +369,12 @@ impl Config {
         }
         moli_lights::check(&self.fixtures).map_err(|e| anyhow::anyhow!("[[fixture]] {e}"))?;
         moli_garage::check(&self.garages).map_err(|e| anyhow::anyhow!("[[garage]] {e}"))?;
+        if let Some(sun) = &self.sun {
+            moli_sun::check(sun).map_err(|e| anyhow::anyhow!("[sun] {e}"))?;
+            if self.automations.latitude.is_none() || self.automations.longitude.is_none() {
+                anyhow::bail!("[sun] needs latitude and longitude in [automations]");
+            }
+        }
         Ok(())
     }
 }

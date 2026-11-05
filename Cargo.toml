@@ -43,6 +43,7 @@ moli-presence = { path = "crates/moli-presence" }
 moli-rfxtrx = { path = "crates/moli-rfxtrx" }
 moli-zwave = { path = "crates/moli-zwave" }
 moli-garage = { path = "crates/moli-garage" }
+moli-sun = { path = "crates/moli-sun" }
 moli-telegram = { path = "crates/moli-telegram" }
 moli-olvid = { path = "crates/moli-olvid" }
 moli-meteofrance = { path = "crates/moli-meteofrance" }

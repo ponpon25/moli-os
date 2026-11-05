@@ -535,6 +535,25 @@ pièces ; il commande ensuite les membres en origine `system` (journal : `lumina
   serveur TLS parlant RSA/CBC (rustls ne sait pas le faire, à vérifier avec le vrai ClientHello du module) et d'un réappairage après chaque panne.
 - Non couvert : minuteries, programmes, consommation, lamelles en écriture, mode vacances.
 
+## `soleil` (interne) : le soleil sur la maison (`crates/moli-sun`)
+
+- **Couvre** : la position du soleil, calculée sur place (formule NOAA, sans internet), et les façades qu'il atteint. Le pilote ne commande aucun appareil.
+- **Appareil** `soleil:maison` : `elevation`, `azimuth`, `facade_<id>` (vrai si le soleil est à moins de `half_width` degrés de la façade et au-dessus de `min_elevation`, sans tenir compte des arbres ni des voisins), et `outdoor_cooler_by` (écart entre la pièce la plus chaude et l'extérieur) si `indoor` et `outdoor` sont donnés. Mis à jour chaque minute.
+- **Configuration** : il lui faut `latitude` et `longitude` dans `[automations]`.
+
+```toml
+[sun]
+min_elevation = 15.0                # degrés
+half_width = 60.0                   # degrés de part et d'autre de la façade
+indoor = ["sonde:salon/temperature"]
+outdoor = "sonde:dehors/temperature"
+
+[[sun.facade]]
+id = "sud"                          # le point est facade_sud ; ne pas le renommer
+name = "Façade sud"
+azimuth = 180.0                     # où regarde le mur, depuis le nord, sens horaire
+```
+
 ## `portes` (interne) : portes de garage (`crates/moli-garage`)
 
 - **Couvre** : une porte de garage à un seul bouton (une impulsion ouvre, ferme, arrête, repart dans l'autre sens), commandée par un relais à contact sec sur le bouton du moteur (un Qubino Flush 1D Relay en Z-Wave, par exemple), avec ou sans capteur d'ouverture.

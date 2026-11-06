@@ -1,116 +1,124 @@
 <script>
+  // Every shutter of the house, at a glance: the groups first, then one line a
+  // window, each set to the unit. A shutter's durations and a group's list are
+  // behind its settings.
   import { hub, deviceKind, hidden, isCoverGroup, nameOf, roomOf } from '../lib/home.svelte.js';
-  import { storesBoard, STORES, resetStores } from '../lib/layout.svelte.js';
+  import { coversWord, shortName } from '../lib/accueil.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
-  import ShutterCard from '../ui/ShutterCard.svelte';
+  import CoverRow from '../ui/CoverRow.svelte';
   import CoverGroupEditor from '../ui/CoverGroupEditor.svelte';
-  import TileBoard from '../ui/TileBoard.svelte';
+  import Sortable from '../ui/Sortable.svelte';
+  import Personalize from '../ui/Personalize.svelte';
 
-  /** Every shutter of the house, arranged like the dashboard. Until the family
-   *  arranges them: the groups first, then room by room, in no room last. */
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-  const WIDTH = 4;
-
   const all = $derived(Object.values(hub.devices).filter((d) => deviceKind(d) === 'cover' && !hidden(d.id)));
-  const tiles = $derived(
+  const groups = $derived(all.filter(isCoverGroup).sort((a, b) => collator.compare(nameOf(a.id), nameOf(b.id))));
+  const shutters = $derived(
     all
-      .map((d) => ({ d, room: roomOf(d), group: isCoverGroup(d), label: nameOf(d.id) }))
-      .sort((a, b) => b.group - a.group || !a.room - !b.room || collator.compare(a.room ?? '', b.room ?? '') || collator.compare(a.label, b.label))
-      .map(({ d, label }) => ({ id: d.id, label, on: true, w: WIDTH, rows: 0, ...storesBoard.tiles[d.id] })),
+      .filter((d) => !isCoverGroup(d))
+      .map((d) => ({ d, room: roomOf(d) }))
+      .sort((a, b) => !a.room - !b.room || collator.compare(a.room ?? '', b.room ?? '') || collator.compare(nameOf(a.d.id), nameOf(b.d.id))),
   );
-  const shutters = $derived(all.filter((d) => !isCoverGroup(d)).length);
-  const away = $derived(tiles.filter((x) => !x.on));
-
-  /** « Par pièce »: the groups, then the rooms, those in no room last. */
-  function sectionOf(tile) {
-    const d = hub.devices[tile.id];
-    if (isCoverGroup(d)) return { key: '__groups', title: t('maison.groupes_stores.titre'), order: 0 };
-    const room = roomOf(d);
-    return room ? { key: room, title: room, order: 1 } : { key: '', title: t('maison.equipements.sans_piece'), order: 2 };
-  }
+  /** The room is the title; what is left of the shutter's name, if anything. */
+  const words = (x) => {
+    if (!x.room) return { name: nameOf(x.d.id), sub: t('maison.equipements.sans_piece') };
+    const rest = shortName(x.d, x.room);
+    return { name: x.room, sub: rest.toLowerCase() === 'store' ? null : rest };
+  };
 
   let creating = $state(false);
+  let editing = $state(false);
+  const LISTS = ['stores-groupes', 'stores'];
 </script>
 
-{#snippet body(tile)}<ShutterCard id={tile.id} />{/snippet}
-{#snippet hint()}{t('maison.stores.aide')}{/snippet}
-{#snippet extra()}
-  {#if away.length}
-    <div class="away">
-      <span>{t('maison.stores.masques')}</span>
-      {#each away as x (x.id)}
-        <button onclick={() => STORES.set(x.id, { on: true })} aria-label={t('maison.stores.afficher', { name: x.label })}><Icon name="plus" size={14} />{x.label}</button>
-      {/each}
+<div class="stores">
+  <header>
+    <div>
+      <h1 class="page-title">{t('maison.stores.titre')}</h1>
+      <p class="page-sub">{coversWord(shutters.map((x) => x.d))}</p>
     </div>
-  {/if}
-{/snippet}
-{#snippet actions()}
-  {#if shutters}
-    <button class="create" onclick={() => (creating = true)}><Icon name="plus" size={18} />{t('maison.groupes_stores.creer')}</button>
-  {/if}
-{/snippet}
+ <div class="acts">
+    <Personalize bind:editing lists={LISTS} />
+    {#if shutters.length}
+      <button class="create" onclick={() => (creating = true)}><Icon name="plus" size={17} />{t('maison.groupes_stores.creer')}</button>
+    {/if}
+    </div>
+  </header>
 
-<TileBoard
-  title={t('maison.stores.titre')}
-  sub={t('maison.stores.sous_titre', { count: shutters })}
-  {tiles}
-  board={STORES}
-  {body}
-  {hint}
-  {extra}
-  {actions}
-  {sectionOf}
-  onhide={(tile) => STORES.set(tile.id, { on: false })}
-  onreset={resetStores}
-/>
+  {#if editing}<p class="hint">{t('maison.perso.aide')}</p>{/if}
 
-{#if !all.length}<p class="empty">{t('maison.stores.aucun')}</p>{/if}
-{#if creating}<CoverGroupEditor onclose={() => (creating = false)} />{/if}
+  {#if groups.length}
+    <section class="card list">
+      <h2>{t('maison.groupes_stores.titre')}</h2>
+      {#snippet groupRow(d)}<CoverRow {d} name={nameOf(d.id)} tune />{/snippet}
+      <Sortable list="stores-groupes" items={groups} id={(d) => d.id} label={(d) => nameOf(d.id)} {editing} item={groupRow} />
+    </section>
+  {/if}
+
+  {#if shutters.length}
+    <section class="card list">
+      <h2>{t('maison.accueil.par_piece')}</h2>
+      {#snippet shutterRow(x)}
+        {@const w = words(x)}
+        <CoverRow d={x.d} name={w.name} sub={w.sub} tune />
+      {/snippet}
+      <Sortable list="stores" items={shutters} id={(x) => x.d.id} label={(x) => nameOf(x.d.id)} {editing} item={shutterRow} />
+    </section>
+  {/if}
+</div>
+
+{#if creating}
+  <CoverGroupEditor onclose={() => (creating = false)} />
+{/if}
 
 <style>
+  .stores {
+    display: grid;
+    gap: 18px;
+  }
+
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
   .create {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    padding: 9px 15px;
     border: 0;
     border-radius: 999px;
-    padding: 7px 14px;
-    background: var(--warm-soft);
-    color: var(--warm-ink);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 650;
-    white-space: nowrap;
-    cursor: pointer;
+    background: var(--surface-3);
+    color: var(--ink);
+    font-weight: 620;
   }
 
-  .away {
+  h2 {
+    margin-bottom: 4px;
+    color: var(--ink-3);
+    font-size: 13px;
+    font-weight: 620;
+  }
+
+  .list {
+    --sort-cols: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+    --sort-gap: 0 28px;
+  }
+
+  .acts {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
-    font-size: 13px;
-    color: var(--ink-3);
   }
 
-  .away button {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    min-height: 34px;
-    padding: 5px 12px;
-    border: 0;
-    border-radius: 999px;
-    background: var(--surface-2);
+  .hint {
     color: var(--ink-2);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 650;
-    cursor: pointer;
-  }
-
-  .empty {
-    color: var(--ink-3);
+    font-size: 14px;
   }
 </style>

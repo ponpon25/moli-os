@@ -423,7 +423,7 @@
 
   .buttons button.lit {
     background: var(--tone);
-    color: var(--surface);
+    color: var(--on-ink);
     box-shadow: var(--shadow-lift);
   }
 

@@ -70,7 +70,7 @@
     border-radius: 50%;
     border: 0;
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
     display: grid;
     place-items: center;
   }

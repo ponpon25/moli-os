@@ -97,7 +97,7 @@ export async function removeRoom(name, devices) {
   }
 }
 
-// ---- which devices the dashboard shows -------------------------------------------
+// ---- which devices the classic dashboard shows (classic theme) -------------------
 
 /** Devices the family took off the dashboard / put on it, against the default
  *  (a clim shows unless it was taken off). Kept like the tiles. */
@@ -128,7 +128,20 @@ export function setApart(id, yes) {
   keep('maison-dashboard-apart', apart.ids);
 }
 
-// ---- the dashboard's tiles -------------------------------------------------------
+// ---- what the home page shows ----------------------------------------------------
+
+/** Devices the family took off the home page (the box in Équipements): the
+ *  rest show, in the uses and the rooms. */
+export const homeShown = $state({ off: read('maison-accueil-off', []) });
+
+export const onHome = (id) => !homeShown.off.includes(id);
+
+export function showOnHome(id, yes) {
+  homeShown.off = yes ? homeShown.off.filter((i) => i !== id) : [...new Set([...homeShown.off, id])];
+  keep('maison-accueil-off', homeShown.off);
+}
+
+// ---- tiles kept by the Speakers page ---------------------------------------------
 
 /** Width in columns (of 12), height in rows of `ROW` px (0: its own, as
  *  tall as what it shows). A row is thin on purpose: tiles stack in any way
@@ -214,11 +227,12 @@ const list = (v) => (Array.isArray(v) ? v : null);
 onPrefs((kept) => {
   layout.hiddenRooms = list(kept['maison-rooms-hidden']) ?? layout.hiddenRooms;
   layout.extraRooms = list(kept['maison-rooms-extra']) ?? layout.extraRooms;
+  homeShown.off = list(kept['maison-accueil-off']) ?? homeShown.off;
   shown.off = list(kept['maison-dashboard-off']) ?? shown.off;
   shown.on = list(kept['maison-dashboard-on']) ?? shown.on;
   apart.ids = list(kept['maison-dashboard-apart']) ?? apart.ids;
-  const tiles = kept['maison-dashboard'];
-  if (tiles && typeof tiles === 'object' && !Array.isArray(tiles)) dash.tiles = tiles;
   const stores = kept['maison-stores'];
   if (stores && typeof stores === 'object' && !Array.isArray(stores)) storesBoard.tiles = stores;
+  const tiles = kept['maison-dashboard'];
+  if (tiles && typeof tiles === 'object' && !Array.isArray(tiles)) dash.tiles = tiles;
 });

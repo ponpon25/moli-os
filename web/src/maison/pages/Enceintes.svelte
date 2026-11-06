@@ -5,6 +5,7 @@
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
   import PlayerCard from '../ui/PlayerCard.svelte';
+  import SpeakerRow from '../ui/SpeakerRow.svelte';
   import Immersion from '../ui/Immersion.svelte';
   import { has, list } from '../lib/speakers.js';
 
@@ -286,6 +287,18 @@
       ? note(t('enceintes.choisir_avant'), 'error')
       : act(`${target.leader}/play`, JSON.stringify({ kind: hit.kind, id: hit.id, title: hit.title, mode }), t('enceintes.lancer', { name: hit.title }));
   const groupName = (g) => g.members.map((m) => nameOf(m.id)).join(' + ');
+
+  // What plays is a player; what sleeps takes one line, and opens on demand.
+  // While arranging, every one is a player: that is what moves.
+  let opening = $state([]);
+  const playingNow = (g) => value(g.leader, 'playing') === true;
+  const big = $derived(groups.filter((g) => customizing || playingNow(g) || opening.includes(g.key)));
+  const asleep = $derived(groups.filter((g) => !big.includes(g)));
+  const toggleOpen = (key) => (opening = opening.includes(key) ? opening.filter((k) => k !== key) : [...opening, key]);
+  // The library: closed until asked, open while it holds something.
+  let shelfOpen = $state(false);
+  const libraryShown = $derived(shelfOpen || !!term || !!submitted);
+  const playingWord = $derived(groups.filter(playingNow).map(groupName).join(', '));
   function clearSearch() {
     opened = null;
     term = '';
@@ -298,9 +311,12 @@
   <header class="head">
     <div>
       <h1 class="page-title">{t('enceintes.titre')}</h1>
-      <p class="page-sub">{t('enceintes.sous_titre')}</p>
+      <p class="page-sub">{playingWord || t('maison.accueil.silence')}</p>
     </div>
     <div class="head-actions">
+    {#if searchable}
+      <button class="chip tune" class:cool={libraryShown} aria-expanded={libraryShown} onclick={() => { if (libraryShown) { shelfOpen = false; clearSearch(); } else shelfOpen = true; }}><Icon name="search" size={16} />{t('enceintes.chercher')}</button>
+    {/if}
     {#if groups.length}
       <button class="chip tune" onclick={immerseDefault}><Icon name="fullscreen" size={16} />{t('enceintes.immersion.titre')}</button>
     {/if}
@@ -344,7 +360,7 @@
     </section>
   {/if}
 
-  {#if searchable}
+  {#if searchable && libraryShown}
     <section class="card applebar">
       <form onsubmit={(e) => { e.preventDefault(); runSearch(); }}>
         <label class="field">
@@ -455,8 +471,10 @@
     <p class="muted">{t('enceintes.aucune')}</p>
   {/if}
 
+  <!-- One thing playing: the player, and beside it what sleeps. -->
+  <div class="stage" class:duo={big.length <= 1 && asleep.length && !customizing}>
   <div class="grid" class:editing={customizing} class:dragging={movingKey} style:--cols={cols} bind:clientWidth={gridWidth}>
-    {#each groups as g (g.key)}
+    {#each big as g (g.key)}
       {@const tile = tileFor(g)}
       <div
         class="widget"
@@ -473,6 +491,7 @@
           </div>
         {/if}
       <PlayerCard members={g.members} {rooms} {look} groupKey={g.key} onimmerse={() => immerse(g.key)} />
+        {#if !customizing && opening.includes(g.key)}<button class="fold" onclick={() => toggleOpen(g.key)}><Icon name="chevron-up" size={16} />{t('maison.perso.replier')}</button>{/if}
         {#if customizing && cols > 1}
           <button class="grow" onpointerdown={(e) => startResize(e, g)} ondblclick={() => autoHeight(g)} title={t('enceintes.perso.redimensionner')} aria-label={t('enceintes.perso.redimensionner')}>
             <Icon name="resize" size={18} />
@@ -480,6 +499,13 @@
         {/if}
       </div>
     {/each}
+  </div>
+
+  {#if asleep.length}
+    <section class="card sleeping">
+      {#each asleep as g (g.key)}<SpeakerRow d={hub.devices[g.leader]} name={groupName(g)} onopen={() => toggleOpen(g.key)} />{/each}
+    </section>
+  {/if}
   </div>
 </div>
 
@@ -510,6 +536,47 @@
 
   .tune {
     border: 0;
+  }
+
+  .stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+
+  @media (min-width: 1000px) {
+    .stage.duo {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .stage.duo .widget {
+      grid-column: 1 / -1 !important;
+    }
+
+    .stage.duo .sleeping {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .sleeping {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
+    gap: 0 28px;
+    padding-block: 10px;
+  }
+
+  .fold {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 6px;
+    padding: 4px 10px;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    color: var(--ink-2);
+    font-size: 13px;
   }
 
   .perso {
@@ -683,7 +750,7 @@
   .applebar .go {
     padding: 11px 20px;
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
   }
 
   .hint {
@@ -787,7 +854,7 @@
     display: grid;
     place-items: center;
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
     box-shadow: 0 8px 22px -6px rgb(0 0 0 / 55%);
     opacity: 0;
     transform: translateY(8px);
@@ -954,7 +1021,7 @@
     display: grid;
     place-items: center;
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
     cursor: nwse-resize;
     touch-action: none;
     box-shadow: var(--shadow-lift);

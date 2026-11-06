@@ -1,6 +1,6 @@
 <script>
-  import { t } from '../../lib/i18n.svelte.js';
-  import Icon from './Icon.svelte';
+  import { t } from '../../../../lib/i18n.svelte.js';
+  import Icon from '../../../ui/Icon.svelte';
   import TileGrid from './TileGrid.svelte';
 
   /** A page of tiles the family arranges: « Personnaliser » lets each be moved,

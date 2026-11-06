@@ -1,572 +1,461 @@
 <script>
+  // The home page: a sentence over the sky, what is going on, and the house by
+  // use or room by room. The orders wait in a panel until someone asks for them.
   import { onMount } from 'svelte';
-  import { roomOf, home, hub, value, device, isOn, clock, num, relative, lastSeen, roomList, lampsOf, nameOf, doorOpen, leak, lowBattery, act, pending } from '../lib/home.svelte.js';
-  import { isPrinter, phase } from '../lib/printers.js';
-  import { t, locale } from '../../lib/i18n.svelte.js';
+  import { home, num, greeting, isOn, value, nameOf } from '../lib/home.svelte.js';
+  import { accueil, setView, activity, alarmArmed, alarmWord, alarms, chargers, chargerWord, clims, covers, coverOf, coversWord, garageOpen, garageWord, garages, indoorTemp, lights, notices, rooms, smokes, speakers, cameras } from '../lib/accueil.svelte.js';
+  import { arranged } from '../lib/order.svelte.js';
+  import { energy, useEnergy, kwh } from '../lib/energy-live.svelte.js';
+  import { moli } from '../lib/moli.svelte.js';
+  import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
-  import LightTile from '../ui/LightTile.svelte';
-  import ClimateCard from '../ui/ClimateCard.svelte';
-  import EnergyCard from '../ui/EnergyCard.svelte';
-  import AlarmCard from '../ui/AlarmCard.svelte';
-  import CameraTile from '../ui/CameraTile.svelte';
-  import AmbiancePicker from '../ui/AmbiancePicker.svelte';
-  import Routines from '../ui/Routines.svelte';
-  import SkyHero from '../ui/SkyHero.svelte';
-  import { DASHBOARD, resetDashboard, onDashboard, isApart } from '../lib/layout.svelte.js';
-  import TileBoard from '../ui/TileBoard.svelte';
-  import { catalogue, showTile, isClim, isDev, available } from '../lib/tiles.svelte.js';
-  import DeviceCard from '../ui/DeviceCard.svelte';
-  import SensorCard from '../ui/SensorCard.svelte';
-  import ThermoCard from '../ui/ThermoCard.svelte';
-  import ChargerCard from '../ui/ChargerCard.svelte';
-  import GarageCard from '../ui/GarageCard.svelte';
-  import SmokeCard from '../ui/SmokeCard.svelte';
-  import SpeakerCard from '../ui/SpeakerCard.svelte';
-  import PlayerCard from '../ui/PlayerCard.svelte';
-  import { has } from '../lib/speakers.js';
-  import ShutterCard from '../ui/ShutterCard.svelte';
-  import PrinterCard from '../ui/PrinterCard.svelte';
-  import PaperPrinterCard from '../ui/PaperPrinterCard.svelte';
-  import Remote from '../ui/Remote.svelte';
-  import { deviceKind, isSmoke, isThermo, isCharger } from '../lib/home.svelte.js';
-  import { isPaperPrinter } from '../lib/paper.js';
+  import HomePanel from '../ui/HomePanel.svelte';
+  import RoomTile from '../ui/RoomTile.svelte';
+  import Sortable from '../ui/Sortable.svelte';
+  import Personalize from '../ui/Personalize.svelte';
+  import HomeCover from '../ui/HomeCover.svelte';
+  import Orb from '../moli/Orb.svelte';
 
-  const cfg = $derived(home.config ?? {});
+  let { onask } = $props();
 
-  /** How a speaker's player shows on the dashboard: volume and progress, no
-   *  grouping or library (those are the Speakers page's). */
-  const PLAYER_LOOK = { sections: { volumes: true, join: false, library: false, progress: true }, ambient: true };
+  onMount(useEnergy);
 
-  /** « Par pièce »: a device's tile goes under its room, the rest above. */
-  function sectionOf(tile) {
-    const room = tile.device ? roomOf(device(tile.device)) : null;
-    return room ? { key: room, title: room, order: 1 } : { key: '', title: null, order: 0 };
-  }
+  let open = $state(null);
 
-  const tiles = $derived(catalogue().filter((d) => isClim(d.id) || (isDev(d.id) ? !!device(d.device) : available(d.id) && (d.id !== 'lights' || shownLights.length > 0) && (d.id !== 'ambiances' || !!mood))));
+  const said = $derived(notices());
+  /** The sentence: only what really asks for attention. */
+  const urgent = $derived(said.find((n) => n.tone === 'alert') ?? said.find((n) => n.tone === 'warm'));
+  const chips = $derived(said.filter((n) => n !== urgent));
+  const going = $derived(activity());
 
-  const out = $derived(cfg.outdoor ?? {});
+  const lit = $derived(lights().filter((d) => isOn(d.id)).length);
+  const inside = $derived(indoorTemp());
+  const climOn = $derived(clims().filter((d) => value(d.id, 'on') === true).length);
+  const playing = $derived(speakers().filter((d) => value(d.id, 'playing') === true));
 
-  // The favourites if the house chose some, else every light of every room.
-  // An alarm: a device that takes a `mode` among which « disarmed ».
-  const alarm = $derived(
-    Object.values(hub.devices).find((d) => d.points.some((p) => p.key === 'mode' && p.kind?.values?.includes('disarmed'))),
-  );
-
-  const lights = $derived.by(() => {
-    const fav = cfg.favorites?.lights ?? [];
-    if (fav.length) return fav;
-    return roomList().flatMap((r) => r.lights.map((d) => ({ id: d.id, name: null, icon: 'light', also: [] })));
-  });
-  /** The lights the family wants on the dashboard (each has its own box in Équipements). */
-  const shownLights = $derived(lights.filter((l) => onDashboard(l.id) && !isApart(l.id)));
-  const litCount = $derived(shownLights.filter((l) => [l.id, ...(l.also ?? [])].some((i) => isOn(i))).length);
-
-  // Ambiances, room by room (the last room chosen is remembered here).
-  const moodRooms = $derived(roomList().map((r) => ({ name: r.name, lamps: lampsOf(r) })).filter((r) => r.lamps.length));
-  let moodPick = $state((() => {
-    try {
-      return localStorage.getItem('moli.mood-room');
-    } catch {
-      return null;
-    }
-  })());
-  const mood = $derived(moodRooms.find((r) => r.name === moodPick) ?? moodRooms.find((r) => r.name === 'Salon') ?? moodRooms[0]);
-  function pickRoom(name) {
-    moodPick = name;
-    try {
-      localStorage.setItem('moli.mood-room', name);
-    } catch {
-      /* remembered for this visit only */
-    }
-  }
-
-  // The house's mode (a helper, « Mode Maison »): one tap, like Home
-  // Assistant's mode buttons.
-  const modeDevice = $derived(Object.values(hub.devices).find((d) => d.id.endsWith(':mode_maison')));
-  const modes = $derived(modeDevice?.points.find((p) => p.key === 'state')?.kind.values ?? []);
-  const mode = $derived(modeDevice ? value(modeDevice.id, 'state') : null);
-  const MODE_ICON = { Normal: 'home', Nuit: 'moon', Absent: 'lock', Vacances: 'palm' };
-  /** A mode's name in the house's language (an unknown one shows as it is). */
-  function modeName(m) {
-    const key = `maison.accueil.mode.${String(m).toLowerCase()}`;
-    const word = t(key);
-    return word === key ? m : word;
-  }
-  function setMode(m) {
-    if (m !== mode) act(`${modeDevice.id}/state`, m, t('maison.accueil.mode_action', { mode: modeName(m) }));
-  }
-
-  // The speakers that talk (announcements): one tap silences them all, for
-  // four hours at most (they speak again by themselves).
-  const talkers = $derived(Object.values(hub.devices).filter((d) => d.points.some((p) => p.key === 'quiet' && p.access?.write)));
-  const quiet = $derived(talkers.some((d) => value(d.id, 'quiet') === true));
-  const quietUntil = $derived(Math.max(0, ...talkers.map((d) => Number(value(d.id, 'quiet_until') ?? 0))));
-  function toggleQuiet() {
-    for (const d of talkers) act(`${d.id}/quiet`, !quiet, quiet ? t('maison.accueil.annonces_retablies') : t('maison.accueil.annonces_coupees'));
-  }
-
-  // What deserves a word right now. Silence when all is well.
-  const notices = $derived.by(() => {
+  /** A door only for what the house has. */
+  const doors = $derived.by(() => {
     const list = [];
-    // Smoke and water from any sensor that knows it, not only the listed ones.
-    const all = Object.values(hub.devices);
-    for (const d of all) {
-      if (value(d.id, 'smoke') === true) list.push({ tone: 'alert', icon: 'fire', text: t('maison.accueil.fumee', { name: nameOf(d.id) }), href: '#/pieces' });
-      if (leak(d.id)) list.push({ tone: 'alert', icon: 'water', text: t('maison.accueil.fuite', { name: nameOf(d.id) }), href: '#/pieces' });
+    if (lights().length) list.push({ key: 'lights', icon: 'light', value: lit ? t('maison.accueil.lumieres_allumees', { count: lit }) : t('maison.accueil.rien_allume'), active: lit > 0 });
+    if (covers().length) list.push({ key: 'covers', icon: 'shutter', value: coversWord(), active: covers().some((d) => coverOf(d).open) });
+    if (clims().length || inside != null) list.push({ key: 'climate', icon: 'air-conditioner', value: inside != null ? t('maison.accueil.dedans', { v: num(inside, 1) }) : t('maison.accueil.usage.climate'), sub: clims().length ? (climOn ? t('maison.accueil.clims_marche', { count: climOn }) : t('maison.accueil.clims_eteintes')) : null, active: climOn > 0 });
+    if (speakers().length) list.push({ key: 'music', icon: 'speaker', value: playing.length ? playing.map((d) => nameOf(d.id)).join(', ') : t('maison.accueil.silence'), sub: playing.length ? value(playing[0].id, 'title') : null, active: playing.length > 0 });
+    const alarm = alarms()[0];
+    const garage = garages()[0];
+    if (alarm || garage || smokes().length || cameras().length) {
+      list.push({
+        key: 'security',
+        icon: alarm && alarmArmed(alarm) ? 'shield-lock' : 'shield',
+        value: alarm ? t('maison.accueil.alarme_etat', { etat: alarmWord(alarm).toLowerCase() }) : t('maison.accueil.rien_a_signaler'),
+        sub: garage ? `${nameOf(garage.id)} : ${garageWord(garage).toLowerCase()}` : null,
+        alert: !!garage && garageOpen(garage),
+      });
     }
-    if (hub.approvals?.length) list.push({ tone: 'cool', icon: 'lock', text: t('maison.accueil.demandes', { count: hub.approvals.length }), href: '#/reglages/securite' });
-    for (const door of cfg.doors ?? []) {
-      const d = device(door.id);
-      if (!d) continue;
-      if (doorOpen(door.id) === true) list.push({ tone: 'warm', icon: 'door-open', text: t('maison.accueil.porte_ouverte', { name: door.name }), href: '#/pieces' });
-    }
-    const bell = (cfg.favorites?.cameras ?? [])[0]?.id;
-    if (bell && value(bell, 'doorbell') === true) list.push({ tone: 'alert', icon: 'bell', text: t('maison.accueil.sonnette'), href: '#/cameras' });
-    if (bell && value(bell, 'person') === true) list.push({ tone: 'warm', icon: 'account', text: t('maison.accueil.quelquun'), href: '#/cameras' });
-    for (const p of Object.values(hub.devices).filter(isPrinter)) {
-      if (p.online === false) continue;
-      const st = phase(value(p.id, 'state'));
-      const left = value(p.id, 'remaining');
-      const pct = Math.round(Number(value(p.id, 'progress') ?? 0));
-      if (st === 'printing') {
-        const text =
-          typeof left === 'number'
-            ? t('maison.accueil.impression_fin', { name: nameOf(p.id), pct, time: clock(home.now + left * 60_000) })
-            : t('maison.accueil.impression', { name: nameOf(p.id), pct });
-        list.push({ tone: 'cool', icon: 'printer3d', text, href: '#/impression' });
-      } else if (st === 'paused') {
-        list.push({ tone: 'warm', icon: 'printer3d', text: t('maison.accueil.impression_pause', { name: nameOf(p.id), pct }), href: '#/impression' });
-      } else if (st === 'error') {
-        list.push({ tone: 'alert', icon: 'printer3d', text: t('maison.accueil.impression_erreur', { name: nameOf(p.id) }), href: '#/impression' });
-      }
-    }
-    if (value('energie:maison', 'over_budget') === true) {
-      const bill = value('energie:maison', 'bill_projection');
-      list.push({ tone: 'warm', icon: 'bolt', text: t('maison.accueil.facture', { bill: num(bill) }), href: '#/energie' });
-    }
-    // A dead battery takes its sensor offline: count it all the same.
-    const flat = all.filter((d) => lowBattery(d.id));
-    if (flat.length) {
-      const text =
-        flat.length <= 3
-          ? t('maison.accueil.piles_liste', { count: flat.length, names: flat.map((d) => nameOf(d.id)).join(', ') })
-          : t('maison.accueil.piles', { count: flat.length });
-      list.push({ tone: 'cool', icon: 'alert', text, href: '#/pieces' });
-    }
-    if (out.pool && value(out.pool, 'action_required') === true) list.push({ tone: 'cool', icon: 'pool', text: t('maison.accueil.piscine_oeil'), href: '#/dehors' });
+    const car = chargers()[0];
+    if (car) list.push({ key: 'car', icon: 'car', value: chargerWord(car), active: value(car.id, 'work_state') === 'WORKING' });
+    if (!energy.missing && energy.summary) list.push({ key: 'energy', icon: 'bolt', value: kwh(energy.summary.today?.total?.kwh) });
     return list;
   });
 
-  const tv = $derived(cfg.salon?.tv);
-  const speaker = $derived(cfg.salon?.speaker);
-  const tvOn = $derived(value(tv, 'power') === true);
-  const playing = $derived(value(speaker, 'playing') === true);
-  const aqi = $derived(value(out.air, 'aqi'));
-  const aqiWord = $derived(
-    aqi == null
-      ? '—'
-      : aqi <= 20
-        ? t('maison.air.tres_bon')
-        : aqi <= 40
-          ? t('maison.air.bon')
-          : aqi <= 60
-            ? t('maison.air.moyen')
-            : aqi <= 80
-              ? t('maison.air.mediocre')
-              : t('maison.air.mauvais'),
-  );
-  const bell = $derived((cfg.favorites?.cameras ?? [])[0]);
-
-  // The last real passage at the door (the history knows; the live value
-  // is refreshed every few seconds whatever happens).
-  let passage = $state(null);
-  onMount(() => {
-    const refresh = () => bell && lastSeen(bell.id).then((ts) => (passage = ts));
-    const t = setInterval(refresh, 120_000);
-    return () => clearInterval(t);
-  });
-  $effect(() => {
-    if (bell) lastSeen(bell.id).then((ts) => (passage = ts));
-  });
+  const houseRooms = $derived(rooms());
+  let editing = $state(false);
+  const LISTS = ['accueil-usages', 'accueil-pieces'];
+  // As many columns as doors shown.
+  const shownDoors = $derived(arranged('accueil-usages', doors, (d) => d.key, editing).length);
+  const close = () => (open = null);
+  const follow = (item) => {
+    if (item.panel) open = item.panel;
+  };
 </script>
 
-<div class="accueil">
-  {#snippet body(tile)}
-    {#if isClim(tile.id)}
-      <ClimateCard id={tile.device} name={tile.label} />
-    {:else if isDev(tile.id)}
-      {@const d = device(tile.device)}
-      {@const kind = deviceKind(d)}
-      {#if kind === 'camera'}
-        <section class="card doorbell">
-          <div class="card-head"><h2><Icon name="cctv" size={18} />{tile.label}</h2></div>
-          <CameraTile id={tile.device} name={tile.label} refresh={15} />
-        </section>
-      {:else if kind === 'garage'}
-        <GarageCard id={tile.device} name={tile.label} />
-      {:else if kind === 'light'}
-        <LightTile id={tile.device} name={tile.label} dimmer />
-      {:else if kind === 'plug'}
-        <LightTile id={tile.device} name={tile.label} icon="power" />
-      {:else if kind === 'cover'}
-        <ShutterCard id={tile.device} name={tile.label} />
-      {:else if kind === 'speaker'}
-        {#if has(tile.device, 'group_leader')}
-          <!-- A Sonos room: the same player as on the Speakers page. -->
-          <PlayerCard members={[d]} rooms={[]} look={PLAYER_LOOK} groupKey={tile.id} />
+<svelte:window onkeydown={(e) => e.key === 'Escape' && close()} />
+
+<div class="home">
+    <section class="lead">
+      <h1 class="home-h1">
+        {greeting(home.now)}.<br />
+        {#if urgent}<em class="warn">{urgent.text}.</em>{:else}<em>{t('maison.accueil.calme_court')}</em>{/if}
+      </h1>
+
+      {#if urgent}
+        {#if urgent.href}
+          <a class="fix" href={urgent.href}>{t('maison.accueil.voir')}<Icon name="chevron-right" size={16} /></a>
         {:else}
-          <SpeakerCard id={tile.device} name={tile.label} />
+          <button class="fix" onclick={() => follow(urgent)}>{t('maison.accueil.voir')}<Icon name="chevron-right" size={16} /></button>
         {/if}
-      {:else if kind === 'tv'}
-        <Remote tv={tile.device} speaker={speaker} />
-      {:else if kind === 'printer'}
-        {#if isPaperPrinter(d)}<PaperPrinterCard id={tile.device} />{:else}<PrinterCard id={tile.device} />{/if}
-      {:else if isSmoke(d)}
-        <SmokeCard id={tile.device} name={tile.label} />
-      {:else if isCharger(d)}
-        <ChargerCard id={tile.device} name={tile.label} />
-      {:else if isThermo(d)}
-        <ThermoCard id={tile.device} name={tile.label} />
+      {/if}
+
+      {#if going.length || chips.length}
+        <ul class="now" aria-label={t('maison.accueil.en_ce_moment')}>
+          {#each chips as n (n.text)}
+            <li><a class="pill {n.tone}" href={n.href ?? '#/'}><span class="dot"><Icon name={n.icon} size={15} /></span><span class="txt"><b>{n.text}</b></span></a></li>
+          {/each}
+          {#each going as item (item.key)}
+            <li>
+              {#snippet inner()}
+                {#if item.cover}<HomeCover id={item.cover.id} art={item.cover.art} size={36} />{:else}<span class="dot"><Icon name={item.icon} size={15} /></span>{/if}
+                <span class="txt"><b>{item.title}</b><small>{item.detail}</small></span>
+              {/snippet}
+              {#if item.panel}
+                <button class="pill" onclick={() => follow(item)}>{@render inner()}</button>
+              {:else}
+                <a class="pill" href={item.href}>{@render inner()}</a>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+
+    <section class="house">
+      <div class="tools">
+        <div class="views" role="group" aria-label={t('maison.accueil.voir_maison')}>
+          <button class:on={accueil.view === 'usages'} aria-pressed={accueil.view === 'usages'} onclick={() => setView('usages')}>{t('maison.accueil.par_usage')}</button>
+          <button class:on={accueil.view === 'pieces'} aria-pressed={accueil.view === 'pieces'} onclick={() => setView('pieces')}>{t('maison.accueil.par_piece')}</button>
+        </div>
+        <Personalize bind:editing lists={LISTS} />
+      </div>
+
+      {#if accueil.view === 'usages'}
+        {#snippet door(d)}
+          <button class="door" class:active={d.active} class:alert={d.alert} onclick={() => (open = d.key)}>
+            <span class="ico"><Icon name={d.icon} size={22} /></span>
+            <span class="label">{t(`maison.accueil.usage.${d.key}`)}</span>
+            <span class="value">{d.value}</span>
+            {#if d.sub}<span class="sub">{d.sub}</span>{/if}
+          </button>
+        {/snippet}
+        <nav class="doors" style:--n={shownDoors} aria-label={t('maison.accueil.par_usage')}>
+          <Sortable list="accueil-usages" items={doors} id={(d) => d.key} label={(d) => t(`maison.accueil.usage.${d.key}`)} {editing} item={door} />
+        </nav>
       {:else}
-        <DeviceCard id={tile.device} name={tile.label} />
+        {#snippet roomTile(r)}<RoomTile {r} onclick={() => (open = `room:${r.name}`)} />{/snippet}
+        <nav class="rooms" aria-label={t('maison.accueil.par_piece')}>
+          <Sortable list="accueil-pieces" items={houseRooms} id={(r) => r.name} label={(r) => r.name} {editing} item={roomTile} />
+        </nav>
       {/if}
-    {:else if tile.id === 'sky'}
-      <SkyHero />
-    {:else if tile.id === 'modes'}
-    <div class="modes" role="radiogroup" aria-label={t('maison.accueil.mode_maison')}>
-      {#each modes as m (m)}
-        <button role="radio" aria-checked={m === mode} class:on={m === mode} disabled={pending(modeDevice.id, 'state')} onclick={() => setMode(m)}>
-          <Icon name={MODE_ICON[m] ?? 'home'} size={16} />{modeName(m)}
-        </button>
-      {/each}
-      {#if talkers.length}
-        <span class="sep" aria-hidden="true"></span>
-        <button class="hush" class:on={quiet} aria-pressed={quiet} onclick={toggleQuiet} title={quiet ? t('maison.accueil.sonos_reparle') : t('maison.accueil.sonos_coupe')}>
-          <Icon name={quiet ? 'volume-off' : 'speaker'} size={16} />{quiet && quietUntil ? t('maison.accueil.sonos_muette_jusqua', { time: new Date(quietUntil).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' }) }) : t('maison.accueil.sonos_muette')}
-        </button>
-      {/if}
-    </div>
-  
-    {:else if tile.id === 'notices'}
-  <section class="notices" aria-label={t('maison.accueil.a_savoir')}>
-    {#each notices as n (n.text)}
-      <a class="chip {n.tone}" href={n.href}><Icon name={n.icon} size={16} />{n.text}</a>
-    {:else}
-      <span class="chip good"><Icon name="leaf" size={16} />{t('maison.accueil.calme')}</span>
-    {/each}
-  </section>
-
-
-    {:else if tile.id === 'alarm'}
-      <AlarmCard id={alarm.id} />
-    {:else if tile.id === 'lights'}
-    <section class="card lights" >
-      <div class="card-head">
-        <h2><Icon name="light" size={18} />{t('maison.accueil.lumieres')} <span class="count">{litCount ? t('maison.accueil.allumees', { count: litCount }) : t('maison.accueil.tout_eteint')}</span></h2>
-        <a class="more" href="#/pieces" aria-label={t('maison.accueil.toutes_pieces')}><Icon name="arrow-top-right" size={18} /></a>
-      </div>
-      <div class="tiles">
-        {#each shownLights as l (l.id)}
-          <LightTile id={l.id} name={l.name} icon={l.icon} also={l.also ?? []} dimmer />
-        {/each}
-      </div>
     </section>
 
-    {:else if tile.id === 'ambiances'}
-    <section class="card lights ambiances">
-      <div class="moods">
-        <div class="moods-head">
-          <span class="moods-title"><Icon name="palette" size={16} />{t('maison.accueil.ambiance')}</span>
-          <div class="rooms" role="group" aria-label={t('maison.accueil.piece')}>
-            {#each moodRooms as r (r.name)}
-              <button class:on={r.name === mood.name} onclick={() => pickRoom(r.name)} aria-pressed={r.name === mood.name}>{r.name}</button>
-            {/each}
-          </div>
-        </div>
-        <AmbiancePicker lights={mood.lamps} label={mood.name} />
-      </div>
-    </section>
-
-
-    {:else if tile.id === 'energy'}
-      <EnergyCard />
-    {:else if tile.id === 'routines'}
-      <Routines />
-    {:else if tile.id === 'doorbell'}
-      <section class="card doorbell">
-        <div class="card-head">
-          <h2><Icon name="bell" size={18} />{t('maison.accueil.devant_porte')}</h2>
-          <a class="more" href="#/cameras" aria-label={t('maison.accueil.toutes_cameras')}><Icon name="arrow-top-right" size={18} /></a>
-        </div>
-        <CameraTile id={bell.id} name={bell.name} refresh={15} />
-        <p class="muted small">{passage ? t('maison.accueil.dernier_passage', { when: relative(passage, home.now) }) : t('maison.accueil.personne')}</p>
-      </section>
-    
-    {:else if tile.id === 'remote'}
-    <a class="card remote" href="#/salon">
-      <span class="tv-object" aria-hidden="true">
-        <span class="screen" class:lit={tvOn}></span>
-        <span class="stand"></span>
-      </span>
-      <span class="remote-text">
-        <strong>{t('maison.accueil.telecommande')}</strong>
-        <span class="muted">{tvOn ? t('maison.accueil.tele_allumee') : t('maison.accueil.tele_veille')}{playing ? ` · ${t('maison.accueil.son_joue')}` : ''}</span>
-      </span>
-      <span class="go"><Icon name="arrow-top-right" size={20} /></span>
-    </a>
-    
-    {:else if tile.id === 'outside'}
-    <a class="card outside" href="#/dehors">
-      <div class="card-head"><h2><Icon name="flower-outline" size={18} />{t('maison.accueil.dehors')}</h2><span class="more" aria-hidden="true"><Icon name="arrow-top-right" size={18} /></span></div>
-      <div class="facts">
-        <div><small>{t('maison.accueil.air')}</small><b>{aqiWord}</b></div>
-        <div><small>UV</small><b class="num">{num(value(out.air, 'uv_index'), 0)}</b></div>
-        <div><small>{t('maison.accueil.humidite')}</small><b class="num">{value(out.weather, 'humidity') != null ? `${num(value(out.weather, 'humidity'))} %` : '—'}</b></div>
-        <div><small>{t('maison.accueil.piscine')}</small><b class="num">{value(out.pool, 'temperature') != null ? `${num(value(out.pool, 'temperature'), 1)}°` : '—'}</b></div>
-      </div>
-    </a>
-    
-    {/if}
-  {/snippet}
-
-  {#snippet hint()}{t('maison.dashboard.aide')} <a href="#/equipements">{t('maison.dashboard.masquees')}</a>{/snippet}
-
-  <TileBoard title={t('maison.dashboard.titre')} {tiles} board={DASHBOARD} {body} {hint} {sectionOf} onhide={(tile) => showTile(tile, false)} onreset={resetDashboard} />
+    <footer>
+      <button class="ask" onclick={onask}>
+        <Orb size={28} state={moli.busy ? 'thinking' : 'idle'} />{t('commun.demander_moli')}…
+      </button>
+    </footer>
 </div>
 
+{#if open}
+  <button class="scrim" aria-label={t('commun.fermer')} onclick={close}></button>
+  <HomePanel panel={open} onclose={close} />
+{/if}
+
 <style>
-  .accueil {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 22px;
-  }
-
-  .modes {
+  .home {
+    flex: 1;
     display: flex;
-    gap: 8px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    min-width: 0;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: clamp(24px, 4.5vh, 48px);
+    width: 100%;
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: clamp(28px, 7vh, 90px) clamp(20px, 5vw, 72px) 92px;
+    color: #fff;
   }
 
-  .modes button {
-    flex: none;
+  h1 {
+    margin: 0;
+    font-family: var(--serif);
+    font-weight: 340;
+    font-size: clamp(44px, 7.2vw, 96px);
+    line-height: 1.03;
+    letter-spacing: -0.025em;
+    text-shadow: 0 2px 26px rgb(0 0 0 / 30%);
+  }
+
+  h1 em {
+    font-style: italic;
+    color: rgb(255 255 255 / 80%);
+  }
+
+  h1 em.warn {
+    color: #ffd2c6;
+    font-size: 0.72em;
+  }
+
+  .fix {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
+    margin-top: 14px;
+    padding: 9px 15px;
     border: 0;
     border-radius: 999px;
-    padding: 8px 14px;
+    background: var(--alert);
+    color: #fff;
     font: inherit;
-    font-size: 14px;
     font-weight: 650;
-    background: var(--surface-2);
-    color: var(--ink-3);
+    text-decoration: none;
     cursor: pointer;
   }
 
-  .modes button.on {
-    background: var(--warm-soft);
-    color: var(--warm-ink);
-  }
-
-  .modes .sep {
-    flex: none;
-    width: 1px;
-    margin: 6px 4px;
-    background: var(--line, color-mix(in srgb, var(--ink) 14%, transparent));
-  }
-
-  .modes button.hush.on {
-    background: color-mix(in srgb, var(--alert) 16%, var(--surface-2));
-    color: var(--alert);
-  }
-
-  .notices {
+  .now {
+    list-style: none;
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
-  }
-
-  .notices a {
-    text-decoration: none;
-  }
-
-  .notices .chip {
-    padding: 9px 14px;
-    font-size: 14px;
-  }
-
-
-  .ambiances .moods {
-    margin: 0;
+    gap: 8px;
+    margin: 24px 0 0;
     padding: 0;
-    border: 0;
   }
 
-  .moods {
-    grid-template-columns: minmax(0, 1fr);
-    margin-top: 18px;
-    padding-top: 16px;
-    border-top: 1px solid var(--line);
+  .pill,
+  .door,
+  .ask,
+  .views {
+    --glass: rgb(255 255 255 / 15%);
+    --glass-2: rgb(255 255 255 / 24%);
+    background: var(--glass);
+    backdrop-filter: blur(16px);
+    color: #fff;
+  }
+
+  .pill {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: min(420px, 88vw);
+    padding: 6px 15px 6px 6px;
+    border: 0;
+    border-radius: 999px;
+    font: inherit;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .pill:hover,
+  .door:hover,
+  .ask:hover {
+    background: var(--glass-2);
+  }
+
+  .pill :global(img) {
+    border-radius: 50%;
+  }
+
+  .dot {
+    width: 36px;
+    height: 36px;
+    flex: none;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: rgb(255 197 92 / 28%);
+    color: #ffd98e;
+  }
+
+  .txt {
+    display: grid;
+    min-width: 0;
+    line-height: 1.22;
+  }
+
+  .txt b {
+    font-size: 14px;
+    font-weight: 620;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .txt small {
+    color: rgb(255 255 255 / 72%);
+    font-size: 12.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .house {
     display: grid;
     gap: 12px;
   }
 
-  .moods-head {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px 14px;
-    flex-wrap: wrap;
+  .views {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 999px;
   }
 
-  .moods-title {
-    display: inline-flex;
+  .views button {
+    padding: 7px 15px;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    color: rgb(255 255 255 / 80%);
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .views button.on {
+    background: rgb(255 255 255 / 26%);
+    color: #fff;
+  }
+
+  .tools {
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
-    font-weight: 700;
-    font-size: 14px;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .doors {
+    --sort-cols: repeat(var(--n, 6), minmax(0, 1fr));
+    --sort-gap: 10px;
   }
 
   .rooms {
+    --sort-cols: repeat(auto-fill, minmax(150px, 1fr));
+    --sort-gap: 8px;
+  }
+
+  .door {
+    width: 100%;
+    height: 100%;
     display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .rooms button {
-    flex: none;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-height: 152px;
+    padding: 18px;
     border: 0;
-    border-radius: 999px;
-    padding: 6px 12px;
+    border-radius: 22px;
     font: inherit;
-    font-size: 13px;
-    font-weight: 650;
-    background: var(--surface-2);
-    color: var(--ink-3);
+    text-align: left;
     cursor: pointer;
+    transition: background 0.2s, transform 0.2s var(--ease);
   }
 
-  .rooms button.on {
-    background: var(--warm-soft);
-    color: var(--warm-ink);
-  }
-
-  .count {
-    font-weight: 550;
-    color: var(--ink-3);
-    margin-left: 4px;
-  }
-
-  .tiles {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
-    gap: 12px;
-  }
-
-  .small {
-    font-size: 13px;
-    margin-top: 10px;
-  }
-
-  .remote {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 14px;
-    color: inherit;
-    text-decoration: none;
-    min-height: 168px;
-    align-content: space-between;
-    transition: transform 0.2s var(--ease);
-  }
-
-  .remote:hover,
-  .outside:hover {
+  .door:hover {
     transform: translateY(-2px);
   }
 
-  .tv-object {
-    grid-column: 1 / -1;
-    display: grid;
-    justify-items: center;
+  .door .ico {
+    margin-bottom: 18px;
+    color: rgb(255 255 255 / 76%);
   }
 
-  .screen {
-    width: 96px;
-    height: 56px;
-    border-radius: 8px;
-    background: #171c28;
-    box-shadow: inset 0 0 0 3px #2a3142;
-    transition: background 0.4s;
-  }
-
-  .screen.lit {
-    background: linear-gradient(135deg, #5fb4f0, #8f8cf5 55%, #f0a53a);
-    box-shadow: inset 0 0 0 3px #2a3142, 0 8px 26px -6px #8f8cf5aa;
-  }
-
-  .stand {
-    width: 30px;
-    height: 6px;
-    border-radius: 0 0 6px 6px;
-    background: #2a3142;
-  }
-
-  .remote-text {
-    display: grid;
-  }
-
-  .remote-text strong {
-    font-size: 18px;
-  }
-
-  .remote-text span {
+  .door .label {
+    color: rgb(255 255 255 / 74%);
     font-size: 13px;
+    font-weight: 550;
   }
 
-  .go {
-    align-self: end;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: var(--surface-2);
-    display: grid;
-    place-items: center;
-    color: var(--ink-2);
-  }
-
-  .outside {
-    color: inherit;
-    text-decoration: none;
-    transition: transform 0.2s var(--ease);
-  }
-
-  .facts {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
-    gap: 10px 8px;
-  }
-
-  .facts small {
-    display: block;
-    font-size: 11px;
-    color: var(--ink-3);
-    font-weight: 650;
-  }
-
-  .facts b {
+  .door .value {
     font-size: 17px;
-    font-weight: 650;
+    font-weight: 640;
+    line-height: 1.2;
+  }
+
+  .door .sub {
+    max-width: 100%;
+    color: rgb(255 255 255 / 74%);
+    font-size: 13px;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .door.active {
+    background: rgb(255 190 92 / 26%);
+  }
+
+  .door.active .ico {
+    color: #ffd98e;
+  }
+
+  .door.alert .ico,
+  .door.alert .sub {
+    color: #ffc1b1;
+  }
+
+  .rooms {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+  }
+
+  footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px 22px;
+    flex-wrap: wrap;
+  }
+
+  .ask {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: min(380px, 100%);
+    padding: 7px 18px 7px 8px;
+    border: 0;
+    border-radius: 999px;
+    color: rgb(255 255 255 / 88%);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    border: 0;
+    background: rgb(5 8 18 / 42%);
+    animation: fade 0.2s;
+    cursor: default;
+  }
+
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @media (max-width: 1100px) {
+    .doors {
+      --sort-cols: repeat(3, minmax(0, 1fr));
+    }
+
+    .door {
+      min-height: 128px;
+    }
+
+    .door .ico {
+      margin-bottom: 10px;
+    }
   }
 
   @media (max-width: 760px) {
-    .tiles {
-      grid-template-columns: 1fr 1fr;
+    .doors,
+    .rooms {
+      --sort-cols: repeat(2, minmax(0, 1fr));
     }
+
+    .door {
+      min-height: 118px;
+      padding: 15px;
+      border-radius: 20px;
+    }
+
+    .ask {
+      min-width: 100%;
+    }
+
   }
 </style>

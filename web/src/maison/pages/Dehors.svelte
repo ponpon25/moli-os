@@ -85,6 +85,7 @@
   </section>
 
   <div class="grid">
+    {#if air}
     <section class="card">
       <div class="card-head"><h2><Icon name="leaf" size={18} />{t('maison.dehors.air')}</h2><span class="chip {aqiTone}">{aqiWord}</span></div>
       <div class="pairs">
@@ -94,6 +95,7 @@
         <div><small>{t('maison.dehors.ozone')}</small><b class="num">{num(v(air, 'ozone'))} µg/m³</b></div>
       </div>
     </section>
+    {/if}
 
     {#if pool}
       <section class="card">

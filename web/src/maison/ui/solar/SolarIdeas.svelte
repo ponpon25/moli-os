@@ -183,7 +183,7 @@
     font-weight: 700;
     font-size: 13.5px;
     background: var(--ink);
-    color: var(--surface);
+    color: var(--on-ink);
     transition: transform 0.2s var(--ease);
   }
 

@@ -145,7 +145,7 @@
 
   .days button.on {
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
   }
 
   .time {

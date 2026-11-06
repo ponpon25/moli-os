@@ -327,7 +327,7 @@
 
   .providers button.on {
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
   }
 
   .caps {
@@ -447,7 +447,7 @@
 
   .tones button.on {
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
   }
 
   .voices {

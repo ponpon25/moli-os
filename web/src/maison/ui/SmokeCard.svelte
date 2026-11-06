@@ -172,7 +172,7 @@
 
   .alarm .halo,
   .test .halo {
-    color: var(--surface);
+    color: var(--on-ink);
     background: var(--tone);
   }
 

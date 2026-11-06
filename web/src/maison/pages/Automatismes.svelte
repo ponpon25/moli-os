@@ -3,6 +3,8 @@
   import Icon from '../ui/Icon.svelte';
   import Orb from '../moli/Orb.svelte';
   import Editor from '../auto/Editor.svelte';
+  import Sortable from '../ui/Sortable.svelte';
+  import Personalize from '../ui/Personalize.svelte';
   import { home, hub, note, relative, nameOf, roomOf, device } from '../lib/home.svelte.js';
   import { api, asHuman, pending, liveRuns, newAlert, nodeText, splitPoint, CATALOG, CANCELLED } from '../lib/auto.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
@@ -19,6 +21,7 @@
   let ask = $state('');
   let drafting = $state(false);
   let error = $state('');
+  let editing = $state(false);
 
   async function refresh() {
     try {
@@ -230,10 +233,15 @@
   <Editor id={sub} />
 {:else}
   <div class="autos">
-    <header>
-      <h1 class="page-title">{t('automatismes.titre')}</h1>
-      <p class="page-sub">{t('automatismes.liste.sous_titre')}</p>
+    <header class="top">
+      <div>
+        <h1 class="page-title">{t('automatismes.titre')}</h1>
+        <p class="page-sub">{t('automatismes.liste.sous_titre')}</p>
+      </div>
+      <Personalize bind:editing lists={['auto-alertes', 'auto-scenarios']} />
     </header>
+
+    {#if editing}<p class="hint">{t('maison.perso.aide_ordre')}</p>{/if}
 
     <form class="ask" onsubmit={(e) => (e.preventDefault(), draft())}>
       <Orb size={46} state={drafting ? 'thinking' : 'idle'} />
@@ -263,8 +271,7 @@
       <h2 class="section">{t('automatismes.liste.section')} <span class="muted">{t('automatismes.liste.actifs', { count: list.filter((i) => i.live).length, total: mine.length })}</span></h2>
       {#if alertGroups.length}
         <h3 class="sub"><Icon name="bell" size={16} />{t('automatismes.liste.alertes')}</h3>
-        <div class="alerts">
-          {#each alertGroups as group (group.id)}
+        {#snippet alertGroup(group)}
             {@const d = device(group.id)}
             <section class="card watch">
               <header>
@@ -291,13 +298,15 @@
                 {/each}
               </ul>
             </section>
-          {/each}
+        {/snippet}
+        <div class="alerts">
+          <Sortable list="auto-alertes" items={alertGroups} id={(g) => g.id} label={(g) => nameOf(g.id)} {editing} hideable={false} item={alertGroup} />
         </div>
       {/if}
       {#if scenarios.length}
         {#if alertGroups.length}<h3 class="sub"><Icon name="robot" size={16} />{t('automatismes.liste.scenarios')}</h3>{/if}
         <div class="grid">
-          {#each scenarios as item (item.automation.id)}{@render tile(item)}{/each}
+          <Sortable list="auto-scenarios" items={scenarios} id={(x) => x.automation.id} label={(x) => x.automation.name} {editing} hideable={false} item={tile} />
         </div>
       {/if}
       {#if !mine.length}
@@ -380,7 +389,7 @@
     border-radius: 999px;
     padding: 14px 22px;
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
     font-weight: 700;
   }
 
@@ -493,9 +502,12 @@
   }
 
   .alerts {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
-    gap: 16px;
+    --sort-cols: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+    --sort-gap: 14px;
+  }
+
+  .alerts :global(.held > .card) {
+    height: 100%;
   }
 
   .card.watch {
@@ -703,9 +715,25 @@
   }
 
   .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
-    gap: 16px;
+    --sort-cols: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    --sort-gap: 14px;
+  }
+
+  .grid :global(.held > .card) {
+    height: 100%;
+  }
+
+  .top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .hint {
+    color: var(--ink-2);
+    font-size: 14px;
   }
 
   .card.auto {

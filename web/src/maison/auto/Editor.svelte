@@ -583,7 +583,7 @@
 
   .primary {
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
   }
 
   .on {

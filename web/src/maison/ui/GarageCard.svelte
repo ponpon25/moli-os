@@ -186,7 +186,7 @@
     display: grid;
     place-items: center;
     background: var(--tone);
-    color: var(--surface);
+    color: var(--on-ink);
     box-shadow: var(--shadow-lift);
     transition: transform 0.15s var(--ease);
   }

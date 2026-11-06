@@ -19,7 +19,7 @@ use crate::caller::Caller;
 pub(crate) struct PrefsFile(pub(crate) Option<PathBuf>);
 
 /// The keys the dashboard shares across devices.
-const KEYS: [&str; 7] = [
+const KEYS: [&str; 10] = [
     "maison-dashboard",
     "maison-stores",
     "maison-dashboard-off",
@@ -27,6 +27,9 @@ const KEYS: [&str; 7] = [
     "maison-dashboard-apart",
     "maison-rooms-hidden",
     "maison-rooms-extra",
+    "maison-accueil-off",
+    "maison-ordre",
+    "maison-affichage",
 ];
 
 /// Largest value kept for one key (the tiles of a big house stay far under).

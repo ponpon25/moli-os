@@ -8,6 +8,8 @@
   import EnergyChart from '../ui/EnergyChart.svelte';
   import TariffPie from '../ui/TariffPie.svelte';
   import DayProfile from '../ui/DayProfile.svelte';
+  import Sortable from '../ui/Sortable.svelte';
+  import Personalize from '../ui/Personalize.svelte';
 
   onMount(useEnergy);
 
@@ -215,6 +217,21 @@
       : [],
   );
 
+  let editing = $state(false);
+  const BLOCKS = $derived(
+    [
+      { id: 'now', word: 'energie.now.titre', span: 2 },
+      { id: 'today', word: 'energie.span.today', span: 2 },
+      { id: 'month', word: 'energie.mois.titre', span: 2 },
+      { id: 'tips', word: 'energie.conseils.titre', span: 6, shown: tips.length > 0 },
+      { id: 'draws', word: 'energie.direct.titre', span: 3 },
+      { id: 'parts', word: 'energie.repartition.titre', span: 3 },
+      { id: 'tariff', word: 'energie.perso_tarifs', span: 6 },
+      { id: 'day', word: 'energie.journee.titre', span: 6, shown: !!profile },
+      { id: 'history', word: 'energie.histo.titre', span: 6 },
+    ].filter((b) => b.shown !== false),
+  );
+
   let range = $state('hour');
   let by = $state('devices');
   const RANGES = [
@@ -230,13 +247,19 @@
       <h1 class="page-title">{t('energie.titre')}</h1>
       <p class="page-sub">{t('energie.sous_titre')}</p>
     </div>
-    <a class="demo" href="#/energie/solaire"><Icon name="sun" size={16} />{t('energie.demo_solaire')}</a>
+    <div class="acts">
+      {#if s}<Personalize bind:editing lists={['energie']} />{/if}
+      <a class="demo" href="#/energie/solaire"><Icon name="sun" size={16} />{t('energie.demo_solaire')}</a>
+    </div>
   </header>
+
+  {#if editing}<p class="hint">{t('maison.perso.aide')}</p>{/if}
 
   {#if !s}
     <p class="muted">{energy.missing ? t('energie.aucun_compteur') : t('energie.chargement')}</p>
   {:else}
-    <div class="heads">
+    {#snippet block(b)}
+      {#if b.id === 'now'}
       <section class="card now" class:hued={look.hue != null} style:--h={look.hue}>
         <span class="eyebrow">{t('energie.now.titre')}</span>
         {#if s.live}
@@ -254,7 +277,7 @@
           {#if change}<span class="muted small">{t(change.off ? 'energie.now.pleines' : 'energie.now.creuses', { at: clockText(change.at), delay: minutesText(change.minutes) })}</span>{/if}
         </div>
       </section>
-
+      {:else if b.id === 'today'}
       <section class="card">
         <span class="eyebrow">{t('energie.span.today')}</span>
         <strong class="big num">{kwh(s.today.total.kwh)} <small>kWh</small></strong>
@@ -267,7 +290,7 @@
           {/if}
         </div>
       </section>
-
+      {:else if b.id === 'month'}
       <section class="card">
         <span class="eyebrow">{t('energie.mois.titre')}</span>
         <strong class="big num">{euros(s.month.total.cost, cur)}</strong>
@@ -303,10 +326,7 @@
           </div>
         {/if}
       </section>
-
-    </div>
-
-    {#if tips.length}
+      {:else if b.id === 'tips'}
       <section class="card tips">
         <div class="card-head"><h2><Icon name="sparkles" size={18} />{t('energie.conseils.titre')}</h2></div>
         <ul>
@@ -321,9 +341,7 @@
           {/each}
         </ul>
       </section>
-    {/if}
-
-    <div class="split">
+      {:else if b.id === 'draws'}
       <section class="card">
         <div class="card-head"><h2><Icon name="flash" size={18} />{t('energie.direct.titre')}</h2></div>
         {#if draws.length}
@@ -347,7 +365,7 @@
           <p class="muted">{t('energie.direct.vide')}</p>
         {/if}
       </section>
-
+      {:else if b.id === 'parts'}
       <section class="card">
         <div class="card-head">
           <h2><Icon name="bolt" size={18} />{t('energie.repartition.titre')}</h2>
@@ -380,11 +398,9 @@
           <p class="muted">{t('energie.repartition.vide')}</p>
         {/if}
       </section>
-    </div>
-
-    <TariffPie {windows} />
-
-    {#if profile}
+      {:else if b.id === 'tariff'}
+        <TariffPie {windows} />
+      {:else if b.id === 'day'}
       <section class="card">
         <div class="card-head"><h2><Icon name="clock" size={18} />{t('energie.journee.titre')}</h2></div>
         <DayProfile {profile} {windows} {base} today={todayHours} now={home.now} />
@@ -392,8 +408,7 @@
           <p class="foot muted">{t('energie.journee.creuses', { windows: windows.map(windowText).join(t('energie.et')) })}</p>
         {/if}
       </section>
-    {/if}
-
+      {:else if b.id === 'history'}
     <section class="card">
       <div class="card-head">
         <h2><Icon name="tune" size={18} />{t('energie.histo.titre')}</h2>
@@ -413,6 +428,12 @@
         {t('energie.histo.avant_moli')}
       </p>
     </section>
+      {/if}
+    {/snippet}
+
+    <div class="blocks">
+      <Sortable list="energie" items={BLOCKS} id={(b) => b.id} label={(b) => t(b.word)} {editing} span={(b) => b.span} item={block} />
+    </div>
   {/if}
 </div>
 
@@ -446,10 +467,32 @@
     text-decoration: none;
   }
 
-  .heads {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-    gap: 20px;
+  .acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .hint {
+    color: var(--ink-2);
+    font-size: 14px;
+  }
+
+  /* Six columns: three figures, two lists side by side, the rest across. */
+  .blocks {
+    --sort-cols: repeat(6, minmax(0, 1fr));
+    --sort-gap: 14px;
+  }
+
+  .blocks :global(.held > .card) {
+    height: 100%;
+  }
+
+  @media (max-width: 760px) {
+    .blocks {
+      --sort-cols: minmax(0, 1fr);
+    }
   }
 
   .eyebrow {
@@ -650,11 +693,6 @@
     color: var(--ink-2);
   }
 
-  .split {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 20px;
-  }
 
   .bars {
     list-style: none;
@@ -773,26 +811,9 @@
     margin-top: 14px;
   }
 
-  @media (max-width: 900px) {
-    .split {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-
   @media (max-width: 560px) {
-    .energie,
-    .heads,
-    .split {
+    .energie {
       gap: 14px;
-    }
-
-    /* Two by two: the figures stay readable without a long scroll. */
-    .heads {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .heads .now {
-      grid-column: 1 / -1;
     }
 
     .big {
@@ -804,7 +825,7 @@
     }
 
     /* Narrow cards: a chip wraps instead of spilling out. */
-    .heads .chip {
+    .blocks .chip {
       white-space: normal;
       font-size: 12px;
       line-height: 1.3;

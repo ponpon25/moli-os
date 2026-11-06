@@ -334,7 +334,7 @@
     border: none;
     border-radius: 999px;
     background: var(--ink);
-    color: var(--surface);
+    color: var(--on-ink);
     font: inherit;
     font-weight: 700;
     cursor: pointer;
@@ -401,7 +401,7 @@
 
   .seg button.on {
     background: var(--ink);
-    color: var(--surface);
+    color: var(--on-ink);
   }
 
   .stepper {

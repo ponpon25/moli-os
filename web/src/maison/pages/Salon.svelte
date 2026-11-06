@@ -1,5 +1,8 @@
 <script>
-  import { home, value, reachable, nameOf, act, since, clock } from '../lib/home.svelte.js';
+  import { home, hub, deviceKind, lampsOf, roomOf, value, reachable, nameOf, act, since, clock } from '../lib/home.svelte.js';
+  import { rooms, shortName } from '../lib/accueil.svelte.js';
+  import LightRow from '../ui/LightRow.svelte';
+  import SpeakerRow from '../ui/SpeakerRow.svelte';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
   import Remote from '../ui/Remote.svelte';
@@ -8,8 +11,16 @@
   import AmbiancePicker from '../ui/AmbiancePicker.svelte';
 
   const s = $derived(home.config?.salon ?? {});
-  const tv = $derived(s.tv);
+  // The one the layout names, else the one there is.
+  const tv = $derived(s.tv ?? Object.values(hub.devices).find((d) => deviceKind(d) === 'tv')?.id);
   const sp = $derived(s.speaker);
+  // Without a layout: the lights and speakers of the room the TV is in.
+  const tvRoom = $derived(tv ? roomOf(hub.devices[tv]) : null);
+  const room = $derived(tvRoom ? rooms(true).find((r) => r.name === tvRoom) : null);
+  const named = $derived(!!s.room_light || !!s.lamps?.length);
+  const roomLamps = $derived(!named && room ? room.devices.filter((d) => deviceKind(d) === 'light') : []);
+  const roomSpeakers = $derived(!sp && room ? room.devices.filter((d) => deviceKind(d) === 'speaker') : []);
+  const moods = $derived(named ? (s.lamps ?? []) : room ? lampsOf(room.room) : []);
   const tvOn = $derived(value(tv, 'power') === true);
   const app = $derived(value(tv, 'app'));
 
@@ -106,18 +117,25 @@
 
       {#if sp}<SpeakerCard id={sp} name={nameOf(sp, t('salon.barre_de_son'))} />{/if}
 
+      {#if roomSpeakers.length}
+        <section class="card">{#each roomSpeakers as d (d.id)}<SpeakerRow {d} />{/each}</section>
+      {/if}
+
+      {#if named || roomLamps.length || moods.length}
       <section class="card ambiance">
         <div class="card-head"><h2><Icon name="light-group" size={18} />{t('salon.ambiance')}</h2></div>
         <div class="amb">
           {#if s.room_light}<LightTile id={s.room_light} name={t('salon.tout_le_salon')} icon="sofa" dimmer members={s.lamps ?? []} />{/if}
         </div>
-        <AmbiancePicker lights={s.lamps ?? []} label={t('salon.titre')} />
+        <AmbiancePicker lights={moods} label={tvRoom ?? t('salon.titre')} />
         <div class="lamps">
           {#each s.lamps ?? [] as lamp (lamp)}
             <LightTile id={lamp} icon="light" compact dimmer />
           {/each}
         </div>
+        {#each roomLamps as d (d.id)}<LightRow {d} name={shortName(d, tvRoom)} />{/each}
       </section>
+      {/if}
     </div>
   </div>
 </div>

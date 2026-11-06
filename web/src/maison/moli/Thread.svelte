@@ -75,7 +75,7 @@
     padding: 10px 16px;
     border-radius: 20px 20px 6px 20px;
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
     font-weight: 550;
     display: flex;
     align-items: center;

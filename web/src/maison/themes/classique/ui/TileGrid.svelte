@@ -1,7 +1,7 @@
 <script>
-  import { ROW } from '../lib/layout.svelte.js';
-  import { t } from '../../lib/i18n.svelte.js';
-  import Icon from './Icon.svelte';
+  import { ROW } from '../../../lib/layout.svelte.js';
+  import { t } from '../../../../lib/i18n.svelte.js';
+  import Icon from '../../../ui/Icon.svelte';
 
   /** One grid of tiles the family arranges: see `TileBoard`. `room`: px kept
    *  below the last tile while arranging. */

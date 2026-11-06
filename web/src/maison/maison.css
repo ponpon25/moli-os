@@ -31,6 +31,8 @@
   --r-md: 20px;
   --r-sm: 14px;
   --font: 'Figtree Variable', 'Figtree', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --serif: 'Fraunces Variable', Georgia, 'Times New Roman', serif;
+  --on-ink: #fff;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   color-scheme: light;
 
@@ -45,6 +47,7 @@
 }
 
 .maison[data-theme='night'] {
+  --on-ink: #0d1016;
   --bg: #0d1016;
   --surface: #161a22;
   --surface-2: #1b2029;
@@ -95,6 +98,170 @@
 .maison h3,
 .maison p {
   margin: 0;
+}
+
+/* ---- the sky theme (themes/ciel) ---- */
+
+/* The sky is behind (ui/SkyBackdrop.svelte). */
+.maison[data-look='ciel'] {
+  background: transparent;
+}
+
+/* A page, wherever it is: glass on the sky. Everything that draws with these
+   tokens follows; what floats above (a sheet, a dialog) stays solid to be read. */
+.maison[data-look='ciel'] .content {
+  --surface: rgb(255 255 255 / 10%);
+  --surface-2: rgb(255 255 255 / 9%);
+  --surface-3: rgb(255 255 255 / 17%);
+  --line: rgb(255 255 255 / 14%);
+  --on-ink: #14161c;
+  --ink: #fff;
+  --ink-2: rgb(255 255 255 / 86%);
+  --ink-3: rgb(255 255 255 / 70%);
+  --shadow: inset 0 0 0 1px rgb(255 255 255 / 9%);
+  --shadow-lift: inset 0 0 0 1px rgb(255 255 255 / 12%), 0 18px 40px -18px rgb(0 0 0 / 55%);
+}
+
+.maison[data-look='ciel'] .content :is(dialog, [role='dialog']) {
+  --surface: #161a22;
+  --surface-2: #1b2029;
+  --surface-3: #232935;
+  --line: #252b37;
+  --on-ink: #14161c;
+  --ink: #eceff5;
+  --ink-2: #b3bac8;
+  --ink-3: #8f98ab;
+  --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 12px 30px -14px rgb(0 0 0 / 60%);
+  --shadow-lift: 0 1px 2px rgb(0 0 0 / 35%), 0 18px 40px -14px rgb(0 0 0 / 70%);
+}
+
+/* A page's title, in the home page's voice. */
+.maison[data-look='ciel'] .content h1:not(.home-h1),
+.maison[data-look='ciel'] .page-title {
+  font-family: var(--serif);
+  font-size: clamp(38px, 5vw, 64px);
+  font-weight: 340;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  text-shadow: 0 2px 26px rgb(0 0 0 / 28%);
+}
+
+.maison[data-look='ciel'] .page-sub {
+  margin-top: 8px;
+  color: var(--ink-2);
+}
+
+/* Moli's page talks: its greeting is not a page's title. */
+.maison[data-look='ciel'] .content .moli-page h1 {
+  font-size: clamp(30px, 3.4vw, 44px);
+}
+
+/* The lines of a panel or a page: a thing, its state, its controls. */
+.maison .h-line {
+  display: block;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+}
+
+.maison .h-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 40px;
+}
+
+.maison .h-ico {
+  display: grid;
+  color: var(--ink-3);
+}
+
+.maison .h-ico.lit {
+  color: var(--warm);
+}
+
+.maison .h-ico.bad,
+.maison .h-row small.bad {
+  color: var(--alert);
+}
+
+.maison .h-row b {
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.maison .h-row small {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-3);
+  font-size: 13px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.maison .h-switch {
+  width: 46px;
+  height: 28px;
+  flex: none;
+  padding: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-3);
+  transition: background 0.2s;
+}
+
+.maison .h-switch i {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+}
+
+.maison .h-switch.on {
+  background: var(--warm);
+}
+
+.maison .h-switch.on i {
+  transform: translateX(18px);
+}
+
+.maison .h-mini {
+  display: flex;
+  gap: 4px;
+}
+
+.maison .h-mini button {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 11px;
+  background: var(--surface-2);
+  color: inherit;
+}
+
+.maison .h-round {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: inherit;
+}
+
+.maison :is(.h-switch, .h-mini button, .h-round):disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .maison .num {

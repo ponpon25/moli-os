@@ -648,7 +648,7 @@
     width: var(--round);
     height: var(--round);
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
   }
 
   button.soft {

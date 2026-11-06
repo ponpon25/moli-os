@@ -262,7 +262,7 @@
     font-weight: 700;
     font-size: 14px;
     background: var(--ink);
-    color: var(--surface);
+    color: var(--on-ink);
     cursor: pointer;
     white-space: nowrap;
   }

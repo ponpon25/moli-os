@@ -619,7 +619,7 @@
 
   button.primary {
     background: var(--ink);
-    color: var(--surface);
+    color: var(--on-ink);
   }
 
   button.ghost {
@@ -648,7 +648,7 @@
 
   .floors button.active {
     background: var(--ink);
-    color: var(--surface);
+    color: var(--on-ink);
   }
 
   .tools {
@@ -795,7 +795,7 @@
 
   .views button.active {
     background: var(--ink);
-    color: var(--surface);
+    color: var(--on-ink);
   }
 
   .skins i {

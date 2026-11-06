@@ -1,12 +1,13 @@
 <script>
   import { hub, roomList, roomOf, nameOf, deviceKind, hidden, reachable, roomNamed, home, driverName, isSmoke, isCoverGroup } from '../lib/home.svelte.js';
-  import { layout, addRoom, setDeviceRoom, setDeviceName, isApart, setApart } from '../lib/layout.svelte.js';
-  import { catalogue, showTile, available, deviceOnDashboard, showDevice } from '../lib/tiles.svelte.js';
+  import { layout, addRoom, setDeviceRoom, setDeviceName, onHome, showOnHome } from '../lib/layout.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
   import RfxPanel from '../ui/RfxPanel.svelte';
   import CoverGroupEditor from '../ui/CoverGroupEditor.svelte';
   import { newAlert } from '../lib/auto.svelte.js';
+  import Sortable from '../ui/Sortable.svelte';
+  import Personalize from '../ui/Personalize.svelte';
 
   const KIND_ICON = {
     garage: 'gate',
@@ -35,20 +36,21 @@
   let query = $state('');
   let filter = $state('all');
   /** grouped by where they come from (`source`) or where they are (`room`) */
-  let by = $state('source');
-  /** the folded groups, as `by:group`; what is not shown starts folded */
-  let closed = $state(new Set(['state:off']));
-  const VIEW_KEY = 'moli-equipements-view';
+  let by = $state('room');
+  /** the groups opened, as `by:group`: all start folded, a line each */
+  let opened = $state(new Set());
+  let editing = $state(false);
+  const VIEW_KEY = 'moli-equipements-ciel';
   try {
     const kept = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}');
     if (['source', 'room', 'name', 'state'].includes(kept.by)) by = kept.by;
-    if (Array.isArray(kept.closed)) closed = new Set(kept.closed);
+    if (Array.isArray(kept.opened)) opened = new Set(kept.opened);
   } catch {
     // Private window: the choice lasts the visit.
   }
   function keepView() {
     try {
-      localStorage.setItem(VIEW_KEY, JSON.stringify({ by, closed: [...closed] }));
+      localStorage.setItem(VIEW_KEY, JSON.stringify({ by, opened: [...opened] }));
     } catch {
       // Same.
     }
@@ -57,13 +59,14 @@
     by = next;
     keepView();
   }
-  /** Searching opens everything, without forgetting what was folded. */
+  /** Searching or filtering opens everything, without forgetting what was open. */
+  const looking = $derived(query.trim() !== '' || filter !== 'all');
   function folded(key, open) {
-    if (query.trim() || closed.has(key) === !open) return;
-    const next = new Set(closed);
-    if (open) next.delete(key);
-    else next.add(key);
-    closed = next;
+    if (looking || opened.has(key) === open) return;
+    const next = new Set(opened);
+    if (open) next.add(key);
+    else next.delete(key);
+    opened = next;
     keepView();
   }
   /** the device getting a brand new room */
@@ -74,9 +77,6 @@
     const names = new Set([...roomList().map((r) => r.name), ...(home.config?.rooms ?? []).map((r) => r.name), ...layout.extraRooms]);
     return [...names].sort((a, b) => a.localeCompare(b));
   });
-
-  /** The dashboard's cards that are not about one device (the sky, the moods…). */
-  const cards = $derived(catalogue().filter((c) => !c.device && c.id !== 'alarm' && available(c.id)));
 
   const source = (d) => d.id.split(':')[0];
   /** A bridge's own interface (Zigbee2MQTT…), for what Moli does not do: pairing, device settings. */
@@ -119,7 +119,7 @@
     const map = new Map();
     for (const x of shown) {
       if (by === 'source' && groupsSection && isCoverGroup(x.d)) continue;
-      const k = by === 'room' ? (x.room ?? '') : by === 'name' ? 'all' : by === 'state' ? (deviceOnDashboard(x.d) ? 'on' : 'off') : source(x.d);
+      const k = by === 'room' ? (x.room ?? '') : by === 'name' ? 'all' : by === 'state' ? (onHome(x.d.id) ? 'on' : 'off') : source(x.d);
       if (!map.has(k)) map.set(k, []);
       map.get(k).push(x);
     }
@@ -133,6 +133,8 @@
   const bridges = $derived(by !== 'source' ? [] : (hub.drivers ?? []).filter((x) => x.web && !devices.some((d) => source(d.d) === x.instance)));
 
   const unplaced = $derived(devices.filter((x) => !x.room).length);
+
+  const groupName = (src) => (by === 'room' ? src || t('maison.equipements.sans_piece') : by === 'name' ? t('maison.equipements.f_all') : by === 'state' ? t(`maison.ciel.etat_${src}`) : sourceName(src));
 
   async function choose(id, value) {
     if (value === '__new__') {
@@ -169,10 +171,10 @@
   }
 </script>
 
-{#snippet onDashboardBox(x)}
-  <label class="show" title={t('maison.equipements.afficher_dashboard', { name: x.name })}>
-    <input type="checkbox" checked={deviceOnDashboard(x.d)} onchange={(e) => showDevice(x.d, e.currentTarget.checked)} aria-label={t('maison.equipements.afficher_dashboard', { name: x.name })} />
-    <span>{t('maison.equipements.dashboard')}</span>
+{#snippet onHomeBox(x)}
+  <label class="show" title={t('maison.ciel.case_aide', { name: x.name })}>
+    <input type="checkbox" checked={onHome(x.d.id)} onchange={(e) => showOnHome(x.d.id, e.currentTarget.checked)} aria-label={t('maison.ciel.case_aide', { name: x.name })} />
+    <span>{t('maison.ciel.case')}</span>
   </label>
 {/snippet}
 
@@ -195,10 +197,15 @@
 {/snippet}
 
 <div class="equipements">
-  <header>
-    <h1 class="page-title">{t('maison.equipements.titre')}</h1>
-    <p class="page-sub">{t('maison.equipements.sous_titre', { count: devices.length })}</p>
+  <header class="head">
+    <div>
+      <h1 class="page-title">{t('maison.equipements.titre')}</h1>
+      <p class="page-sub">{t('maison.equipements.sous_titre', { count: devices.length })}</p>
+    </div>
+    <Personalize bind:editing lists={['equipements-source', 'equipements-room', 'equipements-state']} />
   </header>
+
+  {#if editing}<p class="hint">{t('maison.perso.aide_groupes')}</p>{/if}
 
   <div class="bar">
     <label class="search">
@@ -219,26 +226,8 @@
     </div>
   </div>
 
-  {#if filter === 'all' && !query}
-  <details class="group" open={!closed.has('cards')} ontoggle={(e) => folded('cards', e.currentTarget.open)}>
-    <summary><h2>{t('maison.equipements.cartes')} <small>{cards.length}</small></h2></summary>
-    <ul>
-      {#each cards as c (c.id)}
-        <li>
-          <span class="glyph"><Icon name="info" size={20} /></span>
-          <span class="who"><b>{c.label}</b><small>{t('maison.equipements.carte_sans_equipement')}</small></span>
-          <label class="show" title={t('maison.equipements.afficher_dashboard', { name: c.label })}>
-            <input type="checkbox" checked={c.on} onchange={(e) => showTile(c, e.currentTarget.checked)} aria-label={t('maison.equipements.afficher_dashboard', { name: c.label })} />
-            <span>{t('maison.equipements.dashboard')}</span>
-          </label>
-        </li>
-      {/each}
-    </ul>
-  </details>
-  {/if}
-
   {#if groupsSection}
-    <details class="group" open={!closed.has('cover-groups')} ontoggle={(e) => folded('cover-groups', e.currentTarget.open)}>
+    <details class="group" open={looking || opened.has('cover-groups')} ontoggle={(e) => folded('cover-groups', e.currentTarget.open)}>
       <summary>
         <h2>
           {t('maison.groupes_stores.titre')} <small>{coverGroups.length}</small>
@@ -254,7 +243,7 @@
               <small>{(x.d.members ?? []).map((m) => nameOf(m)).join(' · ')}</small>
             </span>
             <button type="button" class="edit" onclick={() => (editingGroup = x.d.id)}>{t('maison.groupes_stores.modifier_court')}</button>
-            {@render onDashboardBox(x)}
+            {@render onHomeBox(x)}
             {@render roomPicker(x)}
           </li>
         {:else}
@@ -267,11 +256,11 @@
     </details>
   {/if}
 
-  {#each groups as [src, list] (`${by}:${src}`)}
-    <details class="group" open={query.trim() !== '' || !closed.has(`${by}:${src}`)} ontoggle={(e) => folded(`${by}:${src}`, e.currentTarget.open)}>
+  {#snippet groupBlock([src, list])}
+    <details class="group" open={looking || opened.has(`${by}:${src}`)} ontoggle={(e) => folded(`${by}:${src}`, e.currentTarget.open)}>
       <summary>
       <h2>
-        {by === 'room' ? src || t('maison.equipements.sans_piece') : by === 'name' ? t('maison.equipements.f_all') : by === 'state' ? t(`maison.equipements.etat_${src}`) : sourceName(src)} <small>{list.length}</small>
+        {groupName(src)} <small>{list.length}</small>
         {#if by === 'source' && webOf(src)}<a class="web" href={webOf(src)} target="_blank" rel="noopener noreferrer" title={t('maison.equipements.interface_de', { name: sourceName(src) })}>{t('maison.equipements.interface')} ↗</a>{/if}
         {#if by === 'source' && isRfx(src)}<button class="web" onclick={() => (rfx = src)}>{t('maison.equipements.interface')}</button>{/if}
       </h2>
@@ -305,21 +294,21 @@
               </small>
             </span>
             <button type="button" class="bell" title={t('maison.equipements.alerte', { name: x.name })} aria-label={t('maison.equipements.alerte', { name: x.name })} onclick={() => newAlert(x.d.id)}><Icon name="bell" size={16} /></button>
-            {@render onDashboardBox(x)}
-            {#if deviceKind(x.d) === 'light'}
-              <label class="show" title={t('maison.equipements.a_part_titre', { name: x.name })}>
-                <input type="checkbox" checked={isApart(x.d.id)} onchange={(e) => setApart(x.d.id, e.currentTarget.checked)} aria-label={t('maison.equipements.a_part_titre', { name: x.name })} />
-                <span>{t('maison.equipements.a_part')}</span>
-              </label>
-            {/if}
+            {@render onHomeBox(x)}
             {@render roomPicker(x)}
           </li>
         {/each}
       </ul>
     </details>
-  {:else}
-    {#if !bridges.length}<p class="empty">{t('maison.equipements.rien')}</p>{/if}
-  {/each}
+  {/snippet}
+
+  {#if groups.length}
+    <div class="groups">
+    <Sortable list="equipements-{by}" items={groups} id={([src]) => src || '-'} label={([src]) => groupName(src)} {editing} hideable={false} span={([src]) => (looking || opened.has(`${by}:${src}`) ? 2 : 1)} item={groupBlock} />
+    </div>
+  {:else if !bridges.length}
+    <p class="empty">{t('maison.equipements.rien')}</p>
+  {/if}
 
   {#if filter === 'all' && !query}
     {#each bridges as b (b.instance)}
@@ -359,6 +348,19 @@
     /* A long line must not widen the page past a phone's screen. */
     grid-template-columns: minmax(0, 1fr);
     gap: 20px;
+  }
+
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .hint {
+    color: var(--ink-2);
+    font-size: 14px;
   }
 
   .bar {
@@ -419,6 +421,33 @@
   .chips button.on {
     background: var(--warm-soft);
     color: var(--warm-ink);
+  }
+
+  /* A group, folded: one pane of glass. Two side by side; open, the whole width. */
+  .groups {
+    --sort-cols: repeat(2, minmax(0, 1fr));
+    --sort-gap: 8px;
+  }
+
+  @media (max-width: 760px) {
+    .groups {
+      --sort-cols: minmax(0, 1fr);
+    }
+  }
+
+  details.group {
+    padding: 13px 16px;
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  details.group > summary h2 {
+    margin: 0;
+  }
+
+  details.group[open] > summary h2 {
+    margin-bottom: 8px;
   }
 
   details.group > summary {

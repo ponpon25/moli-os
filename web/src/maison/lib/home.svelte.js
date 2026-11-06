@@ -36,6 +36,9 @@ const SHARED = [
   'maison-dashboard-off',
   'maison-dashboard-on',
   'maison-dashboard-apart',
+  'maison-accueil-off',
+  'maison-ordre',
+  'maison-affichage',
   'maison-rooms-hidden',
   'maison-rooms-extra',
 ];

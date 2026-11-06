@@ -15,6 +15,7 @@
   import PeopleCard from '../ui/PeopleCard.svelte';
   import { hub, home, savePref } from '../lib/home.svelte.js';
   import { t, locale } from '../../lib/i18n.svelte.js';
+  import ThemePicker from '../ui/ThemePicker.svelte';
 
   let { route = 'reglages' } = $props();
 
@@ -28,16 +29,6 @@
   // `personnes` and `acces` are now part of `securite` (old links).
   const asked = $derived(['personnes', 'acces'].includes(route.split('/')[1]) ? 'securite' : route.split('/')[1]);
   const section = $derived(SECTIONS.find((x) => x.id === asked)?.id ?? 'apparence');
-
-  const THEMES = [
-    { id: 'auto', icon: 'sun', label: 'commun.theme.auto' },
-    { id: 'light', icon: 'sun', label: 'commun.theme.jour' },
-    { id: 'dark', icon: 'moon', label: 'commun.theme.nuit' },
-  ];
-  function setTheme(id) {
-    home.theme = id;
-    savePref('maison-theme', id);
-  }
 
   // « État du système » : the system as it runs, drawn from /api/system and
   // the live event stream. Nothing here is written by hand: a new driver or
@@ -195,19 +186,7 @@
 
     <div class="panel">
       {#if section === 'apparence'}
-        <section class="card theme">
-          <h2>{t('systeme.reglages.theme')}</h2>
-          <p class="muted">{t('systeme.reglages.theme_aide')}</p>
-          <div class="choices" role="radiogroup" aria-label={t('systeme.reglages.theme')}>
-            {#each THEMES as th (th.id)}
-              <button role="radio" aria-checked={home.theme === th.id} class:on={home.theme === th.id} onclick={() => setTheme(th.id)}>
-                <span class="swatch {th.id}" aria-hidden="true"></span>
-                <b>{t(th.label)}</b>
-                <small>{t(`systeme.reglages.theme_${th.id}`)}</small>
-              </button>
-            {/each}
-          </div>
-        </section>
+        <ThemePicker />
       {:else if section === 'securite'}
         <PeopleCard />
         <DashboardCode />
@@ -525,63 +504,15 @@
     background: var(--warm, #e08a00);
   }
 
-  .theme h2 {
-    margin: 0 0 4px;
-  }
 
-  .theme > p {
-    margin: 0 0 16px;
-  }
 
-  .choices {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px;
-  }
 
-  .choices button {
-    display: grid;
-    justify-items: start;
-    gap: 4px;
-    padding: 12px;
-    border: 2px solid transparent;
-    border-radius: 18px;
-    font: inherit;
-    text-align: left;
-    background: var(--surface-2);
-    color: var(--ink);
-    cursor: pointer;
-  }
 
-  .choices button.on {
-    border-color: var(--warm-ink);
-    background: var(--warm-soft);
-  }
 
-  .choices small {
-    font-size: 12px;
-    color: var(--ink-3);
-  }
 
-  .swatch {
-    width: 100%;
-    height: 54px;
-    margin-bottom: 6px;
-    border-radius: 12px;
-    box-shadow: inset 0 0 0 1px rgb(128 128 128 / 25%);
-  }
 
-  .swatch.light {
-    background: linear-gradient(135deg, #f6f8fb 50%, #dfe4ec 50%);
-  }
 
-  .swatch.dark {
-    background: linear-gradient(135deg, #1a1f2a 50%, #0d1016 50%);
-  }
 
-  .swatch.auto {
-    background: linear-gradient(135deg, #f6f8fb 50%, #0d1016 50%);
-  }
 
   @media (max-width: 900px) {
     .layout {

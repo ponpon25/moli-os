@@ -71,7 +71,7 @@
   button.active {
     border-color: var(--ink);
     background: var(--ink);
-    color: var(--surface);
+    color: var(--on-ink);
   }
 
   small {

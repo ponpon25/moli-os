@@ -459,7 +459,7 @@
 
   .typing.lit {
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
   }
 
   .write {
@@ -618,7 +618,7 @@
 
   .row .primary {
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
   }
 
   .volume {

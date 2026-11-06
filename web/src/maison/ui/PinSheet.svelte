@@ -237,7 +237,7 @@
 
   .pad .ok {
     background: var(--ink);
-    color: var(--bg);
+    color: var(--on-ink);
     font-size: 18px;
   }
 

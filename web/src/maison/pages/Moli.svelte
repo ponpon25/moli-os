@@ -49,8 +49,7 @@
 <div class="moli-page" class:started={moli.messages.length}>
   {#if !moli.messages.length}
     <section class="hero">
-      <Orb size={132} state={orbState} level={talk.level} />
-      <p class="date">{date}</p>
+      <Orb size={88} state={orbState} level={talk.level} />
       <h1>{t('moli.page.titre', { greeting: greeting(home.now) })}</h1>
       {#if moli.status && !moli.status.ready}
         <p class="asleep">
@@ -319,7 +318,7 @@
       position: sticky;
       bottom: 76px;
       padding: 10px 0 0;
-      background: linear-gradient(transparent, var(--bg) 35%);
+      background: linear-gradient(transparent, rgb(6 12 28 / 80%) 35%);
     }
 
     .dock :global(form.composer) {

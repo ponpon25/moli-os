@@ -103,6 +103,35 @@
   });
   const count = (f) => rows.filter((r) => (f === 'all' ? true : f === 'probleme' ? r.e.outcome.result !== 'ok' : r.d.type === f)).length;
 
+  /** One gesture, one line: a slider moved twelve times, a group's orders to
+   *  its shutters. The rest of it opens on demand. */
+  const SAME_POINT_S = 30;
+  const SAME_RUN_S = 15;
+  const pointOf = (r) => (r.e.action.kind === 'command' ? r.e.action.point : null);
+  function fold(list) {
+    const out = [];
+    for (const r of list) {
+      const head = out.at(-1);
+      const near = (s) => head && Math.abs(head.last - r.e.ts) <= s * 1000;
+      const again = head && pointOf(r) && pointOf(r) === pointOf(head) && r.e.actor === head.e.actor && r.e.outcome.result === 'ok' && near(SAME_POINT_S);
+      const followed = head && r.e.origin === 'system' && r.e.outcome.result === 'ok' && near(SAME_RUN_S);
+      if (again || followed) {
+        head.more.push(r);
+        head.last = r.e.ts;
+      } else {
+        out.push({ ...r, more: [], last: r.e.ts });
+      }
+    }
+    return out;
+  }
+  let unfolded = $state(new Set());
+  function unfold(id) {
+    const next = new Set(unfolded);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    unfolded = next;
+  }
+
   const dayOf = (ts) => new Date(ts).toDateString();
   function dayName(ts) {
     const today = new Date(hub.now ?? Date.now());
@@ -117,6 +146,7 @@
       if (out.at(-1)?.key !== key) out.push({ key, name: dayName(r.e.ts), rows: [] });
       out.at(-1).rows.push(r);
     }
+    for (const day of out) day.rows = fold(day.rows);
     return out;
   });
 </script>
@@ -147,7 +177,7 @@
     <section class="day">
       <h2>{day.name}</h2>
       <ul>
-        {#each day.rows as { e, d, who: by } (e.id)}
+        {#snippet row({ e, d, who: by }, more = [])}
           <li class:err={e.outcome.result === 'err'} class:held={e.outcome.result === 'pending'}>
             <time datetime={new Date(e.ts).toISOString()}>{clock(e.ts)}</time>
             <span class="glyph" class:lit={d.on === true}><Icon name={d.icon} size={18} /></span>
@@ -155,7 +185,16 @@
               <span class="line"><b>{d.target}</b> <span class="verb" class:lit={d.on === true}>{d.what}</span>{#if d.room}<span class="room">{d.room}</span>{/if}</span>
               <small>{by}{#if e.outcome.result === 'err'} · <span class="bad">{t('maison.historique.echec', { error: e.outcome.error })}</span>{/if}{#if e.outcome.result === 'pending'} · <span class="wait">{t('maison.historique.retenu')}</span>{/if}</small>
             </span>
+            {#if more.length}
+              <button class="folded" aria-expanded={unfolded.has(e.id)} onclick={() => unfold(e.id)}>{t('maison.historique.autres', { count: more.length })}<Icon name={unfolded.has(e.id) ? 'chevron-up' : 'chevron-down'} size={15} /></button>
+            {/if}
           </li>
+        {/snippet}
+        {#each day.rows as r (r.e.id)}
+          {@render row(r, r.more)}
+          {#if unfolded.has(r.e.id)}
+            {#each r.more as m (m.e.id)}{@render row(m)}{/each}
+          {/if}
         {/each}
       </ul>
     </section>
@@ -171,8 +210,25 @@
 <style>
   .historique {
     display: grid;
+    /* A long line must not widen the page past a phone's screen. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 20px;
-    max-width: 860px;
+  }
+
+  .folded {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding: 5px 10px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
   }
 
   .bar {
@@ -188,7 +244,7 @@
     gap: 8px;
     flex: 1;
     min-width: 200px;
-    max-width: 300px;
+    max-width: 360px;
     padding: 8px 14px;
     border-radius: 999px;
     background: var(--surface-2);
@@ -246,7 +302,7 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-2);
-    background: var(--bg, transparent);
+    text-shadow: 0 1px 10px rgb(0 0 0 / 45%);
   }
 
   ul {
@@ -265,6 +321,23 @@
     gap: 12px;
     padding: 10px 16px;
     border-top: 1px solid var(--line);
+  }
+
+  li:has(.folded) {
+    grid-template-columns: 46px 36px minmax(0, 1fr) auto;
+  }
+
+  /* A phone: the rest of the gesture below its line. */
+  @media (max-width: 760px) {
+    li:has(.folded) {
+      grid-template-columns: 46px 36px minmax(0, 1fr);
+    }
+
+    .folded {
+      grid-column: 3;
+      justify-self: start;
+      margin-left: 0;
+    }
   }
 
   li:first-child {
@@ -353,12 +426,17 @@
   }
 
   @media (max-width: 560px) {
-    li {
+    li,
+    li:has(.folded) {
       grid-template-columns: 36px minmax(0, 1fr);
     }
 
     time {
       display: none;
+    }
+
+    .folded {
+      grid-column: 2;
     }
   }
 </style>

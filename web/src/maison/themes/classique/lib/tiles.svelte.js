@@ -2,10 +2,10 @@
 // the house's cards, and each clim on its own. The dashboard draws them and
 // the settings list them, so both read this catalogue.
 
-import { home, hub, deviceKind, nameOf, device } from './home.svelte.js';
-import { dash, tileOf, setTile, onDashboard, showOnDashboard, isApart } from './layout.svelte.js';
-import { t } from '../../lib/i18n.svelte.js';
-import { energy } from './energy-live.svelte.js';
+import { home, hub, deviceKind, nameOf, device } from '../../../lib/home.svelte.js';
+import { dash, tileOf, setTile, onDashboard, showOnDashboard, isApart } from '../../../lib/layout.svelte.js';
+import { t } from '../../../../lib/i18n.svelte.js';
+import { energy } from '../../../lib/energy-live.svelte.js';
 
 /** A clim's tile is `clim:` and the device's id. */
 export const CLIM = 'clim:';

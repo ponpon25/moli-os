@@ -4,6 +4,8 @@
   import Icon from '../ui/Icon.svelte';
   import CameraTile from '../ui/CameraTile.svelte';
   import SecurityPanel from '../ui/SecurityPanel.svelte';
+  import Sortable from '../ui/Sortable.svelte';
+  import Personalize from '../ui/Personalize.svelte';
 
   // The layout's cameras first (their names, pace, battery), then any other.
   const cameras = $derived.by(() => {
@@ -16,6 +18,7 @@
   });
 
   let open = $state(null);
+  let editing = $state(false);
   const current = $derived(cameras.find((c) => c.id === open));
 
   // What the camera saw today, from the history (rising edges only).
@@ -67,23 +70,32 @@
 <svelte:window onkeydown={onkey} />
 
 <div class="cameras">
-  <header>
-    <h1 class="page-title">{t('salon.cameras.titre')}</h1>
-    <p class="page-sub">{t('salon.cameras.sous_titre')}</p>
+  <header class="head">
+    <div>
+      <h1 class="page-title">{t('salon.cameras.titre')}</h1>
+      <p class="page-sub">{t('salon.cameras.sous_titre')}</p>
+    </div>
+    <Personalize bind:editing lists={['cameras']} />
   </header>
 
-  <SecurityPanel />
+  {#if editing}<p class="hint">{t('maison.perso.aide')}</p>{/if}
 
-  <div class="wall">
-    {#each cameras as cam (cam.id)}
-      <div class="slot">
-        <CameraTile id={cam.id} name={cam.name} refresh={cam.refresh} battery={cam.battery} onopen={(id) => (open = id)} />
-        {#if cam.locked}<span class="chip cool lock"><Icon name="lock" size={14} />{t('salon.cameras.protegee')}</span>{/if}
-      </div>
-    {:else}
-      <p class="muted">{t('salon.cameras.aucune')}</p>
-    {/each}
-  </div>
+  {#snippet camera(cam)}
+    <div class="slot">
+      <CameraTile id={cam.id} name={cam.name} refresh={cam.refresh} battery={cam.battery} onopen={(id) => (open = id)} />
+      {#if cam.locked}<span class="chip cool lock"><Icon name="lock" size={14} />{t('salon.cameras.protegee')}</span>{/if}
+    </div>
+  {/snippet}
+
+  {#if cameras.length}
+    <div class="wall">
+      <Sortable list="cameras" items={cameras} id={(c) => c.id} label={(c) => c.name} {editing} item={camera} />
+    </div>
+  {:else}
+    <p class="muted">{t('salon.cameras.aucune')}</p>
+  {/if}
+
+  <SecurityPanel />
 </div>
 
 {#if current}
@@ -121,10 +133,22 @@
     gap: 22px;
   }
 
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .hint {
+    color: var(--ink-2);
+    font-size: 14px;
+  }
+
   .wall {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
-    gap: 20px;
+    --sort-cols: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+    --sort-gap: 14px;
   }
 
   .slot {

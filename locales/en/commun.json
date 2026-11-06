@@ -45,8 +45,8 @@
   "commun.nav.parler": "Speak",
   "commun.nav.infra": "Infra",
   "commun.nav.systeme": "Settings",
-  "commun.nav.systeme_titre": "Settings: appearance, people, access, assistant, integrations",
-  "commun.nav.comment_ca_marche": "How it works",
+  "commun.nav.systeme_titre": "Settings: appearance, access and security, assistant, integrations",
+  "commun.nav.comment_ca_marche": "System status",
   "commun.theme.auto": "Auto",
   "commun.theme.auto_pied": "Auto theme",
   "commun.theme.jour": "Day",
@@ -358,5 +358,6 @@
   "commun.borne.de_a": "{from} → {to}",
   "commun.borne.km": "≈ {km} km",
   "commun.volet.groupe_reglages": "Edit the group",
-  "commun.volet.groupe_injoignables": "{count} out of reach"
+  "commun.volet.groupe_injoignables": "{count} out of reach",
+  "commun.nav.stores": "Shutters"
 }

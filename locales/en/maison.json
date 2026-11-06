@@ -373,5 +373,8 @@
   "maison.groupes_stores.echec": "Shutter group not saved: {error}",
   "maison.groupes_stores.vide": "No group",
   "maison.groupes_stores.vide_aide": "Bring several shutters together to command them at once.",
-  "maison.groupes_stores.modele": "Shutter group"
+  "maison.groupes_stores.modele": "Shutter group",
+  "maison.stores.titre": "Shutters",
+  "maison.stores.sous_titre": "All the shutters of the house ({count}), room by room.",
+  "maison.stores.aucun": "No shutter yet."
 }

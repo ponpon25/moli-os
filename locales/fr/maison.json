@@ -373,5 +373,8 @@
   "maison.groupes_stores.echec": "Groupe de stores non enregistré : {error}",
   "maison.groupes_stores.vide": "Aucun groupe",
   "maison.groupes_stores.vide_aide": "Réunissez plusieurs stores pour les commander d'un coup.",
-  "maison.groupes_stores.modele": "Groupe de stores"
+  "maison.groupes_stores.modele": "Groupe de stores",
+  "maison.stores.titre": "Stores",
+  "maison.stores.sous_titre": "Tous les stores de la maison ({count}), pièce par pièce.",
+  "maison.stores.aucun": "Aucun store pour l'instant."
 }

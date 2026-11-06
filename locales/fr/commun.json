@@ -45,8 +45,8 @@
   "commun.nav.parler": "Parler",
   "commun.nav.infra": "Infra",
   "commun.nav.systeme": "Réglages",
-  "commun.nav.systeme_titre": "Réglages : apparence, personnes, accès, assistant, intégrations",
-  "commun.nav.comment_ca_marche": "Comment ça marche",
+  "commun.nav.systeme_titre": "Réglages : apparence, accès et sécurité, assistant, intégrations",
+  "commun.nav.comment_ca_marche": "État du système",
   "commun.theme.auto": "Auto",
   "commun.theme.auto_pied": "Thème auto",
   "commun.theme.jour": "Jour",
@@ -358,5 +358,6 @@
   "commun.borne.de_a": "{from} → {to}",
   "commun.borne.km": "≈ {km} km",
   "commun.volet.groupe_reglages": "Modifier le groupe",
-  "commun.volet.groupe_injoignables": "{count} injoignable(s)"
+  "commun.volet.groupe_injoignables": "{count} injoignable(s)",
+  "commun.nav.stores": "Stores"
 }

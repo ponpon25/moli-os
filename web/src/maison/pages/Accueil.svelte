@@ -388,7 +388,7 @@
     }
     if (value('energie:maison', 'over_budget') === true) {
       const bill = value('energie:maison', 'bill_projection');
-      list.push({ tone: 'warm', icon: 'bolt', text: t('maison.accueil.facture', { bill: num(bill) }), href: '#/reglages/energie' });
+      list.push({ tone: 'warm', icon: 'bolt', text: t('maison.accueil.facture', { bill: num(bill) }), href: '#/energie' });
     }
     // A dead battery takes its sensor offline: count it all the same.
     const flat = all.filter((d) => lowBattery(d.id));

@@ -18,6 +18,8 @@
   import Historique from './pages/Historique.svelte';
   import Plan from './pages/Plan.svelte';
   import Cameras from './pages/Cameras.svelte';
+  import Stores from './pages/Stores.svelte';
+  import Energie from './pages/Energie.svelte';
   import Impression from './pages/Impression.svelte';
   import Dehors from './pages/Dehors.svelte';
   import Moli from './pages/Moli.svelte';
@@ -48,6 +50,8 @@
     { path: 'equipements', label: 'commun.nav.equipements', icon: 'devices' },
     { path: 'enceintes', label: 'commun.nav.enceintes', icon: 'speaker' },
     { path: 'cameras', label: 'commun.nav.cameras', icon: 'cctv' },
+    { path: 'stores', label: 'commun.nav.stores', icon: 'shutter' },
+    { path: 'energie', label: 'commun.nav.energie', icon: 'bolt' },
     { path: 'historique', label: 'commun.nav.historique', icon: 'history' },
     { path: 'automatismes', label: 'commun.nav.automatismes', icon: 'robot' },
   ];
@@ -140,12 +144,15 @@
       {#await import('./pages/Carte.svelte') then { default: Carte }}<Carte />{/await}
     {:else if page === 'cameras'}
       <Cameras />
+    {:else if page === 'stores'}
+      <Stores />
     {:else if page === 'parler'}
       <Parler />
     {:else if page === 'atelier'}
       <Systeme route="reglages/securite" />
-    {:else if page === 'energie' && !route.startsWith('energie/solaire')}
-      <Systeme route="reglages/energie" />
+    {:else if (page === 'energie' && !route.startsWith('energie/solaire')) || route.startsWith('reglages/energie')}
+      <!-- `reglages/energie`: where it used to be (old links). -->
+      <Energie />
     {:else if page === 'energie' && route.startsWith('energie/solaire')}
       <!-- The solar demo (a simulation): loaded only when visited. -->
       {#await import('./pages/Solaire.svelte') then { default: Solaire }}<Solaire />{/await}

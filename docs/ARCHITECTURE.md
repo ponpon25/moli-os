@@ -62,7 +62,7 @@ appareils, 446 valeurs, 18 pilotes, **12 Mo**, 0,23 % CPU, image 12 Mo (mesures 
  └──────────────────────────┘
 ```
 
-La carte vivante de ce schéma est dans le dashboard : `#/systeme` (« Comment ça marche »).
+La carte vivante de ce schéma est dans le dashboard : `#/reglages/fonctionnement` (« État du système »).
 
 ## Crates
 

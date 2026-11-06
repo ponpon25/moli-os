@@ -9,10 +9,8 @@
   import AssistantExchanges from '../ui/AssistantExchanges.svelte';
   import AlexaAccount from '../ui/AlexaAccount.svelte';
   import DashboardCode from '../ui/DashboardCode.svelte';
-  import DashboardSettings from '../ui/DashboardSettings.svelte';
   import OlvidCard from '../ui/OlvidCard.svelte';
   import SecurityDesk from '../ui/SecurityDesk.svelte';
-  import Energie from './Energie.svelte';
   import { formatBytes, formatDuration } from '../../lib/format.js';
   import PeopleCard from '../ui/PeopleCard.svelte';
   import { hub, home, savePref } from '../lib/home.svelte.js';
@@ -22,16 +20,14 @@
 
   const SECTIONS = [
     { id: 'apparence', icon: 'sun' },
-    { id: 'dashboard', icon: 'dashboard' },
-    { id: 'personnes', icon: 'account' },
-    { id: 'acces', icon: 'lock' },
     { id: 'securite', icon: 'shield' },
     { id: 'assistant', icon: 'sparkles' },
-    { id: 'energie', icon: 'bolt' },
     { id: 'integrations', icon: 'branch' },
     { id: 'fonctionnement', icon: 'server' },
   ];
-  const section = $derived(SECTIONS.find((x) => x.id === route.split('/')[1])?.id ?? 'apparence');
+  // `personnes` and `acces` are now part of `securite` (old links).
+  const asked = $derived(['personnes', 'acces'].includes(route.split('/')[1]) ? 'securite' : route.split('/')[1]);
+  const section = $derived(SECTIONS.find((x) => x.id === asked)?.id ?? 'apparence');
 
   const THEMES = [
     { id: 'auto', icon: 'sun', label: 'commun.theme.auto' },
@@ -43,7 +39,7 @@
     savePref('maison-theme', id);
   }
 
-  // « Comment ça marche » : the system as it runs, drawn from /api/system and
+  // « État du système » : the system as it runs, drawn from /api/system and
   // the live event stream. Nothing here is written by hand: a new driver or
   // brick shows up by itself.
   let sys = $state(null);
@@ -212,16 +208,10 @@
             {/each}
           </div>
         </section>
-      {:else if section === 'dashboard'}
-        <DashboardSettings />
-      {:else if section === 'personnes'}
-        <PeopleCard />
-      {:else if section === 'acces'}
-        <DashboardCode />
       {:else if section === 'securite'}
+        <PeopleCard />
+        <DashboardCode />
         <SecurityDesk />
-      {:else if section === 'energie'}
-        <Energie embedded />
       {:else if section === 'assistant'}
         <AssistantSettings />
         <AssistantExchanges />

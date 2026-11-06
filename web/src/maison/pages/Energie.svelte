@@ -1,7 +1,4 @@
 <script>
-  /** `embedded`: inside the settings, which already carry the page's title. */
-  let { embedded = false } = $props();
-
   import { onMount } from 'svelte';
   import { home, hub, value, isOn, nameOf, deviceKind, doorOpen, act } from '../lib/home.svelte.js';
   import { energy, useEnergy, euros, kwh, watts, power, liveLook, billOf } from '../lib/energy-live.svelte.js';
@@ -230,7 +227,7 @@
 <div class="energie">
   <header class="head">
     <div>
-      {#if !embedded}<h1 class="page-title">{t('energie.titre')}</h1>{/if}
+      <h1 class="page-title">{t('energie.titre')}</h1>
       <p class="page-sub">{t('energie.sous_titre')}</p>
     </div>
     <a class="demo" href="#/energie/solaire"><Icon name="sun" size={16} />{t('energie.demo_solaire')}</a>

@@ -88,6 +88,8 @@
   const coverGroups = $derived(devices.filter((x) => isCoverGroup(x.d)));
   const hasShutters = $derived(devices.some((x) => x.kind === 'cover' && !isCoverGroup(x.d)));
   let editingGroup = $state(null);
+  /** Their own section, which has what their row needs: shown once. */
+  const groupsSection = $derived((filter === 'all' || filter === 'climate') && !query && hasShutters);
   /** « Zigbee », not « z2m »: the catalog's name for where they come from. */
   const sourceName = (src) => {
     const driver = hub.drivers?.find((x) => x.instance === src);
@@ -116,6 +118,7 @@
   const groups = $derived.by(() => {
     const map = new Map();
     for (const x of shown) {
+      if (by === 'source' && groupsSection && isCoverGroup(x.d)) continue;
       const k = by === 'room' ? (x.room ?? '') : by === 'name' ? 'all' : by === 'state' ? (deviceOnDashboard(x.d) ? 'on' : 'off') : source(x.d);
       if (!map.has(k)) map.set(k, []);
       map.get(k).push(x);
@@ -166,6 +169,31 @@
   }
 </script>
 
+{#snippet onDashboardBox(x)}
+  <label class="show" title={t('maison.equipements.afficher_dashboard', { name: x.name })}>
+    <input type="checkbox" checked={deviceOnDashboard(x.d)} onchange={(e) => showDevice(x.d, e.currentTarget.checked)} aria-label={t('maison.equipements.afficher_dashboard', { name: x.name })} />
+    <span>{t('maison.equipements.dashboard')}</span>
+  </label>
+{/snippet}
+
+{#snippet roomPicker(x)}
+  {#if creating === x.d.id}
+    <form onsubmit={create}>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input bind:value={draft} maxlength="40" placeholder={t('maison.pieces.nom_nouvelle')} aria-label={t('maison.pieces.nom_nouvelle')} autofocus />
+      <button type="submit" disabled={!draft.trim()} aria-label={t('maison.pieces.ajouter')}><Icon name="check" size={16} /></button>
+      <button type="button" onclick={() => (creating = null)} aria-label={t('commun.annuler')}><Icon name="close" size={16} /></button>
+    </form>
+  {:else}
+    <select class:none={!x.room} value={x.room ?? ''} onchange={(e) => choose(x.d.id, e.currentTarget.value)} aria-label={t('maison.equipements.piece_de', { name: x.name })}>
+      <option value="">{t('maison.equipements.aucune')}</option>
+      {#each rooms as r (r)}<option value={r}>{r}</option>{/each}
+      {#if x.room && !rooms.includes(x.room)}<option value={x.room}>{x.room}</option>{/if}
+      <option value="__new__">{t('maison.equipements.nouvelle')}</option>
+    </select>
+  {/if}
+{/snippet}
+
 <div class="equipements">
   <header>
     <h1 class="page-title">{t('maison.equipements.titre')}</h1>
@@ -209,7 +237,7 @@
   </details>
   {/if}
 
-  {#if (filter === 'all' || filter === 'climate') && !query && hasShutters}
+  {#if groupsSection}
     <details class="group" open={!closed.has('cover-groups')} ontoggle={(e) => folded('cover-groups', e.currentTarget.open)}>
       <summary>
         <h2>
@@ -226,6 +254,8 @@
               <small>{(x.d.members ?? []).map((m) => nameOf(m)).join(' · ')}</small>
             </span>
             <button type="button" class="edit" onclick={() => (editingGroup = x.d.id)}>{t('maison.groupes_stores.modifier_court')}</button>
+            {@render onDashboardBox(x)}
+            {@render roomPicker(x)}
           </li>
         {:else}
           <li>
@@ -275,31 +305,14 @@
               </small>
             </span>
             <button type="button" class="bell" title={t('maison.equipements.alerte', { name: x.name })} aria-label={t('maison.equipements.alerte', { name: x.name })} onclick={() => newAlert(x.d.id)}><Icon name="bell" size={16} /></button>
-            <label class="show" title={t('maison.equipements.afficher_dashboard', { name: x.name })}>
-              <input type="checkbox" checked={deviceOnDashboard(x.d)} onchange={(e) => showDevice(x.d, e.currentTarget.checked)} aria-label={t('maison.equipements.afficher_dashboard', { name: x.name })} />
-              <span>{t('maison.equipements.dashboard')}</span>
-            </label>
+            {@render onDashboardBox(x)}
             {#if deviceKind(x.d) === 'light'}
               <label class="show" title={t('maison.equipements.a_part_titre', { name: x.name })}>
                 <input type="checkbox" checked={isApart(x.d.id)} onchange={(e) => setApart(x.d.id, e.currentTarget.checked)} aria-label={t('maison.equipements.a_part_titre', { name: x.name })} />
                 <span>{t('maison.equipements.a_part')}</span>
               </label>
             {/if}
-            {#if creating === x.d.id}
-              <form onsubmit={create}>
-                <!-- svelte-ignore a11y_autofocus -->
-                <input bind:value={draft} maxlength="40" placeholder={t('maison.pieces.nom_nouvelle')} aria-label={t('maison.pieces.nom_nouvelle')} autofocus />
-                <button type="submit" disabled={!draft.trim()} aria-label={t('maison.pieces.ajouter')}><Icon name="check" size={16} /></button>
-                <button type="button" onclick={() => (creating = null)} aria-label={t('commun.annuler')}><Icon name="close" size={16} /></button>
-              </form>
-            {:else}
-              <select class:none={!x.room} value={x.room ?? ''} onchange={(e) => choose(x.d.id, e.currentTarget.value)} aria-label={t('maison.equipements.piece_de', { name: x.name })}>
-                <option value="">{t('maison.equipements.aucune')}</option>
-                {#each rooms as r (r)}<option value={r}>{r}</option>{/each}
-                {#if x.room && !rooms.includes(x.room)}<option value={x.room}>{x.room}</option>{/if}
-                <option value="__new__">{t('maison.equipements.nouvelle')}</option>
-              </select>
-            {/if}
+            {@render roomPicker(x)}
           </li>
         {/each}
       </ul>

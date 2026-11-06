@@ -24,6 +24,7 @@ mod store;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::future::join_all;
 use moli_core::{
@@ -299,8 +300,13 @@ fn device(id: DeviceId, instance: &InstanceId, group: &Group) -> Device {
     }
 }
 
-/// Gives the members the order, side by side: they leave together. A member
-/// that does not answer is left out.
+/// Between one member's order and the next: they leave together to the eye,
+/// and the radio does not get them all at once. Each member keeps its place
+/// in the line, so a later order never overtakes an earlier one.
+const STAGGER: Duration = Duration::from_millis(150);
+
+/// Gives the members the order, side by side. A member that does not answer
+/// is left out.
 async fn give(hub: &Hub, group: &Group, order: Order) -> Result<(), String> {
     let actor = moli_i18n::tr!("pilotes.covers.acteur", name = group.name);
     let reading = read(hub, group);
@@ -311,12 +317,15 @@ async fn give(hub: &Hub, group: &Group, order: Order) -> Result<(), String> {
         .members
         .iter()
         .zip(&reading)
-        .filter(|(_, (member, _))| member.answers)
-        .filter_map(|(id, (_, k))| {
+        .enumerate()
+        .filter(|(_, (_, (member, _)))| member.answers)
+        .filter_map(|(place, (id, (_, k)))| {
             let (key, value) = order_for(k.as_ref()?, order)?;
             let point = PointId::new(&DeviceId::from(id.as_str()), key);
             let actor = actor.clone();
+            let wait = STAGGER * u32::try_from(place).unwrap_or(0);
             Some(async move {
+                tokio::time::sleep(wait).await;
                 hub.command(&point, value, Origin::System, Some(actor))
                     .await
                     .map_err(|e| (point, e.to_string()))

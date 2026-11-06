@@ -72,6 +72,20 @@ impl Relays {
                     .is_some_and(|k| k.ends_with('_'))
             })
     }
+
+    /// The way of the wall button a module's `action` tells of: input 1 goes
+    /// with relay `l1`. Its end (`input_1_off`) is no new press.
+    fn pressed(&self, action: &str) -> Option<Dir> {
+        let (input, what) = action.strip_prefix("input_")?.split_once('_')?;
+        if !matches!(what, "single" | "double" | "triple" | "hold") {
+            return None;
+        }
+        match input {
+            n if self.up.strip_prefix('l') == Some(n) => Some(Dir::Up),
+            n if self.down.strip_prefix('l') == Some(n) => Some(Dir::Down),
+            _ => None,
+        }
+    }
 }
 
 fn default_pulse() -> f64 {
@@ -106,6 +120,13 @@ pub fn number(value: &Value) -> Option<f64> {
 const GAP: Duration = Duration::from_millis(600);
 /// How long after one of our impulses the module's report of it may come.
 const ECHO: Duration = Duration::from_millis(1500);
+/// The same with one relay per wire, where a late report is told from a wall
+/// button by the input's own event. The radio may hold an order this long.
+/// Until then no other impulse leaves: two late orders arriving together would
+/// close both relays.
+const RELAY_ECHO: Duration = Duration::from_secs(30);
+/// How long after the relay closed a wall button's input event may come.
+const INPUT_LAG: Duration = Duration::from_secs(3);
 /// A requested position this close to the current one is not worth a move.
 const NEAR: f64 = 2.0;
 
@@ -211,6 +232,9 @@ pub struct Cover {
     ready_at: Instant,
     /// Our last impulse, not yet seen by the module.
     echo: Option<Echo>,
+    /// The relay closing last taken for our impulse, and when: the wall
+    /// button's input event, should one follow, corrects that.
+    ours: Option<(Echo, Instant)>,
     module_moving: bool,
     /// Last position published, and whether the slats were shown open.
     shown: Option<i64>,
@@ -228,6 +252,7 @@ impl Cover {
             pending: Vec::new(),
             ready_at: now,
             echo: None,
+            ours: None,
             module_moving: false,
             shown: None,
             shown_slats: None,
@@ -453,26 +478,61 @@ impl Cover {
         Some(since + Duration::from_secs_f64(self.secs_to(from, dir, target)))
     }
 
+    /// How long a report of our impulse is waited for.
+    fn echo_window(&self) -> Duration {
+        if self.config.relays.is_some() {
+            RELAY_ECHO
+        } else {
+            ECHO
+        }
+    }
+
+    /// Seconds the module keeps a wire powered, at the least.
+    fn pulse(&self) -> Duration {
+        Duration::from_secs_f64(self.config.pulse.max(0.3))
+    }
+
+    /// No fresh impulse before this: the module must see a new order, and a
+    /// relay's impulse must have arrived and ended before another leaves.
+    fn gate(&self) -> Instant {
+        match self.echo {
+            Some(echo) if self.config.relays.is_some() => self.ready_at.max(echo.sent + RELAY_ECHO),
+            _ => self.ready_at,
+        }
+    }
+
     /// The next moment `fire` has something to do.
     #[must_use]
     pub fn deadline(&self) -> Option<Instant> {
-        self.pending.iter().map(|(at, _)| *at).min()
+        let gate = self.gate();
+        self.pending
+            .iter()
+            .map(|(at, step)| {
+                if matches!(step, Step::Release) {
+                    *at
+                } else {
+                    (*at).max(gate)
+                }
+            })
+            .min()
     }
 
     /// Runs what is due. Returns the module `state` values to publish.
     pub fn fire(&mut self, now: Instant) -> Vec<&'static str> {
         self.settle(now);
         let mut out = Vec::new();
-        while let Some(i) = (0..self.pending.len())
-            .filter(|&i| self.pending[i].0 <= now)
-            .min_by_key(|&i| self.pending[i].0)
-        {
-            let step = self.pending[i].1;
+        loop {
             // A fresh impulse waits until the module can take it.
-            if !matches!(step, Step::Release) && now < self.ready_at {
-                self.pending[i].0 = self.ready_at;
+            let open = now >= self.gate();
+            let Some(i) = (0..self.pending.len())
+                .filter(|&i| {
+                    self.pending[i].0 <= now && (open || matches!(self.pending[i].1, Step::Release))
+                })
+                .min_by_key(|&i| self.pending[i].0)
+            else {
                 break;
-            }
+            };
+            let step = self.pending[i].1;
             self.pending.remove(i);
             let dir = match step {
                 Step::Release => {
@@ -491,7 +551,7 @@ impl Cover {
             };
             out.push(dir.wire());
             self.impulse(dir, now);
-            let pulse = Duration::from_secs_f64(self.config.pulse.max(0.3));
+            let pulse = self.pulse();
             // A relay module ends the impulse by itself.
             if self.config.relays.is_none() {
                 self.pending.push((now + pulse, Step::Release));
@@ -531,27 +591,50 @@ impl Cover {
         payload: &serde_json::Map<String, serde_json::Value>,
         now: Instant,
     ) {
-        let moving = match &self.config.relays {
-            Some(relays) => {
-                let state = |relay: &str| payload.get(&format!("state_{relay}"))?.as_str();
-                let (up, down) = (state(&relays.up), state(&relays.down));
-                if up.is_none() && down.is_none() {
-                    return;
-                }
-                if up == Some("ON") {
-                    "forward"
-                } else if down == Some("ON") {
-                    "reverse"
-                } else {
-                    "stop"
-                }
+        let Some(relays) = &self.config.relays else {
+            if let Some(moving) = payload.get("moving").and_then(|m| m.as_str()) {
+                self.on_module_moving(moving, now);
             }
-            None => match payload.get("moving").and_then(|m| m.as_str()) {
-                Some(moving) => moving,
-                None => return,
-            },
+            return;
         };
-        self.on_module_moving(moving, now);
+        let pressed = payload
+            .get("action")
+            .and_then(|a| a.as_str())
+            .and_then(|a| relays.pressed(a));
+        let state = |relay: &str| payload.get(&format!("state_{relay}"))?.as_str();
+        let (up, down) = (state(&relays.up), state(&relays.down));
+        let moving = if up == Some("ON") {
+            Some("forward")
+        } else if down == Some("ON") {
+            Some("reverse")
+        } else if up.is_some() || down.is_some() {
+            Some("stop")
+        } else {
+            None
+        };
+        if let Some(moving) = moving {
+            self.on_module_moving(moving, now);
+        }
+        if let Some(dir) = pressed {
+            self.on_input(dir, now);
+        }
+    }
+
+    /// A wall button's own event, a little after its relay closed. Moli's
+    /// impulses never cause one. Taken for ours, that relay was a hand: ours
+    /// is still on its way, and counts when it comes.
+    fn on_input(&mut self, dir: Dir, now: Instant) {
+        let Some((echo, closed)) = self.ours.take() else {
+            return;
+        };
+        if echo.dir != dir || now.saturating_duration_since(closed) > INPUT_LAG {
+            return;
+        }
+        self.echo = Some(echo);
+        self.pending.clear();
+        self.target = None;
+        self.impulse(dir, closed);
+        tracing::debug!(?dir, "wall button, first taken for our impulse");
     }
 
     /// The module's own `moving` report. The module starting to power a
@@ -569,13 +652,20 @@ impl Cover {
         let Some(dir) = dir.filter(|_| started) else {
             return;
         };
+        // The relay is closed from now, however late the order came.
+        if self.config.relays.is_some() {
+            self.ready_at = self.ready_at.max(now + self.pulse() + GAP);
+        }
+        let window = self.echo_window();
+        self.ours = None;
         match self.echo.take() {
-            Some(echo) if echo.dir == dir && now.saturating_duration_since(echo.sent) <= ECHO => {
+            Some(echo) if echo.dir == dir && now.saturating_duration_since(echo.sent) <= window => {
                 self.arrived(echo, now);
+                self.ours = Some((echo, now));
             }
             echo => {
                 // Not ours (or ours went missing): a hand on the wall.
-                if echo.is_some_and(|e| now.saturating_duration_since(e.sent) <= ECHO) {
+                if echo.is_some_and(|e| now.saturating_duration_since(e.sent) <= window) {
                     self.echo = echo;
                 }
                 self.pending.clear();
@@ -589,7 +679,9 @@ impl Cover {
     /// One of our impulses reached the motor `now`, a little after it was
     /// sent: the move it started began later, the one it stopped ended later.
     fn arrived(&mut self, echo: Echo, now: Instant) {
-        let lag = now.saturating_duration_since(echo.sent).min(ECHO);
+        let lag = now
+            .saturating_duration_since(echo.sent)
+            .min(self.echo_window());
         match (echo.started, self.motion.as_mut()) {
             // The stop impulse will be as late as this one was: the travel
             // itself keeps its length, only where it is shown moves.
@@ -770,8 +862,12 @@ mod tests {
         let mut c = relay_cover(Some(100.0), t0);
         c.order(PERCENT, &Value::Int(50), t0).unwrap();
         // No release: closing the relay is all it takes, twice the same way.
-        let sent = run(&mut c, secs(t0, 60.0));
-        assert_eq!(sent, [(0.0, "CLOSE"), (16.0, "CLOSE")]);
+        assert_eq!(c.fire(t0), ["CLOSE"]);
+        c.on_report(&relays_report("OFF", "ON"), t0);
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 0.5));
+        assert_eq!(c.deadline(), Some(secs(t0, 16.0)));
+        assert_eq!(c.fire(secs(t0, 16.0)), ["CLOSE"]);
+        c.on_report(&relays_report("OFF", "ON"), secs(t0, 16.0));
         assert_eq!(c.payload("CLOSE"), serde_json::json!({"state_l2": "ON"}));
         assert_eq!(c.payload("OPEN"), serde_json::json!({"state_l1": "ON"}));
         assert!(!c.moving());
@@ -783,15 +879,133 @@ mod tests {
         let mut c = relay_cover(Some(0.0), t0);
         c.order(CONTROL, &text("open"), t0).unwrap();
         c.fire(t0);
+        c.on_report(&relays_report("ON", "OFF"), t0);
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 0.5));
         let t1 = secs(t0, 10.0);
         c.order(CONTROL, &text("close"), t1).unwrap();
         // The stop goes on the relay of the way it is moving…
         assert_eq!(c.fire(t1), ["OPEN"]);
         // …and the other relay waits until that one has opened again.
+        c.on_report(&relays_report("ON", "OFF"), t1);
         assert!(c.fire(secs(t1, 0.5)).is_empty());
         let at = c.deadline().unwrap();
         assert!(at >= secs(t1, 1.1));
         assert_eq!(c.fire(at), ["CLOSE"]);
+    }
+
+    fn action(name: &str) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::json!({ "action": name })
+            .as_object()
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn a_late_order_is_not_taken_for_a_wall_button() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(0.0), t0);
+        c.order(CONTROL, &text("open"), t0).unwrap();
+        c.fire(t0);
+        // 1.83 s on a busy network: still ours, and the travel starts then.
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 1.83));
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 2.33));
+        assert!(c.moving());
+        assert_eq!(height(&c, secs(t0, 21.83)), Some(50.0));
+        // So reversing starts with a stop, not with a lone impulse down.
+        let t1 = secs(t0, 15.0);
+        c.order(CONTROL, &text("close"), t1).unwrap();
+        assert_eq!(c.fire(t1), ["OPEN"]);
+    }
+
+    #[test]
+    fn a_very_late_stop_holds_back_the_other_relay() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(0.0), t0);
+        c.order(CONTROL, &text("open"), t0).unwrap();
+        c.fire(t0);
+        c.on_report(&relays_report("ON", "OFF"), t0);
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 0.5));
+        let t1 = secs(t0, 10.0);
+        c.order(CONTROL, &text("close"), t1).unwrap();
+        assert_eq!(c.fire(t1), ["OPEN"]);
+        // Nothing leaves while the stop is on its way.
+        assert!(c.fire(secs(t1, 13.0)).is_empty());
+        // It arrives 13.8 s late: the other relay waits for its end from then.
+        let arrived = secs(t1, 13.8);
+        c.on_report(&relays_report("ON", "OFF"), arrived);
+        assert!(c.fire(secs(t1, 14.0)).is_empty());
+        let at = c.deadline().unwrap();
+        assert_eq!(at, arrived + Duration::from_millis(1100));
+        c.on_report(&relays_report("OFF", "OFF"), secs(t1, 14.3));
+        assert_eq!(c.fire(at), ["CLOSE"]);
+        // The travel counted up to the moment the stop really arrived.
+        assert_eq!(c.position(at).map(|p| p.height > 50.0), Some(true));
+    }
+
+    #[test]
+    fn an_impulse_never_reported_holds_back_the_next_only_so_long() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(0.0), t0);
+        c.order(CONTROL, &text("open"), t0).unwrap();
+        c.fire(t0);
+        c.order(CONTROL, &text("stop"), secs(t0, 1.0)).unwrap();
+        assert!(c.fire(secs(t0, 29.0)).is_empty());
+        assert_eq!(c.deadline(), Some(t0 + RELAY_ECHO));
+        assert_eq!(c.fire(t0 + RELAY_ECHO), ["OPEN"]);
+    }
+
+    #[test]
+    fn a_wall_press_counts_once_with_its_input_event() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(0.0), t0);
+        c.on_report(&relays_report("ON", "OFF"), t0);
+        assert!(c.moving());
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 0.5));
+        c.on_report(&action("input_1_single"), secs(t0, 0.8));
+        c.on_report(&action("input_1_off"), secs(t0, 0.8));
+        assert!(c.moving());
+    }
+
+    #[test]
+    fn a_wall_press_taken_for_our_impulse_is_corrected_by_its_input_event() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(0.0), t0);
+        c.order(CONTROL, &text("open"), t0).unwrap();
+        c.fire(t0);
+        // The relay closes, ours is expected: the event says it was a hand.
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 1.0));
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 1.5));
+        c.on_report(&action("input_1_single"), secs(t0, 1.8));
+        assert!(!c.moving());
+        // Ours then arrives, and is taken as ours, not as one more press.
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 2.5));
+        assert!(!c.moving());
+    }
+
+    #[test]
+    fn an_input_event_for_the_other_way_or_too_late_changes_nothing() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(0.0), t0);
+        c.order(CONTROL, &text("open"), t0).unwrap();
+        c.fire(t0);
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 1.0));
+        c.on_report(&action("input_2_single"), secs(t0, 1.8));
+        assert!(c.moving());
+        c.on_report(&action("input_1_single"), secs(t0, 9.0));
+        assert!(c.moving());
+    }
+
+    #[test]
+    fn inputs_follow_the_relays_they_go_with() {
+        let swapped = Relays {
+            up: "l2".into(),
+            down: "l1".into(),
+        };
+        assert_eq!(swapped.pressed("input_2_single"), Some(Dir::Up));
+        assert_eq!(swapped.pressed("input_1_hold"), Some(Dir::Down));
+        assert_eq!(swapped.pressed("input_1_off"), None);
+        assert_eq!(swapped.pressed("input_3_single"), None);
+        assert_eq!(swapped.pressed("single"), None);
     }
 
     #[test]

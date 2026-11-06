@@ -162,6 +162,19 @@ export function saveDashboard() {
   keep('maison-dashboard', dash.tiles);
 }
 
+/** Kept among a page's tiles: whether it is shown room by room. */
+const ROOMS = '__rooms';
+
+export const DASHBOARD = {
+  set: setTile,
+  save: saveDashboard,
+  rooms: () => dash.tiles[ROOMS] === true,
+  setRooms(yes) {
+    dash.tiles = { ...dash.tiles, [ROOMS]: yes };
+    keep('maison-dashboard', dash.tiles);
+  },
+};
+
 export function resetDashboard() {
   dash.tiles = {};
   keep('maison-dashboard', dash.tiles);
@@ -178,6 +191,12 @@ export const STORES = {
     if (save) keep('maison-stores', storesBoard.tiles);
   },
   save() {
+    keep('maison-stores', storesBoard.tiles);
+  },
+  /** Room by room unless the family said otherwise. */
+  rooms: () => storesBoard.tiles[ROOMS] ?? true,
+  setRooms(yes) {
+    storesBoard.tiles = { ...storesBoard.tiles, [ROOMS]: yes };
     keep('maison-stores', storesBoard.tiles);
   },
 };

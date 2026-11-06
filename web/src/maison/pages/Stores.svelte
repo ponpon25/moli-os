@@ -22,6 +22,14 @@
   const shutters = $derived(all.filter((d) => !isCoverGroup(d)).length);
   const away = $derived(tiles.filter((x) => !x.on));
 
+  /** « Par pièce »: the groups, then the rooms, those in no room last. */
+  function sectionOf(tile) {
+    const d = hub.devices[tile.id];
+    if (isCoverGroup(d)) return { key: '__groups', title: t('maison.groupes_stores.titre'), order: 0 };
+    const room = roomOf(d);
+    return room ? { key: room, title: room, order: 1 } : { key: '', title: t('maison.equipements.sans_piece'), order: 2 };
+  }
+
   let creating = $state(false);
 </script>
 
@@ -52,6 +60,7 @@
   {hint}
   {extra}
   {actions}
+  {sectionOf}
   onhide={(tile) => STORES.set(tile.id, { on: false })}
   onreset={resetStores}
 />

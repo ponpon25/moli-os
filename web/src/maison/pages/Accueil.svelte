@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { home, hub, value, device, isOn, clock, num, relative, lastSeen, roomList, lampsOf, nameOf, doorOpen, leak, lowBattery, act, pending } from '../lib/home.svelte.js';
+  import { roomOf, home, hub, value, device, isOn, clock, num, relative, lastSeen, roomList, lampsOf, nameOf, doorOpen, leak, lowBattery, act, pending } from '../lib/home.svelte.js';
   import { isPrinter, phase } from '../lib/printers.js';
   import { t, locale } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
@@ -12,7 +12,7 @@
   import AmbiancePicker from '../ui/AmbiancePicker.svelte';
   import Routines from '../ui/Routines.svelte';
   import SkyHero from '../ui/SkyHero.svelte';
-  import { setTile, saveDashboard, resetDashboard, onDashboard, isApart } from '../lib/layout.svelte.js';
+  import { DASHBOARD, resetDashboard, onDashboard, isApart } from '../lib/layout.svelte.js';
   import TileBoard from '../ui/TileBoard.svelte';
   import { catalogue, showTile, isClim, isDev, available } from '../lib/tiles.svelte.js';
   import DeviceCard from '../ui/DeviceCard.svelte';
@@ -37,8 +37,11 @@
    *  grouping or library (those are the Speakers page's). */
   const PLAYER_LOOK = { sections: { volumes: true, join: false, library: false, progress: true }, ambient: true };
 
-  /** Where the dashboard's arrangement is kept. */
-  const DASH = { set: setTile, save: saveDashboard };
+  /** « Par pièce »: a device's tile goes under its room, the rest above. */
+  function sectionOf(tile) {
+    const room = tile.device ? roomOf(device(tile.device)) : null;
+    return room ? { key: room, title: room, order: 1 } : { key: '', title: null, order: 0 };
+  }
 
   const tiles = $derived(catalogue().filter((d) => isClim(d.id) || (isDev(d.id) ? !!device(d.device) : available(d.id) && (d.id !== 'lights' || shownLights.length > 0) && (d.id !== 'ambiances' || !!mood))));
 
@@ -329,7 +332,7 @@
 
   {#snippet hint()}{t('maison.dashboard.aide')} <a href="#/equipements">{t('maison.dashboard.masquees')}</a>{/snippet}
 
-  <TileBoard title={t('maison.dashboard.titre')} {tiles} board={DASH} {body} {hint} onhide={(tile) => showTile(tile, false)} onreset={resetDashboard} />
+  <TileBoard title={t('maison.dashboard.titre')} {tiles} board={DASHBOARD} {body} {hint} {sectionOf} onhide={(tile) => showTile(tile, false)} onreset={resetDashboard} />
 </div>
 
 <style>

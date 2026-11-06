@@ -379,5 +379,6 @@
   "maison.stores.aucun": "No shutter yet.",
   "maison.stores.aide": "Move a tile by its bar, resize it by its corner, the eye hides it. Nothing you do here commands the shutters.",
   "maison.stores.masques": "Hidden:",
-  "maison.stores.afficher": "Show {name}"
+  "maison.stores.afficher": "Show {name}",
+  "maison.dashboard.par_piece": "By room"
 }

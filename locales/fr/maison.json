@@ -379,5 +379,6 @@
   "maison.stores.aucun": "Aucun store pour l'instant.",
   "maison.stores.aide": "Déplacez une tuile par sa barre, agrandissez-la par son coin, l'œil la masque. Rien de ce que vous faites ici ne commande les stores.",
   "maison.stores.masques": "Masqués :",
-  "maison.stores.afficher": "Afficher {name}"
+  "maison.stores.afficher": "Afficher {name}",
+  "maison.dashboard.par_piece": "Par pièce"
 }

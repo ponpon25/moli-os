@@ -240,8 +240,9 @@
       {#if outside.day && clear}<span class="sun"></span>{/if}
       {#if !outside.day && clear}<span class="moon"></span>{/if}
       {#if !clear}<span class="cloud c1"></span><span class="cloud c2"></span>{/if}
-      {#if wet}<span class="rain"></span>{/if}
-      {#if outside.scene === 'snow'}<span class="snow"></span>{/if}
+      <!-- Not `.rain` or `.snow`: those name the weather, on the card itself. -->
+      {#if wet}<span class="drops"></span>{/if}
+      {#if outside.scene === 'snow'}<span class="flakes"></span>{/if}
     </span>
     <span class="slats" aria-hidden="true"><span class="handle"></span></span>
     {#if target != null && Math.abs(target - pos) > 1}
@@ -635,21 +636,21 @@
     opacity: 0.8;
   }
 
-  .rain,
-  .snow {
+  .drops,
+  .flakes {
     position: absolute;
     inset: -20% 0 0;
     background-size: 30cqw 40cqw;
     animation: pour 0.7s linear infinite;
   }
 
-  .rain {
+  .drops {
     background-image:
       radial-gradient(0.5px 7px at 30% 20%, rgb(225 238 255 / 60%), transparent),
       radial-gradient(0.5px 5px at 75% 70%, rgb(225 238 255 / 45%), transparent);
   }
 
-  .snow {
+  .flakes {
     background-image:
       radial-gradient(1.6px 1.6px at 20% 30%, #fff, transparent),
       radial-gradient(1.2px 1.2px at 70% 80%, rgb(255 255 255 / 85%), transparent);
@@ -698,8 +699,8 @@
     .sun,
     .stars,
     .cloud,
-    .rain,
-    .snow,
+    .drops,
+    .flakes,
     .aim,
     .chip.pulse {
       animation: none;

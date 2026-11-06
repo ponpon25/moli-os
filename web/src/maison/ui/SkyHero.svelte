@@ -410,12 +410,12 @@
     }
   }
 
-  .fog {
+  .bg > .fog {
     background: linear-gradient(180deg, transparent 20%, rgb(255 255 255 / 35%) 45%, transparent 70%);
     animation: haze 26s ease-in-out infinite alternate;
   }
 
-  .fog.late {
+  .bg > .fog.late {
     animation-delay: -13s;
     opacity: 0.7;
   }

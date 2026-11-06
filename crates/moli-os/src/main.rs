@@ -336,9 +336,7 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
     let (household, whereabouts) = spawn_household(&config, &hub, gates.phones.clone(), &cancel);
     tasks.push(whereabouts);
 
-    let listener = tokio::net::TcpListener::bind(config.server.listen)
-        .await
-        .with_context(|| format!("cannot listen on {}", config.server.listen))?;
+    let listener = listen(&config).await?;
     tracing::info!(
         listen = %config.server.listen,
         drivers = tasks.len(),
@@ -383,6 +381,7 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
         weather: weather(&config),
         homekit,
         alexa: config.alexa.clone(),
+        cover_groups: spawn_cover_groups(&config, &hub, &cancel, &mut tasks),
     };
     // Client addresses matter: human sessions are bound to them.
     axum::serve(
@@ -411,6 +410,12 @@ async fn serve(config: Config, boot: Instant) -> anyhow::Result<()> {
         .await
         .context("final state cache write")?;
     Ok(())
+}
+
+async fn listen(config: &Config) -> anyhow::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(config.server.listen)
+        .await
+        .with_context(|| format!("cannot listen on {}", config.server.listen))
 }
 
 /// The sky over the house (the dashboard's forecast and weather map):
@@ -1012,6 +1017,27 @@ fn spawn_house_drivers(
         ));
     }
     tasks
+}
+
+/// The groups of shutters the family makes from the dashboard. Always there,
+/// asleep while there are none; not in a demo house, open to anyone.
+fn spawn_cover_groups(
+    config: &Config,
+    hub: &Hub,
+    cancel: &CancellationToken,
+    tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+) -> Option<moli_covers::Groups> {
+    if config.server.demo {
+        return None;
+    }
+    let groups = moli_covers::Groups::open(hub.clone(), Some(&config.server.data_dir));
+    tasks.push(spawn_driver(
+        hub,
+        InstanceId::from(moli_covers::INSTANCE),
+        Arc::new(moli_covers::Covers::new(hub.clone(), groups.clone())),
+        cancel.clone(),
+    ));
+    Some(groups)
 }
 
 /// The household's people (`data/people.json`), and the driver that says

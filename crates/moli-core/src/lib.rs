@@ -14,8 +14,8 @@ mod spec;
 mod value;
 
 pub use event::{
-    Action, ApprovalRequest, AutomationChange, Decision, DriverStatus, Event, JournalEntry, Notice,
-    Origin, Outcome,
+    Action, ApprovalRequest, AutomationChange, CoverGroupChange, Decision, DriverStatus, Event,
+    JournalEntry, Notice, Origin, Outcome,
 };
 pub use id::{DeviceId, InstanceId, PointId};
 pub use model::{Device, Label, Sample};

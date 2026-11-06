@@ -455,5 +455,8 @@
   "systeme.pilotes.rfxtrx.nom": "433 MHz",
   "systeme.pilotes.rfxtrx.desc": "Les sondes de température sans fil en 433 MHz, par la clé RFXtrx.",
   "systeme.pilotes.zwave.nom": "Z-Wave",
-  "systeme.pilotes.zwave.desc": "Les modules Z-Wave (relais, capteurs), via Z-Wave JS UI."
+  "systeme.pilotes.zwave.desc": "Les modules Z-Wave (relais, capteurs), via Z-Wave JS UI.",
+  "systeme.pilotes.cover_groups.nom": "Groupes de stores",
+  "systeme.pilotes.cover_groups.desc": "Plusieurs stores commandés comme un seul, créés depuis Équipements.",
+  "systeme.journal.groupe_stores": "groupe de stores « {name} »"
 }

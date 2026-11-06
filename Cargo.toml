@@ -39,6 +39,7 @@ moli-assistant = { path = "crates/moli-assistant" }
 moli-automation = { path = "crates/moli-automation" }
 moli-helpers = { path = "crates/moli-helpers" }
 moli-lights = { path = "crates/moli-lights" }
+moli-covers = { path = "crates/moli-covers" }
 moli-presence = { path = "crates/moli-presence" }
 moli-rfxtrx = { path = "crates/moli-rfxtrx" }
 moli-zwave = { path = "crates/moli-zwave" }

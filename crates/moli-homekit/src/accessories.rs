@@ -2109,6 +2109,35 @@ mod tests {
     }
 
     #[test]
+    fn a_group_of_shutters_is_one_covering_that_keeps_its_aid() {
+        // What `moli-covers` publishes: a shutter's points, and a count.
+        let mut points = shutter_points();
+        points.push(point(
+            "unreachable",
+            Kind::Numeric {
+                min: Some(0.0),
+                max: None,
+                step: Some(1.0),
+            },
+            false,
+            Semantic::Other,
+        ));
+        let group = view("groupe", points);
+        assert_eq!(kinds_of(&group.device), [Kinds::Cover]);
+        let mut aids = Aids::default();
+        let c = Catalog::build("Moli", std::slice::from_ref(&group), |_| true, &mut aids);
+        assert_eq!(types(&c, 2), ["3E", "8C"]);
+        assert_eq!(c.accessories.len(), 2, "one accessory for the whole group");
+        // Another accessory comes along: the group keeps its aid, tied to
+        // its device id and not to its name or its place.
+        let aid = aids.assigned["test:groupe"];
+        let other = view("autre", shutter_points());
+        Catalog::build("Moli", &[other, group], |_| true, &mut aids);
+        assert_eq!(aids.assigned["test:groupe"], aid);
+        assert_ne!(aids.assigned["test:autre"], aid);
+    }
+
+    #[test]
     fn a_shutter_with_only_open_and_close_is_one_too() {
         let tuya = view(
             "rideau",

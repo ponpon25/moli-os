@@ -1,10 +1,11 @@
 <script>
   import { onMount, untrack } from 'svelte';
-  import { device, value, since, reachable, nameOf, act } from '../lib/home.svelte.js';
+  import { device, value, since, reachable, nameOf, act, isCoverGroup } from '../lib/home.svelte.js';
   import { skyNow } from '../lib/sky.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import ShutterSettings from './ShutterSettings.svelte';
+  import CoverGroupEditor from './CoverGroupEditor.svelte';
 
   /** A roller shutter: how open it is, large, and beside it the window as
    *  a tall pill, onto the sky as it is outside right now, the slats rolling
@@ -26,6 +27,9 @@
   // Its durations, for a shutter timed by the driver.
   const tunable = $derived(!!d?.points.find((p) => p.key === 'travel_up')?.access?.write);
   let tuning = $state(false);
+  // A group: its settings are its shutters. Some may be out of reach.
+  const grouped = $derived(isCoverGroup(d));
+  const missing = $derived(grouped ? Number(value(id, 'unreachable') ?? 0) : 0);
 
   // The sky behind the glass.
   const outside = $derived(skyNow());
@@ -166,7 +170,11 @@
 </script>
 
 {#if tuning}
-  <ShutterSettings {id} {label} onclose={() => (tuning = false)} />
+  {#if grouped}
+    <CoverGroupEditor {id} onclose={() => (tuning = false)} />
+  {:else}
+    <ShutterSettings {id} {label} onclose={() => (tuning = false)} />
+  {/if}
 {/if}
 
 <section
@@ -188,6 +196,9 @@
       {#if drag == null && target != null && Math.abs(target - (live ?? pos)) > 1}
         <span class="goal num"><Icon name="chevron-right" size={14} />{target} %</span>
       {/if}
+      {#if online && missing > 0}
+        <span class="goal">{t('commun.volet.groupe_injoignables', { count: missing })}</span>
+      {/if}
     </span>
   </div>
 
@@ -208,8 +219,9 @@
           <Icon name="chevron-down" size={22} />
         </button>
       {/if}
-      {#if tunable}
-        <button class="tune" aria-label={t('commun.volet.reglages')} title={t('commun.volet.reglages')} onclick={() => (tuning = true)}>
+      {#if tunable || grouped}
+        {@const words = t(grouped ? 'commun.volet.groupe_reglages' : 'commun.volet.reglages')}
+        <button class="tune" aria-label={words} title={words} onclick={() => (tuning = true)}>
           <Icon name="tune" size={18} />
         </button>
       {/if}

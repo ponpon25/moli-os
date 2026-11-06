@@ -1,10 +1,11 @@
 <script>
-  import { hub, roomList, roomOf, nameOf, deviceKind, hidden, reachable, roomNamed, home, driverName, isSmoke } from '../lib/home.svelte.js';
+  import { hub, roomList, roomOf, nameOf, deviceKind, hidden, reachable, roomNamed, home, driverName, isSmoke, isCoverGroup } from '../lib/home.svelte.js';
   import { layout, addRoom, setDeviceRoom, setDeviceName, isApart, setApart } from '../lib/layout.svelte.js';
   import { catalogue, showTile, available, deviceOnDashboard, showDevice } from '../lib/tiles.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
   import RfxPanel from '../ui/RfxPanel.svelte';
+  import CoverGroupEditor from '../ui/CoverGroupEditor.svelte';
   import { newAlert } from '../lib/auto.svelte.js';
 
   const KIND_ICON = {
@@ -83,6 +84,10 @@
   /** A 433 MHz transceiver: its pairing and settings are Moli's own panel. */
   const isRfx = (src) => hub.drivers?.find((x) => x.instance === src)?.kind === 'rfxtrx';
   let rfx = $state(null);
+  /** The groups of shutters, and the one being edited (`new`: a new one). */
+  const coverGroups = $derived(devices.filter((x) => isCoverGroup(x.d)));
+  const hasShutters = $derived(devices.some((x) => x.kind === 'cover' && !isCoverGroup(x.d)));
+  let editingGroup = $state(null);
   /** « Zigbee », not « z2m »: the catalog's name for where they come from. */
   const sourceName = (src) => {
     const driver = hub.drivers?.find((x) => x.instance === src);
@@ -204,6 +209,34 @@
   </details>
   {/if}
 
+  {#if (filter === 'all' || filter === 'climate') && !query && hasShutters}
+    <details class="group" open={!closed.has('cover-groups')} ontoggle={(e) => folded('cover-groups', e.currentTarget.open)}>
+      <summary>
+        <h2>
+          {t('maison.groupes_stores.titre')} <small>{coverGroups.length}</small>
+          <button class="web" onclick={(e) => { e.preventDefault(); editingGroup = 'new'; }}>{t('maison.groupes_stores.creer')}</button>
+        </h2>
+      </summary>
+      <ul>
+        {#each coverGroups as x (x.d.id)}
+          <li class:off={!reachable(x.d.id)}>
+            <span class="glyph"><Icon name="shutter" size={20} /></span>
+            <span class="who">
+              <b>{x.name}</b>
+              <small>{(x.d.members ?? []).map((m) => nameOf(m)).join(' · ')}</small>
+            </span>
+            <button type="button" class="edit" onclick={() => (editingGroup = x.d.id)}>{t('maison.groupes_stores.modifier_court')}</button>
+          </li>
+        {:else}
+          <li>
+            <span class="glyph"><Icon name="shutter" size={20} /></span>
+            <span class="who"><b>{t('maison.groupes_stores.vide')}</b><small>{t('maison.groupes_stores.vide_aide')}</small></span>
+          </li>
+        {/each}
+      </ul>
+    </details>
+  {/if}
+
   {#each groups as [src, list] (`${by}:${src}`)}
     <details class="group" open={query.trim() !== '' || !closed.has(`${by}:${src}`)} ontoggle={(e) => folded(`${by}:${src}`, e.currentTarget.open)}>
       <summary>
@@ -236,7 +269,7 @@
                 <b>{x.name}<button type="button" class="pen" title={t('maison.equipements.renommer', { name: x.name })} aria-label={t('maison.equipements.renommer', { name: x.name })} onclick={() => startRename(x)}>✎</button></b>
               {/if}
               <small>
-                {[x.d.manufacturer, x.d.model].filter(Boolean).join(' ') || x.d.id}
+                {isCoverGroup(x.d) ? t('maison.groupes_stores.modele') : [x.d.manufacturer, x.d.model].filter(Boolean).join(' ') || x.d.id}
                 {#if !reachable(x.d.id)} · {t('maison.equipements.hors_ligne')}{/if}
                 {#if hidden(x.d.id)} · {t('maison.equipements.masque')}{/if}
               </small>
@@ -293,6 +326,7 @@
   {/if}
 
   {#if rfx}<RfxPanel instance={rfx} onclose={() => (rfx = null)} />{/if}
+  {#if editingGroup}<CoverGroupEditor id={editingGroup === 'new' ? null : editingGroup} onclose={() => (editingGroup = null)} />{/if}
 
   <nav class="more" aria-label={t('maison.equipements.autres_vues')}>
     <span>{t('maison.equipements.autres_vues')}</span>
@@ -309,6 +343,8 @@
 <style>
   .equipements {
     display: grid;
+    /* A long line must not widen the page past a phone's screen. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 20px;
   }
 
@@ -438,6 +474,20 @@
 
   .group h2 .web:hover {
     text-decoration: underline;
+  }
+
+  .edit {
+    flex: none;
+    min-height: 34px;
+    padding: 6px 14px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 650;
+    cursor: pointer;
   }
 
   small {

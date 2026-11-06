@@ -71,7 +71,7 @@ Le hub l'appelle quand une surface demande une image : rien n'est récupéré po
 
 ```toml
 [[driver]]
-id = "enceinte"         # non vide, sans ':' ni '/', unique ; réservés : core, assistant, automations, lumieres, portes
+id = "enceinte"         # non vide, sans ':' ni '/', unique ; réservés : core, assistant, automations, lumieres, groupes-stores, portes
 kind = "sonos"          # z2m, zwave, hue, tuya, reolink, sonos, philips, frigate, bambu, tapo, wiz, igd, rfxtrx, helpers, profile
 # enabled = false       # désactive l'instance sans la supprimer
 
@@ -433,6 +433,26 @@ agent_sha256 = "<sha256 du jeton de l'agent : le jeton reste sur le PC>"
   `alarme_active`, `budget_elec_mensuel`, aux mêmes noms et valeurs que les `input_*` de HA
   qu'elles remplacent.
 
+## `groupes-stores` : groupes de stores (`crates/moli-covers`)
+
+Pilote interne, sans `[[driver]]` (l'id `groupes-stores` est réservé). Se règle depuis le dashboard : **Équipements → Groupes de stores** (créer, renommer, changer les stores, supprimer), ou le bouton de réglage de la tuile du groupe. Absent d'une maison de démonstration. Sans groupe, il ne s'abonne pas au bus : il ne coûte rien.
+
+Un groupe est un appareil `groupes-stores:g<n>` qui a les points d'un store : `control` ✎ (`open`, `stop`, `close`), `percent_control` ✎, `slats_open`, plus `unreachable` (combien de ses stores ne répondent pas). Le dashboard (`ShutterCard`), les automatismes, HomeKit et Alexa le reconnaissent donc comme un store, sans code particulier. Modèle : `CoverGroup`, jamais traduit.
+
+| Sujet | Règle |
+|---|---|
+| **Membres** | tout appareil de forme store (`percent_control`, ou `control` proposant `open`), de 1 à 32 ; un store peut être dans plusieurs groupes et reste visible et commandable seul ; pas de groupe dans un groupe. |
+| **Position affichée** | la moyenne, arrondie, des stores joignables dont la position est connue (un à 100 et un à 0 : 50). Personne ne la connaît : position inconnue. Personne n'est joignable : la dernière reste affichée, le groupe est hors ligne. |
+| **`slats_open`** | vrai si au moins un store joignable est ajouré. |
+| **Store injoignable** | il ne reçoit pas l'ordre (rien n'est gardé pour plus tard), sa dernière position ne compte plus dans la moyenne, la tuile dit « n injoignable(s) ». Le groupe reste en ligne tant qu'un store répond. |
+| **Ordres** | envoyés en même temps à tous les stores joignables (origine `system`, acteur « groupe … », un par un au journal avec leur résultat). Réponse : réussie dès qu'un store a obéi, sinon le premier refus (par exemple un pourcentage demandé à des stores dont la position est inconnue). Un store sans `percent_control` va au bout le plus proche, un store sans `stop` ignore l'arrêt. |
+| **Garde** | jugé sur les pièces de ses membres (`Device::members`) : un groupe contenant un store d'une pièce protégée demande le code, et l'éditeur le signale. |
+| **Écriture** | `/api/cover-groups`, réservée au foyer (les invités et les agents sont refusés) ; chaque changement est au journal (`cover_group`). Les agents lisent et commandent les groupes comme n'importe quel appareil, mais n'en créent pas. |
+| **Conservation** | `data/cover-groups.json`, dans les sauvegardes. Un fichier illisible est mis de côté (`.json.bad`) et jamais écrasé. |
+| **Identité** | le numéro d'un groupe n'est jamais réutilisé, même supprimé : un renommage garde l'appareil, donc son `aid` HomeKit et son nom côté Alexa, et un nouveau groupe n'hérite de rien. |
+
+Un groupe suit les mêmes choix d'exposition qu'un autre appareil. Alexa : exposé par défaut, à découvrir (« Alexa, découvre mes appareils »). HomeKit : selon la politique du pont, et réglable dans la carte HomeKit. Une pièce se donne depuis Équipements, comme pour tout appareil.
+
 ## `lumieres` : luminaires (`crates/moli-lights`, D12)
 
 Pilote interne, lancé par Moli dès que `moli.toml` déclare un `[[fixture]]` (pas de
@@ -675,3 +695,4 @@ ni pièce native). Il ne déplace jamais rien. Sans argument : plan à blanc ; `
 | `profile` | `moli-profile` | HTTP/HTTPS GET, Meross signé | oui si le profil déclare `[[write]]` (Daikin) | Daikin BRP069 (lecture), Meross EM06, Open-Meteo, Tempo, iopool EcO (voir [profils.md](profils.md#les-profils-du-catalogue)) |
 | `helpers` | `moli-helpers` | aucun (valeurs gardées par Moli) | oui | sans objet |
 | `lumieres` (interne) | `moli-lights` | aucun (lit et commande d'autres appareils via le hub) | oui | ampoules Hue derrière un relais |
+| `groupes-stores` (interne) | `moli-covers` | aucun (lit et commande d'autres appareils via le hub) | non (créés depuis le dashboard) | stores à impulsion |

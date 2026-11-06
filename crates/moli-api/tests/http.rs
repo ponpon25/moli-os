@@ -1269,3 +1269,114 @@ async fn the_dashboard_choices_are_kept_by_the_house() {
     assert_eq!(status, 403);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A shutter, for the groups to take.
+#[derive(Debug)]
+struct Shutter;
+
+impl Driver for Shutter {
+    fn kind(&self) -> &'static str {
+        "fake"
+    }
+
+    fn run<'a>(&'a self, ctx: &'a mut DriverCtx) -> BoxFuture<'a, anyhow::Result<()>> {
+        Box::pin(async move {
+            ctx.upsert_device(Device {
+                id: ctx.device_id("volet"),
+                instance: ctx.instance().clone(),
+                native_name: "Volet".into(),
+                manufacturer: None,
+                model: None,
+                description: None,
+                native_room: None,
+                members: Vec::new(),
+                points: vec![PointSpec {
+                    key: "percent_control".into(),
+                    label: "Ouverture".into(),
+                    kind: Kind::Numeric {
+                        min: Some(0.0),
+                        max: Some(100.0),
+                        step: Some(1.0),
+                    },
+                    access: Access {
+                        read: true,
+                        write: true,
+                    },
+                    unit: None,
+                    semantic: Semantic::Other,
+                }],
+            });
+            ctx.ready();
+            while let Some(command) = ctx.next_command().await {
+                command.reply(Ok(()));
+            }
+            Ok(())
+        })
+    }
+}
+
+/// The household makes groups of shutters; anyone else only reads them.
+#[tokio::test]
+async fn the_household_makes_and_changes_shutter_groups() {
+    let hub = Hub::new(HubOptions::default()).unwrap();
+    spawn_driver(
+        &hub,
+        InstanceId::from("fake"),
+        Arc::new(Shutter),
+        CancellationToken::new(),
+    );
+    while hub.device(&"fake:volet".into()).is_none() {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let options = moli_api::Options {
+        cover_groups: Some(moli_covers::Groups::open(hub.clone(), None)),
+        ..moli_api::Options::default()
+    };
+    let addr = serve(&hub, &options).await;
+    let body = json!({ "name": "Pièce de vie", "members": ["fake:volet"] });
+
+    let (status, answer) = request(&addr, "POST", "/api/cover-groups", Some(&body)).await;
+    assert_eq!(status, 201, "{answer}");
+    let group: Json = serde_json::from_str(&answer).unwrap();
+    assert_eq!(group["id"], "g1");
+    assert_eq!(group["device"], "groupes-stores:g1");
+
+    let renamed = json!({ "name": "Séjour", "members": ["fake:volet"] });
+    let (status, answer) = request(&addr, "PUT", "/api/cover-groups/g1", Some(&renamed)).await;
+    assert_eq!(status, 200, "{answer}");
+    let (_, answer) = request(&addr, "GET", "/api/cover-groups", None).await;
+    let groups: Json = serde_json::from_str(&answer).unwrap();
+    assert_eq!(groups["groups"][0]["name"], "Séjour");
+
+    let wrong = json!({ "name": "Rien", "members": ["fake:absent"] });
+    let (status, _) = request(&addr, "POST", "/api/cover-groups", Some(&wrong)).await;
+    assert_eq!(status, 422);
+    let (status, _) = request(&addr, "PUT", "/api/cover-groups/g9", Some(&renamed)).await;
+    assert_eq!(status, 404);
+
+    let (status, _) = request(&addr, "DELETE", "/api/cover-groups/g1", None).await;
+    assert_eq!(status, 200);
+    let (status, _) = request(&addr, "DELETE", "/api/cover-groups/g1", None).await;
+    assert_eq!(status, 404);
+
+    let journal: Vec<&str> = hub
+        .journal(10)
+        .iter()
+        .filter_map(|e| match &e.action {
+            moli_core::Action::CoverGroup { change, .. } => Some(match change {
+                moli_core::CoverGroupChange::Created => "created",
+                moli_core::CoverGroupChange::Updated => "updated",
+                moli_core::CoverGroupChange::Deleted => "deleted",
+            }),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(journal.len(), 3, "every change is journaled");
+
+    // No groups at all in this house (a demo): nothing to read, none to make.
+    let (bare, _) = server().await;
+    let (status, answer) = request(&bare, "GET", "/api/cover-groups", None).await;
+    assert_eq!((status, answer.as_str()), (200, r#"{"groups":[]}"#));
+    let (status, _) = request(&bare, "POST", "/api/cover-groups", Some(&body)).await;
+    assert_eq!(status, 503);
+}

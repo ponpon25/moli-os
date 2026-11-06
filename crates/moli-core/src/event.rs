@@ -165,6 +165,22 @@ pub enum Action {
         from: String,
         to: String,
     },
+    /// A group of shutters made, changed or deleted: which shutters answer
+    /// to its orders from then on.
+    CoverGroup {
+        id: String,
+        name: String,
+        change: CoverGroupChange,
+        members: Vec<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverGroupChange {
+    Created,
+    Updated,
+    Deleted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

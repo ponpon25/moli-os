@@ -1144,6 +1144,7 @@ dependencies = [
  "moli-assistant",
  "moli-automation",
  "moli-core",
+ "moli-covers",
  "moli-energy",
  "moli-history",
  "moli-homekit",
@@ -1246,6 +1247,22 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "moli-covers"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "moli-core",
+ "moli-i18n",
+ "moli-runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -1585,6 +1602,7 @@ dependencies = [
  "moli-automation",
  "moli-bambu",
  "moli-core",
+ "moli-covers",
  "moli-demo",
  "moli-energy",
  "moli-esphome",

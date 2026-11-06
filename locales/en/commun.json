@@ -356,5 +356,7 @@
   "commun.borne.duree_min": "{m} min",
   "commun.borne.depuis": "since {time}",
   "commun.borne.de_a": "{from} → {to}",
-  "commun.borne.km": "≈ {km} km"
+  "commun.borne.km": "≈ {km} km",
+  "commun.volet.groupe_reglages": "Edit the group",
+  "commun.volet.groupe_injoignables": "{count} out of reach"
 }

@@ -20,6 +20,7 @@ mod assets;
 mod assistant;
 mod automations;
 mod caller;
+mod cover_groups;
 mod guard;
 mod homekit;
 mod integrations;
@@ -140,6 +141,8 @@ pub struct Options {
     pub alexa: Option<AlexaConfig>,
     /// Where Netatmo's pushes land, when a `netatmo` driver runs.
     pub netatmo: Option<moli_netatmo::Hook>,
+    /// The groups of shutters (`moli-covers`).
+    pub cover_groups: Option<moli_covers::Groups>,
 }
 
 /// Builds the complete HTTP application. Live streams end when `shutdown`
@@ -213,6 +216,17 @@ fn house_routes(humans: &Arc<session::Sessions>, options: &Options) -> Router<Hu
         )
         .route("/api/integrations/alexa", get(alexa_home::settings))
         .route("/api/integrations/alexa/{id}", put(alexa_home::choose))
+        .route(
+            "/api/cover-groups",
+            get(cover_groups::list).post(cover_groups::create),
+        )
+        .route(
+            "/api/cover-groups/{id}",
+            put(cover_groups::update).delete(cover_groups::remove),
+        )
+        .layer(Extension(cover_groups::CoverGroupsGate(
+            options.cover_groups.clone(),
+        )))
         .route("/api/homekit", get(homekit::status))
         .route("/api/homekit/policy", put(homekit::set_policy))
         .route("/api/homekit/devices/{id}", put(homekit::set_device))

@@ -347,6 +347,7 @@ impl Config {
                 "automations",
                 moli_energy::points::INSTANCE,
                 moli_lights::INSTANCE,
+                moli_covers::INSTANCE,
                 moli_garage::INSTANCE,
                 moli_api::PEOPLE_INSTANCE,
             ]

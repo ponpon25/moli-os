@@ -145,7 +145,7 @@ export const leak = (id) => value(id, 'water_leak') === true || value(id, 'water
 
 // Driver kinds: their name and description are in the catalog
 // (systeme.pilotes.<kind>.nom / .desc); a kind not listed shows as it is.
-const KINDS = ['z2m', 'zwave', 'hue', 'tuya', 'reolink', 'sonos', 'helpers', 'philips', 'frigate', 'bambu', 'tapo', 'igd', 'presence', 'rfxtrx', 'telegram', 'phones', 'profile'];
+const KINDS = ['z2m', 'zwave', 'hue', 'tuya', 'reolink', 'sonos', 'helpers', 'philips', 'frigate', 'bambu', 'tapo', 'igd', 'presence', 'rfxtrx', 'telegram', 'phones', 'profile', 'cover_groups'];
 export const kindWord = (kind, part) => (KINDS.includes(kind) ? t(`systeme.pilotes.${kind}.${part}`) : null);
 export const driverName = (d) => (d.kind === 'profile' ? d.instance.charAt(0).toUpperCase() + d.instance.slice(1) : (kindWord(d.kind, 'nom') ?? d.kind));
 
@@ -234,6 +234,10 @@ export function isOn(id, point = null) {
 export const isFixture = (d) => d?.model === 'Luminaire';
 /** A Hue room or zone: « toute la pièce », not a lamp. */
 export const isGroup = (d) => d?.model === 'room' || d?.model === 'zone';
+
+/** A group of shutters the family made: a shutter to everyone, and to the
+ *  dashboard one more thing, that it can be edited. */
+export const isCoverGroup = (d) => d?.model === 'CoverGroup';
 
 /** The fixture a device belongs to (its bulbs, its relay), if any. */
 export function fixtureOf(id) {

@@ -160,5 +160,7 @@
   "serveur.personnes.point_depuis": "Dans cette zone depuis",
   "serveur.personnes.point_nombre": "Personnes à la maison",
   "serveur.personnes.point_quelquun": "Quelqu'un à la maison",
-  "serveur.personnes.point_tous_partis": "Tout le monde est parti"
+  "serveur.personnes.point_tous_partis": "Tout le monde est parti",
+  "serveur.groupes_stores.absent": "Les groupes de stores ne sont pas disponibles sur cette installation",
+  "serveur.groupes_stores.foyer": "seul le foyer crée et modifie les groupes de stores"
 }

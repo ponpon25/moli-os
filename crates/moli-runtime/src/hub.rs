@@ -877,6 +877,30 @@ impl Hub {
         );
     }
 
+    /// Journals a change to a group of shutters (`moli-covers`).
+    pub fn record_cover_group(
+        &self,
+        origin: Origin,
+        actor: Option<String>,
+        id: &str,
+        name: &str,
+        change: moli_core::CoverGroupChange,
+        members: Vec<String>,
+    ) {
+        self.record(
+            origin,
+            actor,
+            Action::CoverGroup {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                change,
+                members,
+            },
+            Outcome::Ok,
+            Instant::now(),
+        );
+    }
+
     /// Where `instance` last reached its device.
     #[must_use]
     pub fn known_address(&self, instance: &InstanceId) -> Option<KnownAddress> {

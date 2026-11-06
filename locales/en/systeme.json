@@ -455,5 +455,8 @@
   "systeme.pilotes.rfxtrx.nom": "433 MHz",
   "systeme.pilotes.rfxtrx.desc": "Wireless 433 MHz temperature sensors, through the RFXtrx transceiver.",
   "systeme.pilotes.zwave.nom": "Z-Wave",
-  "systeme.pilotes.zwave.desc": "Z-Wave modules (relays, sensors), through Z-Wave JS UI."
+  "systeme.pilotes.zwave.desc": "Z-Wave modules (relays, sensors), through Z-Wave JS UI.",
+  "systeme.pilotes.cover_groups.nom": "Shutter groups",
+  "systeme.pilotes.cover_groups.desc": "Several shutters commanded as one, made from Equipment.",
+  "systeme.journal.groupe_stores": "shutter group “{name}”"
 }

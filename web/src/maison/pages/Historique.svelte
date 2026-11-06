@@ -68,6 +68,9 @@
         what: t('systeme.journal.demande', { request: a.request, verdict: word(VERDICT, 'verdict', a.decision) }),
       };
     }
+    if (a.kind === 'cover_group') {
+      return { type: 'reglage', icon: 'shutter', target: t('systeme.journal.groupe_stores', { name: a.name }), what: word(CHANGE, 'changement', a.change) };
+    }
     if (a.kind === 'address') {
       return { type: 'reglage', icon: 'info', target: a.device ? named(a.device) : a.instance, what: t('systeme.journal.adresse', { from: a.from, to: a.to }) };
     }

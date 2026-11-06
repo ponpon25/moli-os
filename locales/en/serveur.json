@@ -160,5 +160,7 @@
   "serveur.personnes.point_depuis": "In this zone since",
   "serveur.personnes.point_nombre": "People at home",
   "serveur.personnes.point_quelquun": "Someone at home",
-  "serveur.personnes.point_tous_partis": "Everyone has left"
+  "serveur.personnes.point_tous_partis": "Everyone has left",
+  "serveur.groupes_stores.absent": "Shutter groups are not available on this installation",
+  "serveur.groupes_stores.foyer": "only the household makes and changes shutter groups"
 }

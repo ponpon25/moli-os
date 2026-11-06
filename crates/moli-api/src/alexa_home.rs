@@ -1319,6 +1319,34 @@ mod tests {
     }
 
     #[test]
+    fn a_group_of_shutters_is_one_blind() {
+        let unreachable = spec(
+            "unreachable",
+            Kind::Numeric {
+                min: Some(0.0),
+                max: None,
+                step: Some(1.0),
+            },
+            true,
+            false,
+        );
+        let views = [shutter(
+            vec![
+                control(&["open", "stop", "close"]),
+                percent_control(),
+                spec("slats_open", Kind::Binary, true, false),
+                unreachable,
+            ],
+            Some(50),
+        )];
+        let all = endpoints(&views, |_| true);
+        let [e] = all.as_slice() else {
+            panic!("one endpoint")
+        };
+        assert_eq!(e.category, "EXTERIOR_BLIND");
+    }
+
+    #[test]
     fn a_shutter_with_only_open_and_close_is_one_too() {
         let views = [shutter(vec![control(&["open", "close"])], None)];
         let all = endpoints(&views, |_| true);

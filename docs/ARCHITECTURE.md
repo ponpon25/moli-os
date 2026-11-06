@@ -77,6 +77,7 @@ La carte vivante de ce schéma est dans le dashboard : `#/systeme` (« Comment �
 | `moli-energy` | kWh et € par heure, Linky + circuits, import HA | [historique & énergie](components/historique-energie.md) |
 | `moli-automation` | automatismes en graphe, moteur déterministe, validation humaine | [automatismes](components/automatismes.md) |
 | `moli-helpers` | aides de la maison (mode, alarme, budget), comme les `input_*` de HA | [pilotes](components/pilotes.md) |
+| `moli-covers` | groupes de stores créés depuis le dashboard, vus et commandés comme un seul store | [pilotes](components/pilotes.md) |
 | `moli-assistant` | Moli : conversation, création d'automatismes, import HA, textes | [moli](components/moli.md) |
 | `moli-homekit` | surface : pont HomeKit (HAP sur IP), appareils choisis un par un ; ordres en origine `api` | [homekit](components/homekit.md) |
 | `moli-rtsp` | surface : caméras choisies resservies en RTSP (H.264 relayé, entrelacé sur TCP), mot de passe Digest, garde | [rtsp](components/rtsp.md) |

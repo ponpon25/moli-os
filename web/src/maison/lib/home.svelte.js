@@ -32,6 +32,7 @@ function readPref(key, fallback) {
  *  the same (the rest stays on the device). */
 const SHARED = [
   'maison-dashboard',
+  'maison-stores',
   'maison-dashboard-off',
   'maison-dashboard-on',
   'maison-dashboard-apart',

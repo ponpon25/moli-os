@@ -375,6 +375,9 @@
   "maison.groupes_stores.vide_aide": "Réunissez plusieurs stores pour les commander d'un coup.",
   "maison.groupes_stores.modele": "Groupe de stores",
   "maison.stores.titre": "Stores",
-  "maison.stores.sous_titre": "Tous les stores de la maison ({count}), pièce par pièce.",
-  "maison.stores.aucun": "Aucun store pour l'instant."
+  "maison.stores.sous_titre": "Tous les stores de la maison ({count}).",
+  "maison.stores.aucun": "Aucun store pour l'instant.",
+  "maison.stores.aide": "Déplacez une tuile par sa barre, agrandissez-la par son coin, l'œil la masque. Rien de ce que vous faites ici ne commande les stores.",
+  "maison.stores.masques": "Masqués :",
+  "maison.stores.afficher": "Afficher {name}"
 }

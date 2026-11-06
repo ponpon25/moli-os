@@ -375,6 +375,9 @@
   "maison.groupes_stores.vide_aide": "Bring several shutters together to command them at once.",
   "maison.groupes_stores.modele": "Shutter group",
   "maison.stores.titre": "Shutters",
-  "maison.stores.sous_titre": "All the shutters of the house ({count}), room by room.",
-  "maison.stores.aucun": "No shutter yet."
+  "maison.stores.sous_titre": "All the shutters of the house ({count}).",
+  "maison.stores.aucun": "No shutter yet.",
+  "maison.stores.aide": "Move a tile by its bar, resize it by its corner, the eye hides it. Nothing you do here commands the shutters.",
+  "maison.stores.masques": "Hidden:",
+  "maison.stores.afficher": "Show {name}"
 }

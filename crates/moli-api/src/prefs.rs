@@ -19,8 +19,9 @@ use crate::caller::Caller;
 pub(crate) struct PrefsFile(pub(crate) Option<PathBuf>);
 
 /// The keys the dashboard shares across devices.
-const KEYS: [&str; 6] = [
+const KEYS: [&str; 7] = [
     "maison-dashboard",
+    "maison-stores",
     "maison-dashboard-off",
     "maison-dashboard-on",
     "maison-dashboard-apart",
@@ -136,6 +137,7 @@ mod tests {
     #[test]
     fn only_the_dashboards_keys_are_shared() {
         assert!(KEYS.contains(&"maison-dashboard"));
+        assert!(KEYS.contains(&"maison-stores"));
         assert!(!KEYS.contains(&"maison-theme"));
         assert!(!KEYS.contains(&"../settings"));
     }

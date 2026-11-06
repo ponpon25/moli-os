@@ -167,6 +167,26 @@ export function resetDashboard() {
   keep('maison-dashboard', dash.tiles);
 }
 
+// ---- the Shutters page's tiles ---------------------------------------------------
+
+/** Arranged like the dashboard, on its own. */
+export const storesBoard = $state({ tiles: read('maison-stores', {}) });
+
+export const STORES = {
+  set(id, patch, save = true) {
+    storesBoard.tiles = { ...storesBoard.tiles, [id]: { ...(storesBoard.tiles[id] ?? {}), ...patch } };
+    if (save) keep('maison-stores', storesBoard.tiles);
+  },
+  save() {
+    keep('maison-stores', storesBoard.tiles);
+  },
+};
+
+export function resetStores() {
+  storesBoard.tiles = {};
+  keep('maison-stores', storesBoard.tiles);
+}
+
 // ---- what the house kept ---------------------------------------------------------
 
 const list = (v) => (Array.isArray(v) ? v : null);
@@ -180,4 +200,6 @@ onPrefs((kept) => {
   apart.ids = list(kept['maison-dashboard-apart']) ?? apart.ids;
   const tiles = kept['maison-dashboard'];
   if (tiles && typeof tiles === 'object' && !Array.isArray(tiles)) dash.tiles = tiles;
+  const stores = kept['maison-stores'];
+  if (stores && typeof stores === 'object' && !Array.isArray(stores)) storesBoard.tiles = stores;
 });

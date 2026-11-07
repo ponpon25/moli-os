@@ -68,7 +68,7 @@
   "maison.accueil.dernier_passage": "Last seen {when}",
   "maison.accueil.personne": "No one for two days",
   "maison.accueil.telecommande": "Remote",
-  "maison.accueil.tele_allumee": "The TV is on",
+  "maison.accueil.tele_allumee": "On",
   "maison.accueil.tele_veille": "The TV is on standby",
   "maison.accueil.son_joue": "sound is playing",
   "maison.accueil.dehors": "Outside",
@@ -459,5 +459,8 @@
   "maison.theme.classique_desc": "Tiles and the left menu, day or night.",
   "maison.theme.ciel": "Sky",
   "maison.theme.ciel_desc": "What matters first, over the sky of the house.",
-  "maison.perso.aide_ordre": "Drag an item to move it (on a phone, by its handle)."
+  "maison.perso.aide_ordre": "Drag an item to move it (on a phone, by its handle).",
+  "maison.accueil.usage.tv": "TV",
+  "maison.accueil.tele_lecture": "Playing",
+  "maison.accueil.tele_eteinte": "Off"
 }

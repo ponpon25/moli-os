@@ -15,6 +15,7 @@
   import Personalize from '../ui/Personalize.svelte';
   import HomeCover from '../ui/HomeCover.svelte';
   import Orb from '../moli/Orb.svelte';
+  import { appleTv } from '../lib/appletv.svelte.js';
 
   let { onask } = $props();
 
@@ -39,6 +40,18 @@
     if (lights().length) list.push({ key: 'lights', icon: 'light', value: lit ? t('maison.accueil.lumieres_allumees', { count: lit }) : t('maison.accueil.rien_allume'), active: lit > 0 });
     if (covers().length) list.push({ key: 'covers', icon: 'shutter', value: coversWord(), active: covers().some((d) => coverOf(d).open) });
     if (clims().length || inside != null) list.push({ key: 'climate', icon: 'air-conditioner', value: inside != null ? t('maison.accueil.dedans', { v: num(inside, 1) }) : t('maison.accueil.usage.climate'), sub: clims().length ? (climOn ? t('maison.accueil.clims_marche', { count: climOn }) : t('maison.accueil.clims_eteintes')) : null, active: climOn > 0 });
+    const atv = appleTv();
+    if (atv) {
+      const on = value(atv.id, 'power') === true;
+      const state = value(atv.id, 'media_state');
+      list.push({
+        key: 'tv',
+        icon: 'tv',
+        value: on ? (state === 'playing' ? t('maison.accueil.tele_lecture') : t('maison.accueil.tele_allumee')) : t('maison.accueil.tele_eteinte'),
+        sub: on ? value(atv.id, 'audio_output') : null,
+        active: on,
+      });
+    }
     if (speakers().length) list.push({ key: 'music', icon: 'speaker', value: playing.length ? playing.map((d) => nameOf(d.id)).join(', ') : t('maison.accueil.silence'), sub: playing.length ? value(playing[0].id, 'title') : null, active: playing.length > 0 });
     const alarm = alarms()[0];
     const garage = garages()[0];

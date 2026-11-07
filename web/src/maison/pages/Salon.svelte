@@ -9,10 +9,27 @@
   import LightTile from '../ui/LightTile.svelte';
   import SpeakerCard from '../ui/SpeakerCard.svelte';
   import AmbiancePicker from '../ui/AmbiancePicker.svelte';
+  import CanalChannels from '../ui/CanalChannels.svelte';
+  import TvSound from '../ui/TvSound.svelte';
+  import { appleTv, APPLE_APPS, soundSpeaker } from '../lib/appletv.svelte.js';
 
   const s = $derived(home.config?.salon ?? {});
+  // An Apple TV, when there is one: everything is watched through it, the
+  // TV only shows it (it follows by HDMI-CEC).
+  const atv = $derived(appleTv()?.id ?? null);
   // The one the layout names, else the one there is.
-  const tv = $derived(s.tv ?? Object.values(hub.devices).find((d) => deviceKind(d) === 'tv')?.id);
+  const tv = $derived(s.tv ?? Object.values(hub.devices).find((d) => deviceKind(d) === 'tv' && d.id !== atv)?.id);
+  const remote = $derived(atv ?? tv);
+  // The Sonos playing the Apple TV over AirPlay: its volume is the one heard.
+  const atvSpeaker = $derived(atv ? soundSpeaker(atv) : null);
+  const atvOn = $derived(atv ? value(atv, 'power') === true : false);
+  const atvState = $derived(atv ? value(atv, 'media_state') : null);
+  let atvBusy = $state(null);
+  async function openApple(app) {
+    atvBusy = app.id;
+    await act(`${atv}/app`, app.id, t('salon.ouvrir', { app: app.name }));
+    atvBusy = null;
+  }
   const sp = $derived(s.speaker);
   // Without a layout: the lights and speakers of the room the TV is in.
   const tvRoom = $derived(tv ? roomOf(hub.devices[tv]) : null);
@@ -82,10 +99,24 @@
 
   <div class="layout">
     <div class="remote-col">
-      {#if tv}<Remote {tv} />{/if}
+      {#if atv}<Remote tv={atv} speaker={atvSpeaker} follow />{:else if tv}<Remote {tv} />{/if}
     </div>
 
     <div class="now-col">
+      {#if atv}
+        <section class="card now" class:lit={atvOn}>
+          <span class="eyebrow">{t('salon.atv.apple_tv')}</span>
+          <h2>{atvOn ? (atvState === 'playing' ? t('salon.atv.lecture_en_cours') : atvState === 'paused' ? t('salon.en_pause') : t('salon.tele_allumee')) : reachable(atv) ? t('salon.soiree') : t('salon.veille')}</h2>
+          <p class="muted">{atvOn ? t('salon.atv.aide_allumee') : t('salon.atv.aide_eteinte')}</p>
+          <div class="apps" role="group" aria-label={t('salon.ouvrir_une_appli')}>
+            {#each APPLE_APPS as a (a.id)}
+              <button disabled={!reachable(atv) || atvBusy != null} onclick={() => openApple(a)}>{a.name}</button>
+            {/each}
+          </div>
+        </section>
+        <CanalChannels id={atv} />
+        <TvSound id={atv} />
+      {:else}
       <section class="card now" class:lit={tvOn}>
         {#if tvOn && title}
           <div class="playing">
@@ -114,6 +145,7 @@
           {/each}
         </div>
       </section>
+      {/if}
 
       {#if sp}<SpeakerCard id={sp} name={nameOf(sp, t('salon.barre_de_son'))} />{/if}
 

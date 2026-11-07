@@ -119,6 +119,8 @@ pub struct Channel {
     /// Accessory → controller.
     write: [u8; 32],
     write_counter: u64,
+    /// The largest frame accepted: HAP's 1024, AirPlay sends larger ones.
+    max_read: usize,
 }
 
 pub const MAX_FRAME: usize = 1024;
@@ -128,9 +130,28 @@ impl Channel {
         Self {
             read: hkdf32(shared, "Control-Salt", "Control-Write-Encryption-Key"),
             read_counter: 0,
+            max_read: MAX_FRAME,
             write: hkdf32(shared, "Control-Salt", "Control-Read-Encryption-Key"),
             write_counter: 0,
         }
+    }
+
+    /// A channel with keys of its own (AirPlay's event and data streams).
+    pub fn from_keys(read: [u8; 32], write: [u8; 32]) -> Self {
+        Self {
+            read,
+            read_counter: 0,
+            max_read: MAX_FRAME,
+            write,
+            write_counter: 0,
+        }
+    }
+
+    /// Accepts frames up to 64 KiB, as AirPlay sends them.
+    #[must_use]
+    pub fn lenient(mut self) -> Self {
+        self.max_read = usize::from(u16::MAX);
+        self
     }
 
     /// The controller's side of the same session (Moli as a controller).
@@ -139,6 +160,7 @@ impl Channel {
         Self {
             read: accessory.write,
             read_counter: 0,
+            max_read: MAX_FRAME,
             write: accessory.read,
             write_counter: 0,
         }
@@ -163,12 +185,13 @@ impl Channel {
 
     /// Decrypts the complete frames at the start of `buffer`, removing them;
     /// a partial frame stays. `Err` when a frame does not authenticate.
+    #[allow(clippy::result_unit_err)]
     pub fn decrypt(&mut self, buffer: &mut Vec<u8>) -> Result<Vec<u8>, ()> {
         let mut plain = Vec::new();
         let mut used = 0;
         while buffer.len() - used >= 2 {
             let len = usize::from(u16::from_le_bytes([buffer[used], buffer[used + 1]]));
-            if len > MAX_FRAME {
+            if len > self.max_read {
                 return Err(());
             }
             let end = used + 2 + len + TAG;
@@ -235,6 +258,7 @@ mod tests {
         let mut controller = Channel {
             read: accessory.write,
             read_counter: 0,
+            max_read: MAX_FRAME,
             write: accessory.read,
             write_counter: 0,
         };

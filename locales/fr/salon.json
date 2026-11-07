@@ -28,13 +28,11 @@
   "salon.volume": "Volume",
   "salon.sourdine": "Sourdine",
   "salon.couper_son": "Couper le son",
-
   "salon.enceinte.lecture": "Lecture",
   "salon.enceinte.en_pause": "En pause",
   "salon.enceinte.arret": "À l’arrêt",
   "salon.enceinte.son_tele": "Le son de la télé",
   "salon.enceinte.rien": "Rien en cours",
-
   "salon.tele.label": "Télécommande",
   "salon.tele.eteindre": "Éteindre la TV",
   "salon.tele.allumer": "Allumer la TV",
@@ -72,7 +70,6 @@
   "salon.tele.veille_profonde": "En veille profonde : le bouton la réveille",
   "salon.tele.allumee": "Télévision allumée",
   "salon.tele.en_veille": "Télévision en veille",
-
   "salon.cameras.titre": "Caméras",
   "salon.cameras.sous_titre": "Ce qui se passe autour de la maison. Touche une image pour l’agrandir.",
   "salon.cameras.protegee": "Pièce protégée : visible par toi seul",
@@ -80,14 +77,12 @@
   "salon.cameras.camera": "Caméra {nom}",
   "salon.cameras.aujourdhui": "Aujourd’hui",
   "salon.cameras.rien": "Rien de signalé depuis 24 h.",
-
   "salon.evenement.sonnette": "On a sonné",
   "salon.evenement.personne": "Personne",
   "salon.evenement.vehicule": "Véhicule",
   "salon.evenement.animal": "Animal",
   "salon.evenement.colis": "Colis",
   "salon.evenement.mouvement": "Mouvement",
-
   "salon.camera.agrandir": "{nom} : agrandir",
   "salon.camera.actualiser": "{nom} : actualiser",
   "salon.camera.image": "Image de la caméra {nom}",
@@ -95,7 +90,6 @@
   "salon.camera.chargement": "Chargement…",
   "salon.camera.batterie": "Batterie",
   "salon.camera.toucher_voir": "touche pour voir",
-
   "salon.securite.titre": "Sécurité",
   "salon.securite.depuis": "depuis {heure}",
   "salon.securite.introuvable": "appareil introuvable",
@@ -120,7 +114,6 @@
   "salon.securite.detecteur_muet": "muet ({raison})",
   "salon.securite.mouvement_etat": "mouvement",
   "salon.securite.calme": "calme",
-
   "salon.impression.titre": "Impression",
   "salon.impression.sous_titre": "Les imprimantes 3D, où en est l’impression et la main dessus (seul un humain met en pause ou annule), et l’imprimante papier.",
   "salon.impression.aucune": "Aucune imprimante connue de Moli.",
@@ -154,7 +147,6 @@
   "salon.impression.totaux_one": "{prints} impression · {heures} h d’impression",
   "salon.impression.totaux_other": "{prints} impressions · {heures} h d’impression",
   "salon.impression.km_filament": "{km} km de filament",
-
   "salon.papier.imprimante": "Imprimante",
   "salon.papier.prete": "Prête",
   "salon.papier.act_clignoter": "{nom} : faire clignoter",
@@ -190,5 +182,17 @@
   "salon.papier.partiel_other": "{count} pages envoyées sur {total}, la suite non : {message}",
   "salon.papier.page_impossible": "page impossible à préparer",
   "salon.papier.choisir": "Choisis une photo ou un PDF.",
-  "salon.papier.erreur": "erreur {status}"
+  "salon.papier.erreur": "erreur {status}",
+  "salon.atv.apple_tv": "Apple TV",
+  "salon.atv.lecture_en_cours": "Lecture en cours",
+  "salon.atv.aide_allumee": "La télé suit l'Apple TV. Navigue avec la télécommande, ou choisis une chaîne.",
+  "salon.atv.aide_eteinte": "Une chaîne ou une appli allume tout : l'Apple TV réveille la télé.",
+  "salon.atv.chaines_canal": "Chaînes CANAL+",
+  "salon.atv.en_route": "{chaine} arrive…",
+  "salon.atv.autres_chaines": "Autres chaînes",
+  "salon.atv.choisir": "Choisir…",
+  "salon.atv.chaine": "CANAL+ : {chaine}",
+  "salon.atv.son": "Son de la télé",
+  "salon.atv.joue_ici": "le son passe ici",
+  "salon.atv.son_inconnu": "Sorties pas encore connues (session AirPlay en cours d'ouverture)."
 }

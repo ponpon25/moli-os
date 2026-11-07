@@ -19,6 +19,9 @@
   import EnergyCard from './EnergyCard.svelte';
   import GarageCard from './GarageCard.svelte';
   import Routines from './Routines.svelte';
+  import CanalChannels from './CanalChannels.svelte';
+  import TvSound from './TvSound.svelte';
+  import { appleTv, APPLE_APPS } from '../lib/appletv.svelte.js';
 
   let { panel, onclose } = $props();
 
@@ -37,7 +40,11 @@
     return [...map.entries()].sort((a, b) => !a[0] - !b[0] || a[0].localeCompare(b[0]));
   }
 
-  const LINKS = { lights: 'pieces', covers: 'stores', music: 'enceintes', security: 'cameras', energy: 'energie' };
+  const LINKS = { tv: 'salon', lights: 'pieces', covers: 'stores', music: 'enceintes', security: 'cameras', energy: 'energie' };
+
+  // The TV, through the Apple TV: on or off, a channel, an app, the sound.
+  const atv = $derived(appleTv()?.id ?? null);
+  const atvOn = $derived(atv ? value(atv, 'power') === true : false);
   const link = $derived(LINKS[panel]);
 
   // The house's mode (a helper, « Mode Maison ») and the speakers that talk:
@@ -97,6 +104,17 @@
     <div class="cards">
       {#each clims() as d (d.id)}<ClimateCard id={d.id} name={nameOf(d.id)} />{/each}
     </div>
+  {:else if panel === 'tv' && atv}
+    <button class="wide" class:on={atvOn} aria-pressed={atvOn} onclick={() => act(`${atv}/power`, !atvOn, atvOn ? t('salon.tele.eteindre') : t('salon.tele.allumer'))}>
+      <Icon name="power" size={18} />{atvOn ? t('salon.tele.eteindre_television') : t('salon.tele.allumer_television')}
+    </button>
+    <CanalChannels id={atv} compact />
+    <div class="apps" role="group" aria-label={t('salon.ouvrir_une_appli')}>
+      {#each APPLE_APPS as a (a.id)}
+        <button onclick={() => act(`${atv}/app`, a.id, t('salon.ouvrir', { app: a.name }))}>{a.name}</button>
+      {/each}
+    </div>
+    <TvSound id={atv} />
   {:else if panel === 'music'}
     {#if talkers.length}
       <button class="wide hush" class:on={hushed} aria-pressed={hushed} title={hushed ? t('maison.accueil.sonos_reparle') : t('maison.accueil.sonos_coupe')} onclick={toggleHush}>
@@ -138,6 +156,24 @@
 </aside>
 
 <style>
+  .apps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .apps button {
+    border: 0;
+    border-radius: 999px;
+    padding: 8px 14px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 650;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
   .panel {
     position: fixed;
     z-index: 31;

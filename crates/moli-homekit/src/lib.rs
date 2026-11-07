@@ -55,7 +55,7 @@ mod tests;
 /// (the Apple TV's Companion protocol).
 pub mod pairing {
     pub use crate::controller::{Error, Identity, Pairing, SetupProof, Verify};
-    pub use crate::crypto::{counter_nonce, hkdf32, open_nonce, seal_nonce};
+    pub use crate::crypto::{Channel, counter_nonce, hkdf32, open_nonce, seal_nonce};
 }
 
 use std::collections::HashMap;

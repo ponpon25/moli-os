@@ -718,5 +718,11 @@
   "pilotes.appletv.touche_inconnue": "touche inconnue : {key}",
   "pilotes.appletv.lecture_mots": "play, pause, next ou previous",
   "pilotes.appletv.ne_se_regle_pas": "{point} ne peut pas être réglé",
-  "pilotes.appletv.refuse": "l'Apple TV a refusé (erreur {code})"
+  "pilotes.appletv.refuse": "l'Apple TV a refusé (erreur {code})",
+  "pilotes.appletv.chaine_canal": "Chaîne CANAL+ (ouvre le direct)",
+  "pilotes.appletv.chaine_inconnue": "chaîne absente de canal_channels : {channel}",
+  "pilotes.appletv.sortie_audio": "Sortie audio",
+  "pilotes.appletv.haut_parleurs_tv": "Haut-parleurs TV",
+  "pilotes.appletv.airplay_absent": "pas de session AirPlay avec l'Apple TV pour l'instant",
+  "pilotes.appletv.seule_sortie": "c'est la seule sortie : active d'abord une enceinte"
 }

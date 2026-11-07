@@ -8,6 +8,7 @@ import {
 } from './home.svelte.js';
 import { layout, onHome } from './layout.svelte.js';
 import { isPrinter, phase } from './printers.js';
+import { isAppleTv } from './appletv.svelte.js';
 import { t } from '../../lib/i18n.svelte.js';
 
 /** The house's alarm: a device that takes a `mode` among which « disarmed ». */
@@ -205,7 +206,9 @@ export function activity() {
     seen.add(key);
     list.push({ key: d.id, icon: 'speaker', title: s.title ?? t('maison.accueil.musique'), detail: nameOf(d.id), panel: 'music', cover: s.art ? { id: d.id, art: s.art } : null });
   }
-  for (const d of tvs()) if (value(d.id, 'power') === true) list.push({ key: d.id, icon: 'tv', title: t('maison.accueil.tele_en_marche'), detail: roomOf(d) ?? nameOf(d.id), href: '#/salon' });
+  // With an Apple TV, the TV only shows it: one line, the Apple TV's.
+  const watched = tvs().some(isAppleTv) ? tvs().filter(isAppleTv) : tvs();
+  for (const d of watched) if (value(d.id, 'power') === true) list.push({ key: d.id, icon: 'tv', title: t('maison.accueil.tele_en_marche'), detail: roomOf(d) ?? nameOf(d.id), href: '#/salon' });
   const lit = lights().filter((d) => isOn(d.id));
   if (lit.length) list.push({ key: 'lights', icon: 'light', title: t('maison.accueil.lumieres_allumees', { count: lit.length }), detail: [...new Set(lit.map((d) => roomOf(d)).filter(Boolean))].join(', '), panel: 'lights' });
   for (const d of clims()) if (value(d.id, 'on') === true) list.push({ key: d.id, icon: 'air-conditioner', title: nameOf(d.id), detail: t('maison.accueil.clim_consigne', { v: num(value(d.id, 'target_temperature'), 1) }), panel: 'climate' });

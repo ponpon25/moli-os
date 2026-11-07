@@ -68,7 +68,7 @@
   "maison.accueil.dernier_passage": "Dernier passage {when}",
   "maison.accueil.personne": "Personne depuis deux jours",
   "maison.accueil.telecommande": "Télécommande",
-  "maison.accueil.tele_allumee": "La télé est allumée",
+  "maison.accueil.tele_allumee": "Allumée",
   "maison.accueil.tele_veille": "La télé est en veille",
   "maison.accueil.son_joue": "le son joue",
   "maison.accueil.dehors": "Dehors",
@@ -459,5 +459,8 @@
   "maison.theme.classique_desc": "Les tuiles et le menu à gauche, jour ou nuit.",
   "maison.theme.ciel": "Ciel",
   "maison.theme.ciel_desc": "L’essentiel d’abord, sur le ciel de la maison.",
-  "maison.perso.aide_ordre": "Glissez un élément pour changer sa place (sur téléphone, par sa poignée)."
+  "maison.perso.aide_ordre": "Glissez un élément pour changer sa place (sur téléphone, par sa poignée).",
+  "maison.accueil.usage.tv": "Télé",
+  "maison.accueil.tele_lecture": "En lecture",
+  "maison.accueil.tele_eteinte": "Éteinte"
 }

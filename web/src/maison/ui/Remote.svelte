@@ -2,15 +2,33 @@
   import { act, value, reachable, savePref, num, hub, home } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
+  import { isAppleTv } from '../lib/appletv.svelte.js';
 
   /** The living-room remote. Keys go straight to the TV, one press each.
    *  `speaker`: a soundbar beside it; while it plays the TV (its `source`
    *  is `tv`), the volume is the speaker's: the TV's own then sets its
    *  silent speakers. By default, the living room's of the layout. */
-  let { tv, speaker = null } = $props();
+  /*  `follow`: the speaker plays it whatever its source says (an Apple TV
+   *  sending its sound over AirPlay). */
+  let { tv, speaker = null, follow = false } = $props();
   const soundbar = $derived(speaker ?? (home.config?.salon?.tv === tv ? home.config?.salon?.speaker : null));
-  const sound = $derived(soundbar && value(soundbar, 'source') === 'tv' ? soundbar : null);
+  const sound = $derived(soundbar && (follow || value(soundbar, 'source') === 'tv') ? soundbar : null);
   const target = $derived(sound ?? tv);
+  // An Apple TV: its own key names, play and skip as media orders.
+  const apple = $derived(isAppleTv(hub.devices[tv]));
+  const APPLE_KEYS = {
+    CursorUp: 'up',
+    CursorDown: 'down',
+    CursorLeft: 'left',
+    CursorRight: 'right',
+    Confirm: 'select',
+    Back: 'menu',
+    Home: 'home',
+    Options: 'guide',
+    PlayPause: 'play_pause',
+    VolumeUp: 'volume_up',
+    VolumeDown: 'volume_down',
+  };
 
   let mode = $state(readMode());
   let flash = $state(null);
@@ -26,7 +44,9 @@
 
   const on = $derived(value(tv, 'power') === true);
   const ok = $derived(reachable(tv));
-  const volume = $derived(value(target, 'volume'));
+  // An Apple TV's own volume means nothing on its own: shown only through
+  // the speaker that plays it.
+  const volume = $derived(apple && !sound ? null : value(target, 'volume'));
   const muted = $derived(value(target, 'mute') === true);
   const points = $derived(hub.devices[tv]?.points ?? []);
   const maxVolume = $derived((hub.devices[target]?.points ?? []).find((p) => p.key === 'volume')?.kind?.max ?? 100);
@@ -44,7 +64,7 @@
   }
 
   function toggleMute() {
-    if (!sound) return key('Mute');
+    if (!sound) return apple ? null : key('Mute');
     act(`${sound}/mute`, !muted, t('salon.couper_son'));
   }
 
@@ -80,7 +100,7 @@
   }
 
   function railDown(e) {
-    if (!on) return;
+    if (!on || volume == null) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     sent = null;
     slideTo(levelAt(e, e.currentTarget));
@@ -145,6 +165,11 @@
     flash = name;
     setTimeout(() => flash === name && (flash = null), 180);
     if (navigator.vibrate) navigator.vibrate(8);
+    if (apple) {
+      if (name === 'Previous' || name === 'Next') return act(`${tv}/media_control`, name === 'Next' ? 'next' : 'previous', t('salon.tele.label'));
+      if (!APPLE_KEYS[name]) return;
+      return act(`${tv}/key`, APPLE_KEYS[name], t('salon.tele.label'));
+    }
     await act(`${tv}/key`, name, t('salon.tele.label'));
   }
 

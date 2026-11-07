@@ -14,7 +14,10 @@
 
 use std::net::{IpAddr, SocketAddr};
 
+mod airplay;
+mod bplist;
 mod companion;
+mod mrp;
 mod opack;
 use std::time::Duration;
 
@@ -57,6 +60,15 @@ const KEYS: [(&str, i64); 15] = [
 const SLEEP: i64 = 12;
 const WAKE: i64 = 13;
 
+/// CANAL+'s app, and the page of its live grid (a link the app opens
+/// only once it runs: sent twice, the first one may land during its start).
+const CANAL_APP: &str = "com.canalplusdistrib.mycanal.prod";
+const CANAL_GRID: &str = "https://www.canalplus.com/live/tab/live-tv/en-direct-v5/pid114075-toutes-les-chaines-avec-multilive.html";
+/// Tiles per row of the grid on an Apple TV (always four).
+const CANAL_COLUMNS: usize = 4;
+/// Between two presses: the app keeps up at this pace.
+const PRESS_GAP: Duration = Duration::from_millis(600);
+
 const MEDIA: [(&str, i64); 4] = [("play", 1), ("pause", 2), ("next", 3), ("previous", 4)];
 const GET_VOLUME: i64 = 5;
 const SET_VOLUME: i64 = 6;
@@ -79,6 +91,34 @@ pub struct Config {
     /// The device's name in Moli.
     #[serde(default)]
     pub name: Option<String>,
+    /// The channels of CANAL+'s « Toutes les chaînes » grid, in its order
+    /// (after the Multi-Live tile): a `canal_channel` point opens them.
+    #[serde(default)]
+    pub canal_channels: Vec<String>,
+    /// AirPlay speakers the Apple TV's sound may go to: a switch each.
+    #[serde(default)]
+    pub airplay: Vec<Speaker>,
+}
+
+/// An AirPlay speaker: its name in Moli and its AirPlay id (`deviceid` of
+/// its `_airplay._tcp` service, `AA:BB:CC:DD:EE:FF`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Speaker {
+    pub name: String,
+    pub id: String,
+}
+
+impl Speaker {
+    fn key(&self) -> String {
+        let slug: String = self
+            .id
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect::<String>()
+            .to_lowercase();
+        format!("airplay_{slug}")
+    }
 }
 
 #[derive(Debug)]
@@ -144,8 +184,8 @@ fn device(ctx: &DriverCtx, id: &DeviceId, config: &Config, points: Vec<PointSpec
     }
 }
 
-fn paired_points() -> Vec<PointSpec> {
-    vec![
+fn paired_points(config: &Config) -> Vec<PointSpec> {
+    let mut points = vec![
         spec("power", "pilotes.appletv.allumee", Kind::Binary, true, true),
         spec(
             "state",
@@ -195,7 +235,38 @@ fn paired_points() -> Vec<PointSpec> {
             true,
             true,
         ),
-    ]
+    ];
+    points.push(spec(
+        "audio_output",
+        "pilotes.appletv.sortie_audio",
+        Kind::Text,
+        true,
+        false,
+    ));
+    points.push(spec(
+        "tv_speakers",
+        "pilotes.appletv.haut_parleurs_tv",
+        Kind::Binary,
+        true,
+        true,
+    ));
+    for speaker in &config.airplay {
+        points.push(PointSpec {
+            label: speaker.name.as_str().into(),
+            ..spec(&speaker.key(), "", Kind::Binary, true, true)
+        });
+    }
+    if !config.canal_channels.is_empty() {
+        // Written: switches to that channel in CANAL+ (waking the TV).
+        points.push(spec(
+            "canal_channel",
+            "pilotes.appletv.chaine_canal",
+            enumeration(config.canal_channels.iter().map(String::as_str)),
+            false,
+            true,
+        ));
+    }
+    points
 }
 
 fn pairing_points() -> Vec<PointSpec> {
@@ -400,7 +471,7 @@ async fn session(
         }
         Err(e) => return Stop::Fail(e),
     };
-    ctx.upsert_device(device(ctx, id, config, paired_points()));
+    ctx.upsert_device(device(ctx, id, config, paired_points(config)));
     match tv.request("FetchAttentionState", Opack::dict([])).await {
         Ok(answer) => set_attention(ctx, id, &answer),
         Err(e) => return Stop::Fail(e),
@@ -420,12 +491,30 @@ async fn session(
     ctx.ready();
     *wait = FIRST_WAIT;
     tracing::info!(instance = %ctx.instance(), "apple tv connected");
+    let mut sound = open_sound(config, pairing, ctx).await;
+    if let Some(handle) = &sound {
+        publish_outputs(ctx, id, config, pairing, &handle.state.borrow());
+    }
     loop {
         tokio::select! {
             command = ctx.next_command() => {
                 let Some(command) = command else { return Stop::Done };
-                if let Err(e) = order(&mut tv, ctx, id, command).await {
+                if is_sound_point(config, &command.key) {
+                    sound_order(sound.as_ref(), config, pairing, command).await;
+                    continue;
+                }
+                if let Err(e) = order(&mut tv, config, ctx, id, command).await {
                     return Stop::Fail(e);
+                }
+            }
+            changed = sound_changed(sound.as_mut()) => {
+                match changed {
+                    Some(state) if state.connected => publish_outputs(ctx, id, config, pairing, &state),
+                    // The AirPlay session ended: tried again at the next beat.
+                    _ => {
+                        tracing::warn!(instance = %ctx.instance(), "apple tv: airplay session lost");
+                        sound = None;
+                    }
                 }
             }
             event = tv.next_event() => match event {
@@ -441,9 +530,172 @@ async fn session(
                     Ok(answer) => set_attention(ctx, id, &answer),
                     Err(e) => return Stop::Fail(e),
                 }
+                if sound.is_none() {
+                    sound = open_sound(config, pairing, ctx).await;
+                }
             }
         }
     }
+}
+
+/// The AirPlay session that chooses the Apple TV's audio outputs.
+type Sound = airplay::Handle;
+
+async fn open_sound(config: &Config, pairing: &Pairing, ctx: &DriverCtx) -> Option<Sound> {
+    {
+        match airplay::open(config.host, pairing).await {
+            Ok((handle, task)) => {
+                tracing::info!(instance = %ctx.instance(), "apple tv: airplay session open");
+                // The task ends by itself when the handle is dropped.
+                drop(task);
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::warn!(instance = %ctx.instance(), error = %e, "apple tv: no airplay session");
+                None
+            }
+        }
+    }
+}
+
+/// The next state of the AirPlay session (`None`: it ended); never when
+/// there is no session.
+async fn sound_changed(sound: Option<&mut Sound>) -> Option<airplay::State> {
+    let Some(sound) = sound else {
+        return std::future::pending().await;
+    };
+    sound.state.changed().await.ok()?;
+    Some(sound.state.borrow_and_update().clone())
+}
+
+fn is_sound_point(config: &Config, key: &str) -> bool {
+    key == "tv_speakers" || config.airplay.iter().any(|s| s.key() == key)
+}
+
+/// The Apple TV itself among its outputs (« Haut-parleurs TV »): its own
+/// identifier, the one it paired with.
+fn is_local(pairing: &Pairing, uid: &str) -> bool {
+    uid.eq_ignore_ascii_case(pairing.accessory())
+}
+
+fn publish_outputs(
+    ctx: &DriverCtx,
+    id: &DeviceId,
+    config: &Config,
+    pairing: &Pairing,
+    state: &airplay::State,
+) {
+    let names: Vec<String> = state
+        .outputs
+        .iter()
+        .map(|o| {
+            if is_local(pairing, &o.uid) {
+                moli_i18n::tr!("pilotes.appletv.haut_parleurs_tv")
+            } else {
+                config
+                    .airplay
+                    .iter()
+                    .find(|s| s.id.eq_ignore_ascii_case(&o.uid))
+                    .map_or_else(|| o.name.clone(), |s| s.name.clone())
+            }
+        })
+        .collect();
+    ctx.set_state(id, "audio_output", Value::Text(names.join(", ").into()));
+    let has = |uid: &str| {
+        state
+            .outputs
+            .iter()
+            .any(|o| o.uid.eq_ignore_ascii_case(uid))
+    };
+    ctx.set_state(id, "tv_speakers", Value::Bool(has(pairing.accessory())));
+    for speaker in &config.airplay {
+        ctx.set_state(id, &speaker.key(), Value::Bool(has(&speaker.id)));
+    }
+}
+
+/// The changes that make the outputs `want` (on) or not for `uid`, never
+/// leaving the Apple TV without any: a speaker turned on takes the place of
+/// its own speakers (as people do by hand), the last one turned off gives
+/// it back.
+fn sound_changes(
+    current: &[String],
+    local: &str,
+    uid: &str,
+    want: bool,
+) -> Vec<(mrp::Change, String)> {
+    let has = |u: &str| current.iter().any(|c| c.eq_ignore_ascii_case(u));
+    let speaker = !uid.eq_ignore_ascii_case(local);
+    let mut out = Vec::new();
+    if want {
+        if !has(uid) {
+            out.push((mrp::Change::Add, uid.to_owned()));
+        }
+        if speaker && has(local) {
+            out.push((mrp::Change::Remove, local.to_owned()));
+        }
+    } else if has(uid) {
+        let others = current
+            .iter()
+            .filter(|c| !c.eq_ignore_ascii_case(uid))
+            .count();
+        if others == 0 {
+            if !speaker {
+                // Its own speakers are the only output: they stay.
+                return out;
+            }
+            out.push((mrp::Change::Add, local.to_owned()));
+        }
+        out.push((mrp::Change::Remove, uid.to_owned()));
+    }
+    out
+}
+
+async fn sound_order(
+    sound: Option<&Sound>,
+    config: &Config,
+    pairing: &Pairing,
+    command: CommandRequest,
+) {
+    let Some(sound) = sound else {
+        command.reply(Err(moli_i18n::tr!("pilotes.appletv.airplay_absent")));
+        return;
+    };
+    let Value::Bool(want) = command.value else {
+        command.reply(Err(moli_i18n::tr!("pilotes.appletv.oui_non")));
+        return;
+    };
+    let uid = if &*command.key == "tv_speakers" {
+        pairing.accessory().to_owned()
+    } else {
+        let Some(speaker) = config.airplay.iter().find(|s| s.key() == *command.key) else {
+            command.reply(Err(moli_i18n::tr!("pilotes.appletv.oui_non")));
+            return;
+        };
+        speaker.id.clone()
+    };
+    let current: Vec<String> = sound
+        .state
+        .borrow()
+        .outputs
+        .iter()
+        .map(|o| o.uid.clone())
+        .collect();
+    let changes = sound_changes(&current, pairing.accessory(), &uid, want);
+    if changes.is_empty() && !want && is_local(pairing, &uid) {
+        command.reply(Err(moli_i18n::tr!("pilotes.appletv.seule_sortie")));
+        return;
+    }
+    for (i, (change, uid)) in changes.into_iter().enumerate() {
+        if i > 0 {
+            // The Apple TV takes the first change before the second.
+            tokio::time::sleep(Duration::from_millis(800)).await;
+        }
+        if !sound.change(change, vec![uid]).await {
+            command.reply(Err(moli_i18n::tr!("pilotes.appletv.airplay_absent")));
+            return;
+        }
+    }
+    command.reply(Ok(()));
 }
 
 /// The connection, verified, with the remote's session started.
@@ -573,10 +825,53 @@ async fn press(tv: &mut Companion, code: i64) -> Result<(), Error> {
     Ok(())
 }
 
+/// The presses from the grid's top (« Maintenant ») to the tile of the
+/// channel at `at` in the list (the Multi-Live tile comes first): down to
+/// the categories, down to the first row, then rows and columns.
+fn canal_path(at: usize) -> Vec<&'static str> {
+    let tile = at + 1;
+    let mut keys = vec!["down"; 2 + tile / CANAL_COLUMNS];
+    keys.extend(std::iter::repeat_n("right", tile % CANAL_COLUMNS));
+    keys.push("select");
+    keys
+}
+
+/// Opens a channel of CANAL+'s live grid, wherever the app was left
+/// (closed, on another page, a channel playing): wake, open the app, the
+/// grid's link twice (a starting app drops the first), up to the top, then
+/// the channel's tile.
+async fn canal_channel(tv: &mut Companion, at: usize, asleep: bool) -> Result<(), Error> {
+    let hid = |code: i64| Opack::dict([("_hBtS", Opack::Int(2)), ("_hidC", Opack::Int(code))]);
+    if asleep {
+        tv.request("_hidC", hid(WAKE)).await?;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+    let launch = |key: &str, value: &str| Opack::dict([(key, Opack::str(value))]);
+    tv.request("_launchApp", launch("_bundleID", CANAL_APP))
+        .await?;
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    tv.request("_launchApp", launch("_urlS", CANAL_GRID))
+        .await?;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    tv.request("_launchApp", launch("_urlS", CANAL_GRID))
+        .await?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let mut keys = vec!["up"; 4];
+    keys.extend(canal_path(at));
+    for key in keys {
+        let code = KEYS.iter().find(|(k, _)| *k == key).map_or(0, |(_, c)| *c);
+        press(tv, code).await?;
+        tokio::time::sleep(PRESS_GAP).await;
+    }
+    Ok(())
+}
+
 /// A command; `Err` only when the connection is lost (the order is then
 /// answered as failed).
+#[allow(clippy::too_many_lines)] // one arm per writable point
 async fn order(
     tv: &mut Companion,
+    config: &Config,
     ctx: &DriverCtx,
     id: &DeviceId,
     command: CommandRequest,
@@ -650,6 +945,23 @@ async fn order(
             .await
             .map(drop)
         }
+        ("canal_channel", Value::Text(channel)) => {
+            let Some(at) = config.canal_channels.iter().position(|c| **c == **channel) else {
+                command.reply(Err(moli_i18n::tr!(
+                    "pilotes.appletv.chaine_inconnue",
+                    channel = channel
+                )));
+                return Ok(());
+            };
+            // Answered now: the whole way takes some 20 s.
+            command.reply(Ok(()));
+            tracing::info!(instance = %ctx.instance(), channel = %channel, "apple tv: canal+ channel");
+            let asleep = ctx.current(id, "state") == Some(Value::Text("asleep".into()));
+            return match canal_channel(tv, at, asleep).await {
+                Ok(()) | Err(Error::Refused(_)) => Ok(()),
+                Err(e) => Err(e),
+            };
+        }
         (point, _) => {
             command.reply(Err(moli_i18n::tr!(
                 "pilotes.appletv.ne_se_regle_pas",
@@ -686,6 +998,42 @@ mod tests {
     }
 
     #[test]
+    fn canal_tiles_are_counted_four_by_row_after_multi_live() {
+        // TF1, first of the list, is the second tile of the first row.
+        assert_eq!(canal_path(0), ["down", "down", "right", "select"]);
+        // The fourth channel opens the second row.
+        assert_eq!(canal_path(3), ["down", "down", "down", "select"]);
+        assert_eq!(
+            canal_path(5),
+            ["down", "down", "down", "right", "right", "select"]
+        );
+    }
+
+    #[test]
+    fn a_speaker_takes_the_place_of_the_tv_and_gives_it_back() {
+        use mrp::Change::{Add, Remove};
+        let tv = "TV".to_owned();
+        let sonos = "AA".to_owned();
+        // On: added, then the TV's own speakers removed.
+        assert_eq!(
+            sound_changes(std::slice::from_ref(&tv), &tv, &sonos, true),
+            vec![(Add, sonos.clone()), (Remove, tv.clone())]
+        );
+        // Already there next to the TV: only the TV goes.
+        assert_eq!(
+            sound_changes(&[tv.clone(), sonos.clone()], &tv, &sonos, true),
+            vec![(Remove, tv.clone())]
+        );
+        // Off when alone: the TV first, never nothing.
+        assert_eq!(
+            sound_changes(std::slice::from_ref(&sonos), &tv, &sonos, false),
+            vec![(Add, tv.clone()), (Remove, sonos.clone())]
+        );
+        // The TV alone cannot be turned off.
+        assert!(sound_changes(std::slice::from_ref(&tv), &tv, &tv, false).is_empty());
+    }
+
+    #[test]
     fn attention_states_are_named() {
         assert_eq!(attention_of(1), Some("asleep"));
         assert_eq!(attention_of(3), Some("awake"));
@@ -714,6 +1062,8 @@ mod tests {
                 host,
                 port: None,
                 name: None,
+                canal_channels: Vec::new(),
+                airplay: Vec::new(),
             },
             dir,
         )
@@ -807,5 +1157,47 @@ mod tests {
             .await
             .unwrap();
         println!("attention after: {}", state.to_json());
+    }
+
+    /// `live_airplay`: the AirPlay session with the pairing of `live_pair`;
+    /// prints the outputs, adds `APPLETV_ADD` (a speaker's AirPlay id).
+    #[tokio::test]
+    #[ignore = "needs a real, paired Apple TV"]
+    async fn live_airplay() {
+        let (config, dir) = live_env();
+        let pairing =
+            Pairing::decode(&std::fs::read_to_string(dir.join("pairing")).unwrap()).unwrap();
+        let (handle, task) = airplay::open(config.host, &pairing).await.unwrap();
+        println!("airplay session open");
+        let mut state = handle.state.clone();
+        let wait = |s: u64| tokio::time::sleep(Duration::from_secs(s));
+        wait(4).await;
+        println!("outputs: {:?}", state.borrow_and_update().outputs);
+        if let Ok(uid) = std::env::var("APPLETV_SET") {
+            println!(
+                "setting {uid}: {}",
+                handle.change(mrp::Change::Set, vec![uid.clone()]).await
+            );
+            wait(6).await;
+            println!("outputs after: {:?}", state.borrow_and_update().outputs);
+        }
+        if let Ok(uid) = std::env::var("APPLETV_REMOVE") {
+            println!(
+                "removing {uid}: {}",
+                handle.change(mrp::Change::Remove, vec![uid.clone()]).await
+            );
+            wait(6).await;
+            println!("outputs after: {:?}", state.borrow_and_update().outputs);
+        }
+        if let Ok(uid) = std::env::var("APPLETV_ADD") {
+            println!(
+                "adding {uid}: {}",
+                handle.change(mrp::Change::Add, vec![uid.clone()]).await
+            );
+            wait(6).await;
+            println!("outputs after: {:?}", state.borrow_and_update().outputs);
+        }
+        drop(handle);
+        println!("session end: {:?}", task.await.unwrap());
     }
 }

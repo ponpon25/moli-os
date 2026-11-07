@@ -15,6 +15,10 @@ export function createPosition(lead, playing, duration, every = 500) {
   let now = $state(Date.now());
   let anchor = $state({ p: null, at: 0 });
   let was = null;
+  // A speaker still loading what it was asked to play (`transitioning`) is
+  // counted as playing by the hub, but its track has not started: the count
+  // waits for it, or it would run ahead by the time the stream takes to come.
+  const running = () => playing() && value(lead(), 'state') !== 'transitioning';
 
   $effect(() => {
     const timer = setInterval(() => (now = Date.now()), every);
@@ -22,7 +26,7 @@ export function createPosition(lead, playing, duration, every = 500) {
   });
   // Where it stands by our own count, now.
   const shown = () =>
-    anchor.p == null ? null : anchor.p + (playing() ? Math.max(0, (Date.now() - anchor.at) / 1000) : 0);
+    anchor.p == null ? null : anchor.p + (running() ? Math.max(0, (Date.now() - anchor.at) / 1000) : 0);
   // What the hub told, and when. A speaker tells whole seconds, so a position
   // a little behind ours is rounding, not a step back: it is not followed.
   $effect(() => {
@@ -37,7 +41,7 @@ export function createPosition(lead, playing, duration, every = 500) {
   // Seen to start playing: count from now, from where it stood. Seen to
   // pause: stay where it was shown.
   $effect(() => {
-    const is = playing();
+    const is = running();
     untrack(() => {
       if (anchor.p != null) {
         if (is && was === false) anchor = { p: anchor.p, at: Date.now() };
@@ -51,7 +55,7 @@ export function createPosition(lead, playing, duration, every = 500) {
   const pos = $derived.by(() => {
     const total = duration();
     if (anchor.p == null || !total) return null;
-    const moved = playing() ? Math.max(0, (now - anchor.at) / 1000) : 0;
+    const moved = running() ? Math.max(0, (now - anchor.at) / 1000) : 0;
     return Math.min(total, anchor.p + moved);
   });
   return {

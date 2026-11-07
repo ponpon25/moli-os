@@ -1126,16 +1126,17 @@ async fn refresh(
         let leader = rooms
             .iter()
             .find(|r| r.host == room.leader_host && r.uuid != room.uuid)
-            .and_then(|r| home.last.get(&r.uuid));
+            .and_then(|r| home.last.get(&r.uuid).map(|read| (&r.uuid, read)));
+        let read_now = |uuid: &String| only.is_none_or(|o| o.contains(uuid));
         for (key, value) in &own.values {
             match leader.filter(|_| SHARED.contains(key)) {
                 // What a follower shows is its leader's, or nothing new.
-                Some(leader) => {
+                Some((uuid, leader)) => {
                     if let Some((_, v)) = leader.values.iter().find(|(k, _)| k == key) {
-                        ctx.set_state(&id, key, v.clone());
+                        tell(ctx, &id, key, v.clone(), read_now(uuid));
                     }
                 }
-                None => ctx.set_state(&id, key, value.clone()),
+                None => tell(ctx, &id, key, value.clone(), read_now(&room.uuid)),
             }
         }
         if let Some(queue) = home.queues.get(&room.leader_uuid) {
@@ -1163,6 +1164,24 @@ async fn refresh(
             "group_size",
             Value::Int(i64::try_from(room.with.len() + 1).unwrap_or(i64::MAX)),
         );
+    }
+}
+
+/// Records a value of a room. A position read just now is told even when it
+/// equals the last one: a new track starts again at 0 like the last one did,
+/// and the dashboard counts from the moment it is told (otherwise it would
+/// keep counting from the start of the previous track, and stand at the end).
+/// A position kept from an earlier round is not told again, not even quietly:
+/// its time would become now, and a dashboard opened later would count from
+/// there, from where the room was back then.
+fn tell(ctx: &DriverCtx, id: &DeviceId, key: &str, value: Value, read_now: bool) {
+    if key == "position" && !read_now {
+        return;
+    }
+    if key == "position" && matches!(value, Value::Int(_)) {
+        ctx.pulse_state(id, key, value);
+    } else {
+        ctx.set_state(id, key, value);
     }
 }
 

@@ -1,6 +1,6 @@
 <script>
   import { hub, value, act, nameOf, savePref, note } from '../lib/home.svelte.js';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { ROW, dash, setTile, tileOf } from '../lib/layout.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from '../ui/Icon.svelte';
@@ -304,6 +304,29 @@
     term = '';
     submitted = '';
   }
+  // What was found folds to one line (the players come back into view) and
+  // opens again; closing forgets the search. A new search or shelf unfolds.
+  let folded = $state(false);
+  // One kind at a time, or all of them, each on a single scrolling row.
+  let kindShown = $state('all');
+  $effect(() => {
+    submitted;
+    untrack(() => {
+      folded = false;
+      kindShown = 'all';
+    });
+  });
+  const foundCount = $derived(found ? found.reduce((n, s) => n + s.hits.length, 0) : 0);
+  const showResults = $derived(!!opened || busy || !!found);
+  function closeSearch() {
+    shelfOpen = false;
+    clearSearch();
+  }
+  // Played now: what was found folds away, the player shows what started.
+  const playNow = (hit) => {
+    playHit(hit, 'now');
+    if (target) folded = true;
+  };
 
 </script>
 
@@ -361,7 +384,7 @@
   {/if}
 
   {#if searchable && libraryShown}
-    <section class="card applebar">
+    <section class="card applebar" role="search">
       <form onsubmit={(e) => { e.preventDefault(); runSearch(); }}>
         <label class="field">
           <Icon name="search" size={18} />
@@ -400,69 +423,116 @@
           {/if}
         </div>
       {/if}
-      {#if opened}
-        <div class="detail">
-          <button class="chip back" onclick={closeDetail}><Icon name="chevron-left" size={16} />{t('enceintes.retour')}</button>
-          <div class="head-detail">
-            <div class="art">{#if opened.art}<img src={opened.art.replace('240', '480')} alt="" referrerpolicy="no-referrer" />{/if}</div>
-            <div class="meta">
-              <h3 class="shelf-title">{opened.title}</h3>
-              {#if opened.subtitle}<span class="muted">{opened.subtitle}</span>{/if}
-              <span class="acts">
-                <button class="chip go" onclick={() => playHit(opened, 'now')}><Icon name="play" size={16} />{t('enceintes.lire_maintenant')}</button>
-                <button class="soft small" onclick={() => playHit(opened, 'next')} title={t('enceintes.lire_ensuite')} aria-label={t('enceintes.lire_ensuite')}><Icon name="queue-next" size={16} /></button>
-                <button class="soft small" onclick={() => playHit(opened, 'add')} title={t('enceintes.ajouter_file')} aria-label={t('enceintes.ajouter_file')}><Icon name="queue-add" size={16} /></button>
-              </span>
+      {#if showResults}
+        <div class="results">
+          <div class="results-head">
+            <div class="what">
+              <b>{shelf ? t(`enceintes.apple.${shelf}`) : t('enceintes.resultats.pour', { q: submitted })}</b>
+              {#if !opened && found}<span class="muted small">{foundCount === 1 ? t('enceintes.resultats.un') : t('enceintes.resultats.n', { n: foundCount })}</span>{/if}
+            </div>
+            {#if !opened && found && found.length > 1 && !folded}
+              <div class="kinds" role="tablist">
+                <button role="tab" class="chip" class:cool={kindShown === 'all'} aria-selected={kindShown === 'all'} onclick={() => (kindShown = 'all')}>{t('enceintes.resultats.tout')}</button>
+                {#each found as section (section.kind)}
+                  <button role="tab" class="chip" class:cool={kindShown === section.kind} aria-selected={kindShown === section.kind} onclick={() => (kindShown = section.kind)}>{t(`enceintes.kinds.${section.kind}`)} <span class="count">{section.hits.length}</span></button>
+                {/each}
+              </div>
+            {/if}
+            <div class="tools">
+              <button class="chip" onclick={() => (folded = !folded)} aria-expanded={!folded}>
+                <Icon name={folded ? 'chevron-down' : 'chevron-up'} size={16} />{folded ? t('enceintes.resultats.afficher') : t('enceintes.resultats.reduire')}
+              </button>
+              <button class="soft small" onclick={closeSearch} title={t('enceintes.resultats.fermer')} aria-label={t('enceintes.resultats.fermer')}><Icon name="close" size={16} /></button>
             </div>
           </div>
-          {#if busy}
-            <p class="muted small">{t('enceintes.recherche_en_cours')}</p>
-          {:else if songs}
-            <ol class="songs">
-              {#each songs as hit, i (hit.id + i)}
-                <li>
-                  <span class="num n">{i + 1}</span>
-                  <button class="row" onclick={() => playHit(hit, 'now')} title={t('enceintes.lire_maintenant')}>
-                    <span class="t"><b>{hit.title}</b>{#if hit.subtitle}<span class="muted small">{hit.subtitle}</span>{/if}</span>
-                  </button>
-                  <button class="soft small" onclick={() => playHit(hit, 'next')} title={t('enceintes.lire_ensuite')} aria-label={t('enceintes.lire_ensuite')}><Icon name="queue-next" size={16} /></button>
-                  <button class="soft small" onclick={() => playHit(hit, 'add')} title={t('enceintes.ajouter_file')} aria-label={t('enceintes.ajouter_file')}><Icon name="queue-add" size={16} /></button>
-                </li>
-              {:else}
-                <li class="muted">{t('enceintes.aucun_resultat')}</li>
-              {/each}
-            </ol>
+          {#if !folded}
+            <div class="results-body">
+              {#if opened}
+                <div class="detail">
+                  <button class="chip back" onclick={closeDetail}><Icon name="chevron-left" size={16} />{t('enceintes.retour')}</button>
+                  <div class="head-detail">
+                    <div class="art">{#if opened.art}<img src={opened.art.replace('240', '480')} alt="" referrerpolicy="no-referrer" />{/if}</div>
+                    <div class="meta">
+                      <h3 class="shelf-title">{opened.title}</h3>
+                      {#if opened.subtitle}<span class="muted">{opened.subtitle}</span>{/if}
+                      <span class="acts">
+                        <button class="chip go" onclick={() => playNow(opened)}><Icon name="play" size={16} />{t('enceintes.lire_maintenant')}</button>
+                        <button class="soft small" onclick={() => playHit(opened, 'next')} title={t('enceintes.lire_ensuite')} aria-label={t('enceintes.lire_ensuite')}><Icon name="queue-next" size={16} /></button>
+                        <button class="soft small" onclick={() => playHit(opened, 'add')} title={t('enceintes.ajouter_file')} aria-label={t('enceintes.ajouter_file')}><Icon name="queue-add" size={16} /></button>
+                      </span>
+                    </div>
+                  </div>
+                  {#if busy}
+                    <p class="muted small">{t('enceintes.recherche_en_cours')}</p>
+                  {:else if songs}
+                    <ol class="songs">
+                      {#each songs as hit, i (hit.id + i)}
+                        <li>
+                          <span class="num n">{i + 1}</span>
+                          <button class="row" onclick={() => playNow(hit)} title={t('enceintes.lire_maintenant')}>
+                            <span class="t"><b>{hit.title}</b>{#if hit.subtitle}<span class="muted small">{hit.subtitle}</span>{/if}</span>
+                          </button>
+                          <button class="soft small" onclick={() => playHit(hit, 'next')} title={t('enceintes.lire_ensuite')} aria-label={t('enceintes.lire_ensuite')}><Icon name="queue-next" size={16} /></button>
+                          <button class="soft small" onclick={() => playHit(hit, 'add')} title={t('enceintes.ajouter_file')} aria-label={t('enceintes.ajouter_file')}><Icon name="queue-add" size={16} /></button>
+                        </li>
+                      {:else}
+                        <li class="muted">{t('enceintes.aucun_resultat')}</li>
+                      {/each}
+                    </ol>
+                  {/if}
+                </div>
+              {:else if busy}
+                <p class="muted small">{t('enceintes.recherche_en_cours')}</p>
+              {:else if found}
+                {#each found.filter((s) => kindShown === 'all' || s.kind === kindShown) as section (section.kind)}
+                  {@const all = kindShown === 'all'}
+                  <div class="found">
+                    {#if all && found.length > 1}
+                      <h3>{t(`enceintes.kinds.${section.kind}`)}{#if section.kind !== 'song' && section.hits.length > 6}<button class="link more" onclick={() => (kindShown = section.kind)}>{t('enceintes.resultats.tout_voir')}</button>{/if}</h3>
+                    {/if}
+                    {#if section.kind === 'song'}
+                      <!-- Songs: one line each, as in a playlist. -->
+                      <ul class="lines">
+                        {#each section.hits as hit (hit.kind + hit.id)}
+                          <li>
+                            <button class="thumb" onclick={() => playNow(hit)} title={t('enceintes.lire_maintenant')} aria-label={t('enceintes.lire_maintenant')}>
+                              {#if hit.art}<img src={hit.art} alt="" loading="lazy" referrerpolicy="no-referrer" />{/if}
+                              <span class="over"><Icon name="play" size={18} /></span>
+                            </button>
+                            <span class="t"><b>{hit.title}</b>{#if hit.subtitle}<span class="muted small">{hit.subtitle}</span>{/if}</span>
+                            <button class="soft small" onclick={() => playHit(hit, 'next')} title={t('enceintes.lire_ensuite')} aria-label={t('enceintes.lire_ensuite')}><Icon name="queue-next" size={16} /></button>
+                            <button class="soft small" onclick={() => playHit(hit, 'add')} title={t('enceintes.ajouter_file')} aria-label={t('enceintes.ajouter_file')}><Icon name="queue-add" size={16} /></button>
+                          </li>
+                        {/each}
+                      </ul>
+                    {:else}
+                      <ul class="cards" class:rail={all && found.length > 1}>
+                        {#each section.hits as hit (hit.kind + hit.id)}
+                          <li>
+                            <div class="art" class:round={hit.kind === 'artist'}>
+                              {#if openable(hit)}<button class="open" onclick={() => openDetail(hit)} aria-label={t('enceintes.ouvrir', { name: hit.title })}></button>{/if}
+                              {#if hit.art}<img src={hit.art} alt="" loading="lazy" referrerpolicy="no-referrer" />{/if}
+                              <button class="big" onclick={() => playNow(hit)} title={t('enceintes.lire_maintenant')} aria-label={t('enceintes.lire_maintenant')}><Icon name="play" size={22} /></button>
+                            </div>
+                            {#if openable(hit)}<button class="name" onclick={() => openDetail(hit)}>{hit.title}</button>{:else}<b>{hit.title}</b>{/if}
+                            {#if hit.subtitle}<span class="muted small">{hit.subtitle}</span>{/if}
+                            {#if hit.kind !== 'station'}
+                              <span class="acts">
+                                <button class="soft small" onclick={() => playHit(hit, 'next')} title={t('enceintes.lire_ensuite')} aria-label={t('enceintes.lire_ensuite')}><Icon name="queue-next" size={16} /></button>
+                                <button class="soft small" onclick={() => playHit(hit, 'add')} title={t('enceintes.ajouter_file')} aria-label={t('enceintes.ajouter_file')}><Icon name="queue-add" size={16} /></button>
+                              </span>
+                            {/if}
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+                {/each}
+                {#if !found.length}<p class="muted">{t('enceintes.aucun_resultat')}</p>{/if}
+              {/if}
+            </div>
           {/if}
         </div>
-      {:else if busy}
-        <p class="muted small">{t('enceintes.recherche_en_cours')}</p>
-      {:else if found}
-        {#if shelf}<h3 class="shelf-title">{t(`enceintes.apple.${shelf}`)}</h3>{/if}
-        {#each found as section (section.kind)}
-          <div class="found">
-            <h3>{t(`enceintes.kinds.${section.kind}`)}</h3>
-            <ul class="cards">
-              {#each section.hits as hit (hit.kind + hit.id)}
-                <li>
-                  <div class="art" class:round={hit.kind === 'artist'}>
-                    {#if openable(hit)}<button class="open" onclick={() => openDetail(hit)} aria-label={t('enceintes.ouvrir', { name: hit.title })}></button>{/if}
-                    {#if hit.art}<img src={hit.art} alt="" loading="lazy" referrerpolicy="no-referrer" />{/if}
-                    <button class="big" onclick={() => playHit(hit, 'now')} title={t('enceintes.lire_maintenant')} aria-label={t('enceintes.lire_maintenant')}><Icon name="play" size={26} /></button>
-                  </div>
-                  {#if openable(hit)}<button class="name" onclick={() => openDetail(hit)}>{hit.title}</button>{:else}<b>{hit.title}</b>{/if}
-                  {#if hit.subtitle}<span class="muted small">{hit.subtitle}</span>{/if}
-                  {#if hit.kind !== 'station'}
-                    <span class="acts">
-                      <button class="soft small" onclick={() => playHit(hit, 'next')} title={t('enceintes.lire_ensuite')} aria-label={t('enceintes.lire_ensuite')}><Icon name="queue-next" size={16} /></button>
-                      <button class="soft small" onclick={() => playHit(hit, 'add')} title={t('enceintes.ajouter_file')} aria-label={t('enceintes.ajouter_file')}><Icon name="queue-add" size={16} /></button>
-                    </span>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          </div>
-        {/each}
-        {#if !found.length}<p class="muted">{t('enceintes.aucun_resultat')}</p>{/if}
       {/if}
     </section>
   {/if}
@@ -508,6 +578,15 @@
   {/if}
   </div>
 </div>
+
+<svelte:window
+  onkeydown={(e) => {
+    // Escape, from within the search: folds what was found, then closes it.
+    if (e.key !== 'Escape' || immersive || !e.target?.closest?.('.applebar')) return;
+    if (showResults && !folded) folded = true;
+    else closeSearch();
+  }}
+/>
 
 {#if immersive}
   <Immersion group={immersive} {groups} onpick={immerse} onclose={leave} />
@@ -780,6 +859,177 @@
   .shelf-title {
     font-size: 18px;
     font-weight: 650;
+  }
+
+  /* What was found: a head that stays (what, how many, which kind, fold,
+     close), and a body of bounded height: the players stay a scroll away. */
+  .results {
+    display: grid;
+    gap: 12px;
+    border-top: 1px solid var(--line, rgb(255 255 255 / 12%));
+    padding-top: 12px;
+  }
+
+  .results-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+  }
+
+  .results-head .what {
+    display: grid;
+    min-width: 0;
+  }
+
+  .results-head .what b {
+    font-size: 17px;
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .results-head .kinds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .results-head .kinds .chip {
+    border: 0;
+  }
+
+  .results-head .count {
+    opacity: 0.6;
+    font-variant-numeric: tabular-nums;
+    margin-left: 2px;
+  }
+
+  .results-head .tools {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  .results-head .tools .chip {
+    border: 0;
+  }
+
+  .results-body {
+    display: grid;
+    gap: 18px;
+    max-height: min(58vh, 560px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 2px 4px 4px 2px;
+    scrollbar-width: thin;
+  }
+
+  .found h3 .more {
+    margin-left: 10px;
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    font-size: 13px;
+    font-weight: 500;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  /* Songs: a line each, two columns when there is room. */
+  .lines {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+    gap: 2px 14px;
+  }
+
+  .lines li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 6px;
+    border-radius: 12px;
+    min-width: 0;
+  }
+
+  .lines li:hover {
+    background: var(--surface-2);
+  }
+
+  .lines .thumb {
+    position: relative;
+    flex: none;
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--surface-3);
+    cursor: pointer;
+  }
+
+  .lines .thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .lines .thumb .over {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: rgb(0 0 0 / 45%);
+    color: #fff;
+    opacity: 0;
+    transition: opacity 0.15s var(--ease);
+  }
+
+  .lines li:hover .over,
+  .lines .thumb:focus-visible .over {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    .lines .thumb .over {
+      opacity: 1;
+      background: rgb(0 0 0 / 30%);
+    }
+  }
+
+  .lines .t {
+    flex: 1;
+    display: grid;
+    min-width: 0;
+  }
+
+  .lines .t b,
+  .lines .t .small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Everything at once: each kind on one row that scrolls sideways. */
+  .cards.rail {
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: 132px;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    padding-bottom: 6px;
+    scrollbar-width: thin;
+  }
+
+  .cards.rail li {
+    scroll-snap-align: start;
   }
 
   .found h3 {

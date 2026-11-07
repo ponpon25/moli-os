@@ -127,6 +127,11 @@ const ECHO: Duration = Duration::from_millis(1500);
 const RELAY_ECHO: Duration = Duration::from_secs(30);
 /// How long after the relay closed a wall button's input event may come.
 const INPUT_LAG: Duration = Duration::from_secs(3);
+/// How long after one of our impulses arrived the radio may hand over its
+/// report once more (seen 2.6 s later, after the relay had opened again). A
+/// closing of the same relay within this time counts only with the wall
+/// button's input event.
+const REPEAT: Duration = Duration::from_secs(10);
 /// A requested position this close to the current one is not worth a move.
 const NEAR: f64 = 2.0;
 
@@ -235,6 +240,9 @@ pub struct Cover {
     /// The relay closing last taken for our impulse, and when: the wall
     /// button's input event, should one follow, corrects that.
     ours: Option<(Echo, Instant)>,
+    /// A closing of the relay of our last impulse, right after it: the same
+    /// report again, unless the wall button's input event follows.
+    repeat: Option<(Dir, Instant)>,
     module_moving: bool,
     /// Last position published, and whether the slats were shown open.
     shown: Option<i64>,
@@ -253,6 +261,7 @@ impl Cover {
             ready_at: now,
             echo: None,
             ours: None,
+            repeat: None,
             module_moving: false,
             shown: None,
             shown_slats: None,
@@ -624,6 +633,17 @@ impl Cover {
     /// impulses never cause one. Taken for ours, that relay was a hand: ours
     /// is still on its way, and counts when it comes.
     fn on_input(&mut self, dir: Dir, now: Instant) {
+        if let Some((way, closed)) = self.repeat.take()
+            && way == dir
+            && now.saturating_duration_since(closed) <= INPUT_LAG
+        {
+            // Not a repeated report after all: a hand on the wall.
+            self.pending.clear();
+            self.target = None;
+            self.impulse(dir, closed);
+            tracing::debug!(?dir, "wall button right after our impulse");
+            return;
+        }
         let Some((echo, closed)) = self.ours.take() else {
             return;
         };
@@ -657,17 +677,31 @@ impl Cover {
             self.ready_at = self.ready_at.max(now + self.pulse() + GAP);
         }
         let window = self.echo_window();
-        self.ours = None;
+        let last = self.ours.take();
+        self.repeat = None;
         match self.echo.take() {
             Some(echo) if echo.dir == dir && now.saturating_duration_since(echo.sent) <= window => {
                 self.arrived(echo, now);
                 self.ours = Some((echo, now));
             }
             echo => {
-                // Not ours (or ours went missing): a hand on the wall.
                 if echo.is_some_and(|e| now.saturating_duration_since(e.sent) <= window) {
                     self.echo = echo;
                 }
+                // The relay of our impulse closing again just after: most
+                // likely the radio repeating its report. Counted only if the
+                // wall button's input event follows.
+                if let Some((ours, arrived)) = last
+                    && self.config.relays.is_some()
+                    && ours.dir == dir
+                    && now.saturating_duration_since(arrived) <= REPEAT
+                {
+                    self.ours = Some((ours, arrived));
+                    self.repeat = Some((dir, now));
+                    tracing::debug!(?dir, "relay report repeated, wall button awaited");
+                    return;
+                }
+                // Not ours (or ours went missing): a hand on the wall.
                 self.pending.clear();
                 self.target = None;
                 self.impulse(dir, now);
@@ -980,6 +1014,40 @@ mod tests {
         // Ours then arrives, and is taken as ours, not as one more press.
         c.on_report(&relays_report("ON", "OFF"), secs(t0, 2.5));
         assert!(!c.moving());
+    }
+
+    #[test]
+    fn a_repeated_report_of_our_impulse_is_no_stop() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(0.0), t0);
+        c.order(CONTROL, &text("open"), t0).unwrap();
+        c.fire(t0);
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 0.04));
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 0.36));
+        // The same closing handed over again 2.6 s later, with no input event.
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 2.62));
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 2.62));
+        assert!(c.moving());
+        assert_eq!(c.shown_change(secs(t0, 45.0)), Some(100));
+    }
+
+    #[test]
+    fn a_wall_press_right_after_our_impulse_counts_with_its_input_event() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(Some(0.0), t0);
+        c.order(CONTROL, &text("open"), t0).unwrap();
+        c.fire(t0);
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 0.1));
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 0.6));
+        // « Up » pressed on the wall 4 s later: it stops, from the closing on.
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 4.1));
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 4.6));
+        c.on_report(&action("input_1_single"), secs(t0, 4.9));
+        assert!(!c.moving());
+        assert_eq!(height(&c, secs(t0, 30.0)), Some(10.0));
+        // Later than that, a closing is a press at once.
+        c.on_report(&relays_report("ON", "OFF"), secs(t0, 20.0));
+        assert!(c.moving());
     }
 
     #[test]

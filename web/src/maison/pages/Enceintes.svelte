@@ -318,6 +318,21 @@
   });
   const foundCount = $derived(found ? found.reduce((n, s) => n + s.hits.length, 0) : 0);
   const showResults = $derived(!!opened || busy || !!found);
+  // The results scroll in their own box; at its end the wheel goes on with
+  // the page, in the same gesture (a browser would keep it on the box).
+  function handOver(box) {
+    const wheel = (e) => {
+      if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      const atEnd = e.deltaY > 0 && box.scrollTop + box.clientHeight >= box.scrollHeight - 1;
+      const atTop = e.deltaY < 0 && box.scrollTop <= 0;
+      if (!atEnd && !atTop) return;
+      e.preventDefault();
+      const step = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * innerHeight : e.deltaY;
+      (document.scrollingElement ?? document.documentElement).scrollBy({ top: step });
+    };
+    box.addEventListener('wheel', wheel, { passive: false });
+    return () => box.removeEventListener('wheel', wheel);
+  }
   function closeSearch() {
     shelfOpen = false;
     clearSearch();
@@ -446,7 +461,7 @@
             </div>
           </div>
           {#if !folded}
-            <div class="results-body">
+            <div class="results-body" {@attach handOver}>
               {#if opened}
                 <div class="detail">
                   <button class="chip back" onclick={closeDetail}><Icon name="chevron-left" size={16} />{t('enceintes.retour')}</button>
@@ -542,7 +557,7 @@
   {/if}
 
   <!-- One thing playing: the player, and beside it what sleeps. -->
-  <div class="stage" class:duo={big.length <= 1 && asleep.length && !customizing}>
+  <div class="stage" class:duo={big.length === 1 && asleep.length && !customizing}>
   <div class="grid" class:editing={customizing} class:dragging={movingKey} style:--cols={cols} bind:clientWidth={gridWidth}>
     {#each big as g (g.key)}
       {@const tile = tileFor(g)}
@@ -922,7 +937,6 @@
     gap: 18px;
     max-height: min(58vh, 560px);
     overflow-y: auto;
-    overscroll-behavior: contain;
     padding: 2px 4px 4px 2px;
     scrollbar-width: thin;
   }

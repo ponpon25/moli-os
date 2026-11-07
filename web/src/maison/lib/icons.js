@@ -3,6 +3,7 @@
 import { t } from '../../lib/i18n.svelte.js';
 import {
   mdiFullscreen,
+  mdiLinkVariant,
   mdiCommentQuoteOutline,
   mdiCeilingLight,
   mdiCeilingFanLight,
@@ -237,6 +238,7 @@ export const icons = {
   shuffle: mdiShuffleVariant,
   speakers: mdiSpeakerMultiple,
   playlist: mdiPlaylistMusic,
+  link: mdiLinkVariant,
   'link-off': mdiLinkVariantOff,
   robot: mdiRobotOutline,
   shield: mdiShieldCheckOutline,

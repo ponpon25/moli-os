@@ -21,6 +21,37 @@
   const shuffle = $derived(value(lead, 'shuffle') === true);
   const lastOne = $derived(src === 'music' && typeof value(lead, 'queue_length') === 'number' && value(lead, 'queue_length') <= 1);
   const others = $derived(rooms.filter((r) => !members.some((m) => m.id === r.id)));
+  // Grouping: every other room, ticked when it plays with this one. A tick
+  // adds it (it leaves whatever group it was in), an untick takes it out.
+  // A room playing (or paused on) something else says so: adding it replaces
+  // what it had.
+  // Offered while another room exists, even when all of them already play
+  // here (then it is what ungroups them).
+  const canGroup = $derived(rooms.some((r) => r.id !== lead && has(r.id, 'join')));
+  let grouping = $state(false);
+  // Asked, not yet seen in the house's groups: shown as on its way.
+  let asking = $state({});
+  const inGroup = (id) => members.some((m) => m.id === id);
+  const groupable = $derived(rooms.filter((r) => r.id !== lead));
+  const elsewhere = (id) => {
+    if (inGroup(id)) return null;
+    if (value(id, 'playing') === true) return t('enceintes.groupe.joue', { title: value(id, 'title') ?? '' });
+    const with_ = value(id, 'group_with');
+    if (with_) return t('enceintes.groupe.dans', { room: with_ });
+    // Paused on something of its own: joining takes its place.
+    const title = value(id, 'title');
+    return title && value(id, 'state') === 'paused_playback' ? t('enceintes.groupe.en_pause', { title }) : null;
+  };
+  function setMember(id, on) {
+    asking[id] = on;
+    setTimeout(() => delete asking[id], 10000);
+    return on ? act(`${id}/join`, groupKey, t('enceintes.groupe.ajouter_de', { room: nameOf(id) })) : act(`${id}/leave`, true, t('enceintes.groupe.retirer_de', { room: nameOf(id) }));
+  }
+  $effect(() => {
+    // Seen in place: no longer on its way.
+    for (const id of Object.keys(asking)) if (inGroup(id) === asking[id]) delete asking[id];
+  });
+  const free = $derived(groupable.filter((r) => !inGroup(r.id) && reachable(r.id) && value(r.id, 'playing') !== true));
   const up = $derived(reachable(lead));
   const shown = $derived(cover && (failed[cover] ?? 0) < 2 && title);
   const ambient = $derived(shown && look.ambient);
@@ -109,6 +140,8 @@
     <div class="card-head">
       <h2><Icon name={members.length > 1 ? 'speakers' : 'speaker'} size={18} />{members.map((m) => nameOf(m.id)).join(' + ')}</h2>
 <span class="head-right">
+        {#if members.length > 1}<span class="chip grouped"><Icon name="speakers" size={14} />{t('enceintes.groupe.badge', { n: members.length })}</span>{/if}
+        {#if canGroup}<button class="soft small" class:on={grouping} onclick={() => (grouping = !grouping)} aria-expanded={grouping} aria-label={t('enceintes.groupe.bouton')} title={t('enceintes.groupe.bouton')}><Icon name="link" size={18} /></button>{/if}
         {#if onimmerse}<button class="soft small" onclick={onimmerse} aria-label={t('enceintes.immersion.titre')} title={t('enceintes.immersion.titre')}><Icon name="fullscreen" size={18} /></button>{/if}
         <span class="chip {playing ? 'warm' : ''}">{up ? stateLabel(lead) : t('enceintes.injoignable')}</span>
       </span>
@@ -249,14 +282,37 @@
     </ul>
     {/if}
 
-    {#if look.sections.join && others.length && has(others[0].id, 'join')}
-      <div class="join">
-        <span class="muted small">{t('enceintes.ajouter')}</span>
-        {#each others as o (o.id)}
-          <button class="chip pick" disabled={!reachable(o.id)} onclick={() => act(`${o.id}/join`, groupKey, t('enceintes.ajouter'))}>
-            <Icon name="plus" size={14} />{nameOf(o.id)}
-          </button>
-        {/each}
+    {#if canGroup && (grouping || look.sections.join)}
+      <div class="grouping" {@attach (el) => { if (grouping) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }}>
+        <div class="grouping-head">
+          <span class="label">{t('enceintes.groupe.titre')}</span>
+          <span class="grouping-acts">
+            {#if free.length > 1}<button class="chip" onclick={() => free.forEach((r) => setMember(r.id, true))}><Icon name="plus" size={14} />{t('enceintes.groupe.toutes')}</button>{/if}
+            {#if members.length > 1}<button class="chip" onclick={() => members.slice(1).forEach((m) => setMember(m.id, false))}><Icon name="link-off" size={14} />{t('enceintes.groupe.degrouper')}</button>{/if}
+            {#if grouping}<button class="soft small" onclick={() => (grouping = false)} aria-label={t('enceintes.groupe.fermer')} title={t('enceintes.groupe.fermer')}><Icon name="close" size={16} /></button>{/if}
+          </span>
+        </div>
+        <ul class="rooms-pick">
+          {#each groupable as r (r.id)}
+            {@const on = asking[r.id] ?? inGroup(r.id)}
+            {@const note = elsewhere(r.id)}
+            <li>
+              <button
+                class="pick"
+                class:on
+                class:wait={r.id in asking}
+                class:busy={!!note && value(r.id, 'playing') === true}
+                disabled={!reachable(r.id) || r.id in asking}
+                aria-pressed={on}
+                onclick={() => setMember(r.id, !on)}
+                title={on ? t('enceintes.groupe.retirer_de', { room: nameOf(r.id) }) : t('enceintes.groupe.ajouter_de', { room: nameOf(r.id) })}
+              >
+                <span class="tick" aria-hidden="true"><Icon name={on ? 'check' : 'plus'} size={14} /></span>
+                <span class="t"><b>{nameOf(r.id)}</b>{#if note}<span class="small muted">{note}</span>{/if}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
       </div>
     {/if}
 
@@ -554,7 +610,10 @@
   }
 
   .group.art {
+    /* clip, not hidden: the blurred cover overflows, and a hidden overflow can
+       still be scrolled (a focused button pulls it sideways). */
     overflow: hidden;
+    overflow: clip;
     isolation: isolate;
     background: #10131a;
     color: #fff;
@@ -752,7 +811,128 @@
     text-align: right;
   }
 
-  .join,
+  /* Grouping: the other rooms, each a tick. */
+  .chip.grouped {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .head-right .soft.on {
+    background: var(--ink);
+    color: var(--on-ink);
+  }
+
+  .grouping {
+    /* Clear of the floating dock when brought into view. */
+    scroll-margin-bottom: 110px;
+    display: grid;
+    gap: 10px;
+    margin-top: 14px;
+    padding: 12px;
+    border-radius: 16px;
+    background: var(--surface-2);
+  }
+
+  .grouping-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .grouping-head .label {
+    font-weight: 650;
+  }
+
+  .grouping-acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .rooms-pick {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr));
+    gap: 6px;
+  }
+
+  .rooms-pick .pick {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s var(--ease);
+  }
+
+  .rooms-pick .pick:hover:not(:disabled) {
+    background: var(--surface-3);
+  }
+
+  .rooms-pick .pick.on {
+    background: var(--ink);
+    color: var(--on-ink);
+    border-color: transparent;
+  }
+
+  .rooms-pick .pick.on .muted {
+    color: inherit;
+    opacity: 0.7;
+  }
+
+  .rooms-pick .pick.busy:not(.on) {
+    border-color: var(--warm, #e0a040);
+  }
+
+  .rooms-pick .pick.wait {
+    opacity: 0.6;
+    cursor: progress;
+  }
+
+  .rooms-pick .pick:disabled:not(.wait) {
+    opacity: 0.45;
+  }
+
+  .rooms-pick .tick {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--surface-3);
+  }
+
+  .rooms-pick .pick.on .tick {
+    background: var(--on-ink);
+    color: var(--ink);
+  }
+
+  .rooms-pick .t {
+    display: grid;
+    min-width: 0;
+  }
+
+  .rooms-pick .t b,
+  .rooms-pick .t .small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .tabs {
     display: flex;
     flex-wrap: wrap;
@@ -765,7 +945,6 @@
     border: 0;
   }
 
-  button.chip.pick:hover:not(:disabled),
   button.chip.clear:hover {
     background: var(--surface-3);
   }

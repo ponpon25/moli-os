@@ -46,10 +46,17 @@ mod srp;
 mod srtp;
 mod store;
 mod stream;
-mod tlv;
+pub mod tlv;
 
 #[cfg(test)]
 mod tests;
+
+/// HAP's pairing and session keys, as other Apple protocols reuse them
+/// (the Apple TV's Companion protocol).
+pub mod pairing {
+    pub use crate::controller::{Error, Identity, Pairing, SetupProof, Verify};
+    pub use crate::crypto::{counter_nonce, hkdf32, open_nonce, seal_nonce};
+}
 
 use std::collections::HashMap;
 use std::net::IpAddr;

@@ -1168,6 +1168,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-appletv"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-core",
+ "moli-homekit",
+ "moli-i18n",
+ "moli-runtime",
+ "ring",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "moli-assistant"
 version = "0.1.0"
 dependencies = [
@@ -1598,6 +1614,7 @@ dependencies = [
  "jiff",
  "moli-alexa",
  "moli-api",
+ "moli-appletv",
  "moli-assistant",
  "moli-automation",
  "moli-bambu",

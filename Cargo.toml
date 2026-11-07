@@ -58,6 +58,7 @@ moli-alexa = { path = "crates/moli-alexa" }
 moli-demo = { path = "crates/moli-demo" }
 moli-weather = { path = "crates/moli-weather" }
 moli-homekit = { path = "crates/moli-homekit" }
+moli-appletv = { path = "crates/moli-appletv" }
 moli-rtsp = { path = "crates/moli-rtsp" }
 
 aes = "0.8"

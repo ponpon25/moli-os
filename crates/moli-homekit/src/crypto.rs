@@ -60,6 +60,48 @@ pub fn open(key_bytes: &[u8; 32], tail: [u8; 8], aad: &[u8], sealed: &[u8]) -> O
     Some(plain.to_vec())
 }
 
+/// The Companion protocol's nonce: the counter over all 12 bytes, little
+/// endian (the counter first, the zeros last, unlike HAP's).
+pub fn counter_nonce(counter: u64) -> [u8; 12] {
+    let mut n = [0u8; 12];
+    n[..8].copy_from_slice(&counter.to_le_bytes());
+    n
+}
+
+/// Seals with a whole 12-byte nonce.
+pub fn seal_nonce(key_bytes: &[u8; 32], nonce: [u8; 12], aad: &[u8], plain: &[u8]) -> Vec<u8> {
+    let mut buf = plain.to_vec();
+    key(key_bytes)
+        .seal_in_place_append_tag(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(aad),
+            &mut buf,
+        )
+        .expect("sealing does not fail");
+    buf
+}
+
+/// Opens with a whole 12-byte nonce; `None` if it does not authenticate.
+pub fn open_nonce(
+    key_bytes: &[u8; 32],
+    nonce: [u8; 12],
+    aad: &[u8],
+    sealed: &[u8],
+) -> Option<Vec<u8>> {
+    if sealed.len() < TAG {
+        return None;
+    }
+    let mut buf = sealed.to_vec();
+    let plain = key(key_bytes)
+        .open_in_place(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(aad),
+            &mut buf,
+        )
+        .ok()?;
+    Some(plain.to_vec())
+}
+
 /// The 8-byte nonce tail of a pairing message (`PS-Msg05`…).
 pub fn message_tag(name: &str) -> [u8; 8] {
     let mut tail = [0u8; 8];

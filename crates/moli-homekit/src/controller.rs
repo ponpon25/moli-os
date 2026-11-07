@@ -99,6 +99,12 @@ impl Pairing {
         &self.accessory
     }
 
+    /// Moli's identifier to the accessory.
+    #[must_use]
+    pub fn controller(&self) -> &str {
+        &self.controller
+    }
+
     fn key(&self) -> Ed25519KeyPair {
         Ed25519KeyPair::from_seed_unchecked(&self.seed).expect("a 32-byte seed")
     }
@@ -462,7 +468,6 @@ impl Connection {
 
     /// pair-setup with the setup code (`123-45-678` or `12345678`): the
     /// accessory must be free (removed from the Home app).
-    #[allow(clippy::too_many_lines)] // the whole exchange, as the spec lists it
     pub async fn pair(&mut self, code: &str) -> Result<Pairing, Error> {
         let digits: String = code.chars().filter(char::is_ascii_digit).collect();
         if digits.len() != 8 {
@@ -476,9 +481,79 @@ impl Connection {
                 PAIR_ANSWER,
             )
             .await?;
+        let srp = SetupProof::new(&m2, &code)?;
+        let m4 = self
+            .tlv(
+                "/pair-setup",
+                &Tlv::new()
+                    .with(tlv::STATE, [3])
+                    .with(tlv::PUBLIC_KEY, &srp.big_a)
+                    .with(tlv::PROOF, srp.m1),
+                PAIR_ANSWER,
+            )
+            .await?;
+        srp.check(&m4)?;
+        let identity = Identity::new();
+        let m6 = self
+            .tlv(
+                "/pair-setup",
+                &Tlv::new()
+                    .with(tlv::STATE, [5])
+                    .with(tlv::ENCRYPTED_DATA, identity.sealed(&srp, &[])),
+                PAIR_ANSWER,
+            )
+            .await?;
+        identity.pairing(&srp, &m6)
+    }
+
+    /// pair-verify: both sides prove who they are, then the session is
+    /// encrypted.
+    pub async fn verify(&mut self, pairing: &Pairing) -> Result<(), Error> {
+        let verify = Verify::start()?;
+        let m2 = self
+            .tlv(
+                "/pair-verify",
+                &Tlv::new()
+                    .with(tlv::STATE, [1])
+                    .with(tlv::PUBLIC_KEY, verify.public()),
+                ANSWER,
+            )
+            .await?;
+        let (sealed, shared) = verify.finish(&m2, pairing)?;
+        self.tlv(
+            "/pair-verify",
+            &Tlv::new()
+                .with(tlv::STATE, [3])
+                .with(tlv::ENCRYPTED_DATA, sealed),
+            ANSWER,
+        )
+        .await?;
+        self.channel = Some(Channel::mirrored(&shared));
+        Ok(())
+    }
+}
+
+/// pair-setup's SRP-6a, controller side, once the accessory's salt and
+/// public key (M2) are known. Shared with the Companion protocol.
+pub struct SetupProof {
+    pub big_a: Vec<u8>,
+    pub m1: [u8; 64],
+    expected: [u8; 64],
+    session: [u8; 64],
+}
+
+impl std::fmt::Debug for SetupProof {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetupProof").finish_non_exhaustive()
+    }
+}
+
+impl SetupProof {
+    /// `password` exactly as the accessory expects it (`123-45-678` for
+    /// HAP, the four digits shown on an Apple TV).
+    pub fn new(m2: &Tlv, password: &str) -> Result<Self, Error> {
         let salt = m2.get(tlv::SALT).ok_or(Error::Protocol)?.to_vec();
         let big_b = m2.get(tlv::PUBLIC_KEY).ok_or(Error::Protocol)?.to_vec();
-        // SRP-6a, client side.
         let n = srp::modulus();
         let g = Uint::from_u64(5);
         let pad = |u: &Uint| u.to_be_bytes_padded(srp::KEY_LEN);
@@ -486,7 +561,7 @@ impl Connection {
         let big_a = pad(&g.pow_mod(&a, &n));
         let x = Uint::from_be_bytes(&sha(&[
             &salt,
-            &sha(&[format!("Pair-Setup:{code}").as_bytes()]),
+            &sha(&[format!("Pair-Setup:{password}").as_bytes()]),
         ]));
         let v = g.pow_mod(&x, &n);
         let k = Uint::from_be_bytes(&sha(&[&pad(&n), &pad(&g)]));
@@ -510,53 +585,93 @@ impl Connection {
             &big_b,
             &session,
         ]);
-        let m4 = self
-            .tlv(
-                "/pair-setup",
-                &Tlv::new()
-                    .with(tlv::STATE, [3])
-                    .with(tlv::PUBLIC_KEY, &big_a)
-                    .with(tlv::PROOF, m1),
-                PAIR_ANSWER,
-            )
-            .await?;
-        if m4.get(tlv::PROOF) != Some(&sha(&[&big_a, &m1, &session])[..]) {
-            return Err(Error::WrongAccessory);
+        let expected = sha(&[&big_a, &m1, &session]);
+        Ok(Self {
+            big_a,
+            m1,
+            expected,
+            session,
+        })
+    }
+
+    /// M4: the accessory knew the code too.
+    pub fn check(&self, m4: &Tlv) -> Result<(), Error> {
+        if m4.get(tlv::PROOF) == Some(&self.expected[..]) {
+            Ok(())
+        } else {
+            Err(Error::WrongAccessory)
         }
-        // M5: Moli's identity, signed and sealed.
-        let seed = random::<32>();
-        let controller = new_controller_id();
-        let key = Ed25519KeyPair::from_seed_unchecked(&seed).expect("a 32-byte seed");
-        let encrypt_key = hkdf32(
-            &session,
+    }
+}
+
+/// Moli's new long-term identity, sent in M5.
+pub struct Identity {
+    controller: String,
+    seed: [u8; 32],
+}
+
+impl std::fmt::Debug for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Identity")
+            .field("controller", &self.controller)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for Identity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Identity {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            controller: new_controller_id(),
+            seed: random::<32>(),
+        }
+    }
+
+    fn encrypt_key(srp: &SetupProof) -> [u8; 32] {
+        hkdf32(
+            &srp.session,
             "Pair-Setup-Encrypt-Salt",
             "Pair-Setup-Encrypt-Info",
-        );
+        )
+    }
+
+    /// M5's encrypted data: identifier, key, signature, and `extra` items.
+    pub fn sealed(&self, srp: &SetupProof, extra: &[(u8, Vec<u8>)]) -> Vec<u8> {
+        let key = Ed25519KeyPair::from_seed_unchecked(&self.seed).expect("a 32-byte seed");
         let sign_x = hkdf32(
-            &session,
+            &srp.session,
             "Pair-Setup-Controller-Sign-Salt",
             "Pair-Setup-Controller-Sign-Info",
         );
         let ltpk = key.public_key().as_ref().to_vec();
         let mut signed = sign_x.to_vec();
-        signed.extend_from_slice(controller.as_bytes());
+        signed.extend_from_slice(self.controller.as_bytes());
         signed.extend_from_slice(&ltpk);
-        let inner = Tlv::new()
-            .with(tlv::IDENTIFIER, controller.as_bytes())
+        let mut inner = Tlv::new()
+            .with(tlv::IDENTIFIER, self.controller.as_bytes())
             .with(tlv::PUBLIC_KEY, &ltpk)
             .with(tlv::SIGNATURE, key.sign(&signed).as_ref());
-        let sealed = crypto::seal(&encrypt_key, message_tag("PS-Msg05"), &[], &inner.encode());
-        let m6 = self
-            .tlv(
-                "/pair-setup",
-                &Tlv::new()
-                    .with(tlv::STATE, [5])
-                    .with(tlv::ENCRYPTED_DATA, sealed),
-                PAIR_ANSWER,
-            )
-            .await?;
+        for (tag, value) in extra {
+            inner = inner.with(*tag, value);
+        }
+        crypto::seal(
+            &Self::encrypt_key(srp),
+            message_tag("PS-Msg05"),
+            &[],
+            &inner.encode(),
+        )
+    }
+
+    /// M6: the accessory's identity, checked; the pairing is made.
+    pub fn pairing(self, srp: &SetupProof, m6: &Tlv) -> Result<Pairing, Error> {
         let opened = crypto::open(
-            &encrypt_key,
+            &Self::encrypt_key(srp),
             message_tag("PS-Msg06"),
             &[],
             m6.get(tlv::ENCRYPTED_DATA).ok_or(Error::Protocol)?,
@@ -566,7 +681,7 @@ impl Connection {
         let accessory = inner.get(tlv::IDENTIFIER).ok_or(Error::Protocol)?;
         let accessory_key = inner.get(tlv::PUBLIC_KEY).ok_or(Error::Protocol)?;
         let accessory_x = hkdf32(
-            &session,
+            &srp.session,
             "Pair-Setup-Accessory-Sign-Salt",
             "Pair-Setup-Accessory-Sign-Info",
         );
@@ -577,16 +692,28 @@ impl Connection {
             .verify(&signed, inner.get(tlv::SIGNATURE).ok_or(Error::Protocol)?)
             .map_err(|_| Error::WrongAccessory)?;
         Ok(Pairing {
-            controller,
-            seed,
+            controller: self.controller,
+            seed: self.seed,
             accessory: String::from_utf8_lossy(accessory).into_owned(),
             accessory_key: accessory_key.to_vec(),
         })
     }
+}
 
-    /// pair-verify: both sides prove who they are, then the session is
-    /// encrypted.
-    pub async fn verify(&mut self, pairing: &Pairing) -> Result<(), Error> {
+/// pair-verify, controller side. Shared with the Companion protocol.
+pub struct Verify {
+    ephemeral: EphemeralPrivateKey,
+    public: Vec<u8>,
+}
+
+impl std::fmt::Debug for Verify {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Verify").finish_non_exhaustive()
+    }
+}
+
+impl Verify {
+    pub fn start() -> Result<Self, Error> {
         let rng = SystemRandom::new();
         let ephemeral =
             EphemeralPrivateKey::generate(&X25519, &rng).map_err(|_| Error::Protocol)?;
@@ -595,18 +722,20 @@ impl Connection {
             .map_err(|_| Error::Protocol)?
             .as_ref()
             .to_vec();
-        let m2 = self
-            .tlv(
-                "/pair-verify",
-                &Tlv::new()
-                    .with(tlv::STATE, [1])
-                    .with(tlv::PUBLIC_KEY, &public),
-                ANSWER,
-            )
-            .await?;
+        Ok(Self { ephemeral, public })
+    }
+
+    /// Moli's ephemeral key, for M1.
+    pub fn public(&self) -> &[u8] {
+        &self.public
+    }
+
+    /// Checks M2 (the paired accessory signed it); returns M3's encrypted
+    /// data and the shared secret the session keys come from.
+    pub fn finish(self, m2: &Tlv, pairing: &Pairing) -> Result<(Vec<u8>, Vec<u8>), Error> {
         let accessory_public = m2.get(tlv::PUBLIC_KEY).ok_or(Error::Protocol)?.to_vec();
         let shared = agreement::agree_ephemeral(
-            ephemeral,
+            self.ephemeral,
             &UnparsedPublicKey::new(&X25519, &accessory_public),
             <[u8]>::to_vec,
         )
@@ -630,27 +759,18 @@ impl Connection {
         }
         let mut signed = accessory_public.clone();
         signed.extend_from_slice(pairing.accessory.as_bytes());
-        signed.extend_from_slice(&public);
+        signed.extend_from_slice(&self.public);
         SignatureKey::new(&ED25519, &pairing.accessory_key)
             .verify(&signed, inner.get(tlv::SIGNATURE).ok_or(Error::Protocol)?)
             .map_err(|_| Error::WrongAccessory)?;
-        let mut signed = public.clone();
+        let mut signed = self.public.clone();
         signed.extend_from_slice(pairing.controller.as_bytes());
         signed.extend_from_slice(&accessory_public);
         let inner = Tlv::new()
             .with(tlv::IDENTIFIER, pairing.controller.as_bytes())
             .with(tlv::SIGNATURE, pairing.key().sign(&signed).as_ref());
         let sealed = crypto::seal(&key, message_tag("PV-Msg03"), &[], &inner.encode());
-        self.tlv(
-            "/pair-verify",
-            &Tlv::new()
-                .with(tlv::STATE, [3])
-                .with(tlv::ENCRYPTED_DATA, sealed),
-            ANSWER,
-        )
-        .await?;
-        self.channel = Some(Channel::mirrored(&shared));
-        Ok(())
+        Ok((sealed, shared))
     }
 }
 

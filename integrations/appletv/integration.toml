@@ -1,0 +1,28 @@
+[integration]
+id = "appletv"
+name = "Apple TV (protocole Companion, comme la télécommande de l'iPhone)"
+brands = ["Apple"]
+models = ["Apple TV HD", "Apple TV 4K"]
+# Companion : trames OPACK sur TCP, appairage HAP (code à 4 chiffres affiché sur la télé),
+# session ChaCha20-Poly1305. Local, sans cloud.
+transport = "tcp"
+driver = "appletv"
+crate = "moli-appletv"
+
+[discovery]
+# Le port change au redémarrage de l'Apple TV : le pilote le demande à l'Apple TV elle-même
+# (question mDNS en unicast) quand l'option `port` est absente.
+mdns = ["_companion-link._tcp"]
+ssdp = []
+ports = []
+
+[needs]
+# `pairing` est écrit par le pilote quand on l'appaire depuis le tableau de bord (points
+# `pairing` puis `pin`) : rien à donner à la main.
+secrets = []
+vars = []
+options = ["host"]
+
+[origin]
+reused = "aucun code repris ; protocole décrit d'après pyatv (MIT), appairage HAP du contrôleur HomeKit de Moli"
+author = "agent"

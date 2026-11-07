@@ -265,6 +265,14 @@ fn paired_points(config: &Config) -> Vec<PointSpec> {
             false,
             true,
         ));
+        // Written `true`: opens CANAL+'s live grid on « Maintenant », no channel chosen.
+        points.push(spec(
+            "canal_live",
+            "pilotes.appletv.direct_canal",
+            Kind::Binary,
+            false,
+            true,
+        ));
     }
     points
 }
@@ -836,11 +844,11 @@ fn canal_path(at: usize) -> Vec<&'static str> {
     keys
 }
 
-/// Opens a channel of CANAL+'s live grid, wherever the app was left
-/// (closed, on another page, a channel playing): wake, open the app, the
-/// grid's link twice (a starting app drops the first), up to the top, then
-/// the channel's tile.
-async fn canal_channel(tv: &mut Companion, at: usize, asleep: bool) -> Result<(), Error> {
+/// Opens CANAL+'s live grid, wherever the app was left (closed, on another
+/// page, a channel playing): wake, open the app, the grid's link twice (a
+/// starting app drops the first), up to the top (« Maintenant »), then the
+/// channel's tile when one is asked.
+async fn canal_channel(tv: &mut Companion, at: Option<usize>, asleep: bool) -> Result<(), Error> {
     let hid = |code: i64| Opack::dict([("_hBtS", Opack::Int(2)), ("_hidC", Opack::Int(code))]);
     if asleep {
         tv.request("_hidC", hid(WAKE)).await?;
@@ -857,7 +865,9 @@ async fn canal_channel(tv: &mut Companion, at: usize, asleep: bool) -> Result<()
         .await?;
     tokio::time::sleep(Duration::from_secs(3)).await;
     let mut keys = vec!["up"; 4];
-    keys.extend(canal_path(at));
+    if let Some(at) = at {
+        keys.extend(canal_path(at));
+    }
     for key in keys {
         let code = KEYS.iter().find(|(k, _)| *k == key).map_or(0, |(_, c)| *c);
         press(tv, code).await?;
@@ -957,7 +967,17 @@ async fn order(
             command.reply(Ok(()));
             tracing::info!(instance = %ctx.instance(), channel = %channel, "apple tv: canal+ channel");
             let asleep = ctx.current(id, "state") == Some(Value::Text("asleep".into()));
-            return match canal_channel(tv, at, asleep).await {
+            return match canal_channel(tv, Some(at), asleep).await {
+                Ok(()) | Err(Error::Refused(_)) => Ok(()),
+                Err(e) => Err(e),
+            };
+        }
+        ("canal_live", Value::Bool(true)) => {
+            // Answered now, as for a channel: the way takes some 17 s.
+            command.reply(Ok(()));
+            tracing::info!(instance = %ctx.instance(), "apple tv: canal+ live grid");
+            let asleep = ctx.current(id, "state") == Some(Value::Text("asleep".into()));
+            return match canal_channel(tv, None, asleep).await {
                 Ok(()) | Err(Error::Refused(_)) => Ok(()),
                 Err(e) => Err(e),
             };

@@ -720,6 +720,7 @@
   "pilotes.appletv.ne_se_regle_pas": "{point} cannot be set",
   "pilotes.appletv.refuse": "the Apple TV refused (error {code})",
   "pilotes.appletv.chaine_canal": "CANAL+ channel (opens it live)",
+  "pilotes.appletv.direct_canal": "CANAL+ live (the « Now » grid, no channel chosen)",
   "pilotes.appletv.chaine_inconnue": "channel missing from canal_channels: {channel}",
   "pilotes.appletv.sortie_audio": "Audio output",
   "pilotes.appletv.haut_parleurs_tv": "TV speakers",

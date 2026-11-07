@@ -720,6 +720,7 @@
   "pilotes.appletv.ne_se_regle_pas": "{point} ne peut pas être réglé",
   "pilotes.appletv.refuse": "l'Apple TV a refusé (erreur {code})",
   "pilotes.appletv.chaine_canal": "Chaîne CANAL+ (ouvre le direct)",
+  "pilotes.appletv.direct_canal": "Direct CANAL+ (grille « Maintenant », sans choisir de chaîne)",
   "pilotes.appletv.chaine_inconnue": "chaîne absente de canal_channels : {channel}",
   "pilotes.appletv.sortie_audio": "Sortie audio",
   "pilotes.appletv.haut_parleurs_tv": "Haut-parleurs TV",

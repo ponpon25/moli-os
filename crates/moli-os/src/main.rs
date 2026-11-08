@@ -951,6 +951,7 @@ const KINDS: &[&str] = &[
     "telegram",
     "olvid",
     "meteofrance",
+    "calendar",
     "phones",
     "moonraker",
     "ipp",
@@ -1219,6 +1220,10 @@ fn build_driver(
         )?),
         "meteofrance" => Arc::new(moli_meteofrance::MeteoFrance::new(
             config.options.clone().try_into().with_context(context)?,
+        )?),
+        "calendar" => Arc::new(moli_calendar::Calendar::new(
+            config.options.clone().try_into().with_context(context)?,
+            data_dir,
         )?),
         "helpers" => Arc::new(moli_helpers::Helpers::new(
             config.options.clone().try_into().with_context(context)?,

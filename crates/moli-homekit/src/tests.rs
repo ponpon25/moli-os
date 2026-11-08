@@ -545,7 +545,7 @@ impl Driver for FakeShutter {
                 "volet",
                 vec![
                     control,
-                    spec("slats_open", Kind::Binary, false, Semantic::Other),
+                    spec("slats_open", Kind::Binary, true, Semantic::Other),
                     spec(
                         "percent_control",
                         Kind::Numeric {

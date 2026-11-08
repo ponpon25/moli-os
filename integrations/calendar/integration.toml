@@ -1,0 +1,30 @@
+[integration]
+id = "calendar"
+name = "Calendrier scolaire"
+brands = ["Éducation nationale"]
+models = []
+# Internet, open data over HTTPS (data.education.gouv.fr, calendrier.api.gouv.fr), no account.
+transport = "https"
+driver = "calendar"
+crate = "moli-calendar"
+
+[discovery]
+mdns = []
+ssdp = []
+ports = []
+
+[needs]
+secrets = []
+vars = []
+options = ["location", "zone", "timezone"]
+
+[origin]
+reused = "aucun code repris ; jeux de données publics fr-en-calendrier-scolaire (Éducation nationale) et jours fériés (calendrier.api.gouv.fr) ; fixtures recopiées de leur format"
+author = "agent"
+
+# Replayed by the crate's tests (crates/moli-calendar/src).
+[[fixture]]
+file = "fixtures/calendrier-scolaire.json"
+
+[[fixture]]
+file = "fixtures/jours-feries.json"

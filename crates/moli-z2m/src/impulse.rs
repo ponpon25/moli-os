@@ -428,6 +428,26 @@ impl Cover {
                     self.pending.push((now, Step::Stop));
                 }
             }
+            // On the sill with the slats pulled apart (light through, the
+            // bottom still down), or pressed together (closed).
+            (SLATS, Value::Bool(false)) => self.go(Dir::Down, now),
+            (SLATS, Value::Bool(true)) => {
+                let Some(pos) = self.position(now) else {
+                    return Err(moli_i18n::tr!("pilotes.z2m.volet.position_inconnue"));
+                };
+                if self.motion.is_none() && pos.slats_open() {
+                    return Ok(());
+                }
+                // Rising from closed: only the slats move, then it stops.
+                // Lower: down to the sill, stopped before they press together.
+                let dir = if pos.height < 0.5 && self.motion.is_none_or(|m| m.dir == Dir::Up) {
+                    Dir::Up
+                } else {
+                    Dir::Down
+                };
+                self.target = Some(0.0);
+                self.go(dir, now);
+            }
             (PERCENT, v) => {
                 let target = number(v)
                     .ok_or_else(|| moli_i18n::tr!("pilotes.z2m.volet.position_attendue"))?
@@ -799,7 +819,7 @@ pub fn reshape(device: &mut Device, config: &CoverConfig) {
         kind: Kind::Binary,
         access: Access {
             read: true,
-            write: false,
+            write: true,
         },
         unit: None,
         semantic: Semantic::Other,
@@ -888,6 +908,57 @@ mod tests {
             .as_object()
             .unwrap()
             .clone()
+    }
+
+    fn slatted(pos: Spot, t0: Instant) -> Cover {
+        let mut c = relay_cover(None, t0);
+        c.config.slack_up = 2.0;
+        c.config.slack_down = 2.0;
+        c.pos = Some(pos);
+        c
+    }
+
+    #[test]
+    fn slats_part_from_closed_and_the_bottom_stays_down() {
+        let t0 = Instant::now();
+        let mut c = slatted(Spot::at(0.0, false), t0);
+        c.order(SLATS, &Value::Bool(true), t0).unwrap();
+        assert_eq!(c.fire(t0), ["OPEN"]);
+        c.on_report(&relays_report("ON", "OFF"), t0);
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 0.5));
+        // Stopped once the slats are apart: 2 s, the bottom has not moved.
+        assert_eq!(c.deadline(), Some(secs(t0, 2.0)));
+        assert_eq!(c.fire(secs(t0, 2.0)), ["OPEN"]);
+        let pos = c.position(secs(t0, 3.0)).unwrap();
+        assert!(pos.slats_open() && pos.height < 0.5, "{pos:?}");
+        assert!(!c.moving());
+        // Already so: nothing to do.
+        c.order(SLATS, &Value::Bool(true), secs(t0, 40.0)).unwrap();
+        assert_eq!(c.deadline(), None);
+    }
+
+    #[test]
+    fn slats_from_higher_up_stop_on_the_sill() {
+        let t0 = Instant::now();
+        let mut c = slatted(Spot::at(50.0, false), t0);
+        c.order(SLATS, &Value::Bool(true), t0).unwrap();
+        assert_eq!(c.fire(t0), ["CLOSE"]);
+        c.on_report(&relays_report("OFF", "ON"), t0);
+        c.on_report(&relays_report("OFF", "OFF"), secs(t0, 0.5));
+        // Half of the 30 s of height, then stopped before pressing the slats.
+        assert_eq!(c.deadline(), Some(secs(t0, 15.0)));
+        assert_eq!(c.fire(secs(t0, 15.0)), ["CLOSE"]);
+        assert!(c.position(secs(t0, 16.0)).unwrap().slats_open());
+        // And `false` closes.
+        c.order(SLATS, &Value::Bool(false), secs(t0, 60.0)).unwrap();
+        assert_eq!(c.fire(secs(t0, 60.0)), ["CLOSE"]);
+    }
+
+    #[test]
+    fn slats_need_a_known_position() {
+        let t0 = Instant::now();
+        let mut c = relay_cover(None, t0);
+        assert!(c.order(SLATS, &Value::Bool(true), t0).is_err());
     }
 
     #[test]

@@ -730,5 +730,20 @@
   "pilotes.appletv.sortie_audio": "Sortie audio",
   "pilotes.appletv.haut_parleurs_tv": "Haut-parleurs TV",
   "pilotes.appletv.airplay_absent": "pas de session AirPlay avec l'Apple TV pour l'instant",
-  "pilotes.appletv.seule_sortie": "c'est la seule sortie : active d'abord une enceinte"
+  "pilotes.appletv.seule_sortie": "c'est la seule sortie : active d'abord une enceinte",
+  "pilotes.calendar.nom": "Calendrier scolaire",
+  "pilotes.calendar.modele": "Académie de {location}",
+  "pilotes.calendar.description": "Jours d'école, vacances scolaires de l'académie et jours fériés, d'après les données ouvertes officielles",
+  "pilotes.calendar.jour_ecole": "Jour d'école",
+  "pilotes.calendar.jour_ecole_demain": "Jour d'école demain",
+  "pilotes.calendar.vacances": "Vacances scolaires",
+  "pilotes.calendar.vacances_nom": "Vacances en cours",
+  "pilotes.calendar.ferie": "Jour férié",
+  "pilotes.calendar.ferie_nom": "Nom du jour férié",
+  "pilotes.calendar.prochaines_vacances": "Prochaines vacances",
+  "pilotes.calendar.a_partir_du": "{name}, à partir du {day}",
+  "pilotes.calendar.injoignable": "{host} injoignable : {cause}",
+  "pilotes.calendar.reponse": "{host} a répondu {status}",
+  "pilotes.calendar.sans_json": "{host} n'a pas répondu en JSON",
+  "pilotes.calendar.academie_inconnue": "Aucune vacance trouvée pour l'académie « {location} » : vérifier `location` dans moli.toml (écrite comme dans le jeu de données), puis redémarrer"
 }

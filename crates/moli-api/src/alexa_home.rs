@@ -1252,7 +1252,7 @@ mod tests {
         let views = [shutter(
             vec![
                 control(&["open", "stop", "close"]),
-                spec("slats_open", Kind::Binary, true, false),
+                spec("slats_open", Kind::Binary, true, true),
                 percent_control(),
             ],
             Some(30),
@@ -1334,7 +1334,7 @@ mod tests {
             vec![
                 control(&["open", "stop", "close"]),
                 percent_control(),
-                spec("slats_open", Kind::Binary, true, false),
+                spec("slats_open", Kind::Binary, true, true),
                 unreachable,
             ],
             Some(50),

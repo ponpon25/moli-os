@@ -51,6 +51,7 @@ moli-sun.workspace = true
 moli-telegram.workspace = true
 moli-olvid.workspace = true
 moli-meteofrance.workspace = true
+moli-calendar.workspace = true
 moli-phones.workspace = true
 moli-assistant.workspace = true
 moli-automation.workspace = true

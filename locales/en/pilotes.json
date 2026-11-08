@@ -730,5 +730,20 @@
   "pilotes.appletv.sortie_audio": "Audio output",
   "pilotes.appletv.haut_parleurs_tv": "TV speakers",
   "pilotes.appletv.airplay_absent": "no AirPlay session with the Apple TV for now",
-  "pilotes.appletv.seule_sortie": "it is the only output: turn a speaker on first"
+  "pilotes.appletv.seule_sortie": "it is the only output: turn a speaker on first",
+  "pilotes.calendar.nom": "School calendar",
+  "pilotes.calendar.modele": "{location} academy",
+  "pilotes.calendar.description": "School days, the academy's school holidays and public holidays, from the official open data",
+  "pilotes.calendar.jour_ecole": "School day",
+  "pilotes.calendar.jour_ecole_demain": "School day tomorrow",
+  "pilotes.calendar.vacances": "School holidays",
+  "pilotes.calendar.vacances_nom": "Current holidays",
+  "pilotes.calendar.ferie": "Public holiday",
+  "pilotes.calendar.ferie_nom": "Public holiday name",
+  "pilotes.calendar.prochaines_vacances": "Next holidays",
+  "pilotes.calendar.a_partir_du": "{name}, from {day}",
+  "pilotes.calendar.injoignable": "{host} unreachable: {cause}",
+  "pilotes.calendar.reponse": "{host} answered {status}",
+  "pilotes.calendar.sans_json": "{host} did not answer with JSON",
+  "pilotes.calendar.academie_inconnue": "No holidays found for the « {location} » academy: check `location` in moli.toml (written as in the dataset), then restart"
 }

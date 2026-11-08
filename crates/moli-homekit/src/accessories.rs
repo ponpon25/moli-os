@@ -2077,7 +2077,7 @@ mod tests {
         control.access.read = false;
         vec![
             control,
-            point("slats_open", Kind::Binary, false, Semantic::Other),
+            point("slats_open", Kind::Binary, true, Semantic::Other),
             point("percent_control", range(0.0, 100.0), true, Semantic::Other),
         ]
     }

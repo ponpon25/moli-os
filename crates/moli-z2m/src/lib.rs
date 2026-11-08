@@ -298,7 +298,10 @@ fn on_command(
         return;
     };
     if let Some(cover) = covers.get_mut(&entry.ieee) {
-        if matches!(&*command.key, impulse::CONTROL | impulse::PERCENT) {
+        if matches!(
+            &*command.key,
+            impulse::CONTROL | impulse::PERCENT | impulse::SLATS
+        ) {
             // Sent by `drive_covers`, right after (its deadline is now).
             let result = cover.order(&command.key, &command.value, Instant::now());
             command.reply(result);

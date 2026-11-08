@@ -331,8 +331,8 @@
   }
 
   .rooms {
-    --sort-cols: repeat(auto-fill, minmax(150px, 1fr));
-    --sort-gap: 8px;
+    --sort-cols: repeat(auto-fill, minmax(180px, 1fr));
+    --sort-gap: 10px;
   }
 
   .door {
@@ -394,12 +394,6 @@
   .door.alert .ico,
   .door.alert .sub {
     color: #ffc1b1;
-  }
-
-  .rooms {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 8px;
   }
 
   footer {

@@ -24,6 +24,8 @@ pub const MAX_GROUPS: usize = 64;
 pub const MAX_SWITCHES: usize = 8;
 /// The point a switch's presses arrive on (Zigbee remotes: `action`).
 pub const PRESS: &str = "action";
+/// How long a switch stays quiet while a button is learnt, at most.
+pub const LEARNING: std::time::Duration = std::time::Duration::from_secs(90);
 /// Longest press name kept.
 const MAX_PRESS: usize = 64;
 
@@ -112,6 +114,9 @@ struct Inner {
     hub: Hub,
     path: Option<PathBuf>,
     saved: Mutex<Saved>,
+    /// Switches being learnt from the dashboard, until when: their presses
+    /// command nothing meanwhile.
+    learning: Mutex<std::collections::HashMap<String, std::time::Instant>>,
     /// Moves on with each change; the driver follows it.
     changes: watch::Sender<u64>,
 }
@@ -159,6 +164,7 @@ impl Groups {
             hub,
             path,
             saved: Mutex::new(saved),
+            learning: Mutex::default(),
             changes: watch::channel(0).0,
         }))
     }
@@ -170,6 +176,33 @@ impl Groups {
     #[must_use]
     pub fn list(&self) -> Vec<Group> {
         self.saved().groups.clone()
+    }
+
+    /// A button of this switch is being learnt (`on`), or no longer is.
+    pub fn learning(&self, device: &str, on: bool) {
+        let mut learning = self
+            .0
+            .learning
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let now = std::time::Instant::now();
+        learning.retain(|_, until| *until > now);
+        if on {
+            learning.insert(device.to_owned(), now + LEARNING);
+        } else {
+            learning.remove(device);
+        }
+    }
+
+    /// Whether this switch's presses are held back (a button being learnt).
+    #[must_use]
+    pub fn is_learning(&self, device: &str) -> bool {
+        self.0
+            .learning
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(device)
+            .is_some_and(|until| *until > std::time::Instant::now())
     }
 
     pub(crate) fn watch(&self) -> watch::Receiver<u64> {

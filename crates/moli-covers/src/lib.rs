@@ -33,7 +33,8 @@ use moli_core::{
 };
 use moli_runtime::{BoxFuture, CommandRequest, Driver, DriverCtx, Hub};
 pub use store::{
-    Group, GroupError, Groups, MAX_GROUPS, MAX_MEMBERS, MAX_NAME, MAX_SWITCHES, PRESS, Switch,
+    Group, GroupError, Groups, LEARNING, MAX_GROUPS, MAX_MEMBERS, MAX_NAME, MAX_SWITCHES, PRESS,
+    Switch,
 };
 use tokio::sync::broadcast::error::RecvError;
 
@@ -442,13 +443,20 @@ impl Covers {
         house.groups = groups.into_iter().map(|g| (g.id.clone(), g)).collect();
     }
 
-    /// A switch was pressed: the groups it serves obey, each from its own
-    /// task, as if told from the dashboard.
+    /// A switch was pressed: the groups it serves obey, as if told from the
+    /// dashboard. A shutter in several of them gets the order once (the
+    /// first group's): a second pulse to a moving motor would stop it.
     fn pressed(&self, house: &House, device: &DeviceId, value: &Value) {
         let Value::Text(press) = value else { return };
         let Some(served) = house.switches.get(device) else {
             return;
         };
+        if self.groups.is_learning(device.as_str()) {
+            tracing::info!(switch = %device, %press, "cover group: press ignored, a button is being learnt");
+            return;
+        }
+        let mut lines: Vec<(Order, Group)> = Vec::new();
+        let mut given: Vec<&String> = Vec::new();
         for (id, switch) in served {
             let is = |p: &Option<String>| p.as_deref() == Some(&**press);
             let order = if is(&switch.open) {
@@ -460,14 +468,39 @@ impl Covers {
             } else {
                 continue;
             };
-            let Some(group) = house.groups.get(id).cloned() else {
+            let Some(group) = house.groups.get(id) else {
                 continue;
             };
+            let fresh: Vec<String> = group
+                .members
+                .iter()
+                .filter(|m| !given.contains(m))
+                .cloned()
+                .collect();
+            given.extend(group.members.iter());
+            if fresh.is_empty() {
+                continue;
+            }
+            match lines.iter_mut().find(|(o, _)| *o == order) {
+                Some((_, line)) => {
+                    line.name = format!("{}, {}", line.name, group.name);
+                    line.members.extend(fresh);
+                }
+                None => lines.push((
+                    order,
+                    Group {
+                        members: fresh,
+                        ..group.clone()
+                    },
+                )),
+            }
+        }
+        for (order, line) in lines {
             let hub = self.hub.clone();
             let device = device.clone();
             tokio::spawn(async move {
-                if let Err(error) = give(&hub, &group, order).await {
-                    tracing::warn!(group = %group.id, switch = %device, %error, "cover group: a press was not obeyed");
+                if let Err(error) = give(&hub, &line, order).await {
+                    tracing::warn!(group = %line.id, switch = %device, %error, "cover group: a press was not obeyed");
                 }
             });
         }

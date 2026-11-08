@@ -8,6 +8,8 @@
 //! A switch is `{ device, open?, close?, stop? }`: the presses (values of its
 //! `action` point) that open, close or stop the group.
 //! - `DELETE /api/cover-groups/{id}`
+//! - `POST /api/cover-groups/learning` `{ device, on }`: while a button is
+//!   being learnt, that switch's presses command nothing (90 s at most).
 //!
 //! The writes are the household's, like the rest of how the dashboard is
 //! arranged: a group gives nobody a power they did not have, since the guard
@@ -211,4 +213,24 @@ pub(crate) async fn remove(
         }
         Err(e) => failed(&e),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Learning {
+    device: String,
+    on: bool,
+}
+
+pub(crate) async fn learning(
+    Extension(CoverGroupsGate(gate)): Extension<CoverGroupsGate>,
+    caller: Caller,
+    Json(body): Json<Learning>,
+) -> Response {
+    let Some(groups) = gate else { return absent() };
+    if let Some(refusal) = refused(&caller) {
+        return refusal;
+    }
+    groups.learning(&body.device, body.on);
+    Json(json!({ "device": body.device, "on": body.on })).into_response()
 }

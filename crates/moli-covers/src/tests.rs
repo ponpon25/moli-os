@@ -584,3 +584,53 @@ async fn switches_are_checked_and_kept_unless_given() {
         .unwrap();
     assert!(cleared.switches.is_empty());
 }
+
+#[tokio::test]
+async fn a_shutter_in_two_groups_gets_one_order_per_press() {
+    let h = house(None).await;
+    let both = [switch(Some("on_top"), Some("off_top"), None)];
+    let small = h
+        .groups
+        .create_with("Vie", &ids(&["a", "b"]), &both)
+        .unwrap();
+    let all = h
+        .groups
+        .create_with("Tout", &ids(&["a", "b", "c"]), &both)
+        .unwrap();
+    until(|| {
+        h.hub.device(&small.device_id()).is_some() && h.hub.device(&all.device_id()).is_some()
+    })
+    .await;
+    set(&h.hub, "fake:switch/action", Value::from("on_top")).await;
+    until(|| h.fake.orders.lock().unwrap().len() >= 3).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(
+        given(&h.fake),
+        [
+            ("a/control".to_owned(), Value::from("open")),
+            ("b/control".to_owned(), Value::from("open")),
+            ("c/control".to_owned(), Value::from("open"))
+        ]
+    );
+}
+
+#[tokio::test]
+async fn presses_command_nothing_while_a_button_is_learnt() {
+    let h = house(None).await;
+    let group = h
+        .groups
+        .create_with("Vie", &ids(&["a"]), &[switch(Some("on_top"), None, None)])
+        .unwrap();
+    until(|| h.hub.device(&group.device_id()).is_some()).await;
+    h.groups.learning("fake:switch", true);
+    set(&h.hub, "fake:switch/action", Value::from("on_top")).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(given(&h.fake).is_empty());
+    h.groups.learning("fake:switch", false);
+    set(&h.hub, "fake:switch/action", Value::from("on_top")).await;
+    until(|| !h.fake.orders.lock().unwrap().is_empty()).await;
+    assert_eq!(
+        given(&h.fake),
+        [("a/control".to_owned(), Value::from("open"))]
+    );
+}

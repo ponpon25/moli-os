@@ -29,12 +29,35 @@
   let switchesRead = $state(!id);
   /** `{ device, slot, since }` while waiting for a press. */
   let learning = $state(null);
+  /** The other groups' switches: `[{ name, switches }]`. */
+  let others = $state([]);
+
+  /** While a button is learnt, Moli holds that switch's presses back. */
+  function hold(deviceId, on) {
+    fetch('/api/cover-groups/learning', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-moli-origin': 'ui' },
+      body: JSON.stringify({ device: deviceId, on }),
+    }).catch(() => {});
+  }
+
+  function stopLearning() {
+    if (learning) hold(learning.device, false);
+    learning = null;
+  }
+
+  /** The other groups this press of this switch already commands. */
+  function alsoIn(deviceId, press) {
+    if (!press) return [];
+    return others.filter((g) => g.switches.some((s) => s.device === deviceId && [s.open, s.close, s.stop].includes(press))).map((g) => g.name);
+  }
 
   onMount(async () => {
-    if (!id) return;
     try {
       const res = await fetch('/api/cover-groups');
       const answer = await res.json();
+      others = (answer.groups ?? []).filter((g) => g.device !== id).map((g) => ({ name: g.name, switches: g.switches ?? [] }));
+      if (!id) return;
       const mine = (answer.groups ?? []).find((g) => g.device === id);
       switches = (mine?.switches ?? []).map((s) => ({ device: s.device, open: s.open ?? null, close: s.close ?? null, stop: s.stop ?? null }));
       switchesRead = true;
@@ -59,7 +82,7 @@
 
   function removeSwitch(deviceId) {
     switches = switches.filter((s) => s.device !== deviceId);
-    if (learning?.device === deviceId) learning = null;
+    if (learning?.device === deviceId) stopLearning();
   }
 
   function setPress(deviceId, slot, press) {
@@ -79,7 +102,11 @@
 
   function learn(deviceId, slot) {
     const now = device(deviceId)?.state?.action?.ts ?? 0;
-    learning = learning?.device === deviceId && learning.slot === slot ? null : { device: deviceId, slot, since: now };
+    const again = learning?.device === deviceId && learning.slot === slot;
+    stopLearning();
+    if (again) return;
+    learning = { device: deviceId, slot, since: now };
+    hold(deviceId, true);
   }
 
   // The first press after « Apprendre » is the one.
@@ -88,7 +115,7 @@
     const seen = device(learning.device)?.state?.action;
     if (seen && seen.ts > learning.since && typeof seen.value === 'string' && seen.value !== '') {
       const { device: d, slot } = learning;
-      learning = null;
+      stopLearning();
       setPress(d, slot, seen.value);
     }
   });
@@ -153,7 +180,7 @@
   }
 </script>
 
-<dialog bind:this={dialog} {onclose} onclick={(e) => e.target === dialog && dialog.close()} aria-label={t(id ? 'maison.groupes_stores.modifier' : 'maison.groupes_stores.creer')}>
+<dialog bind:this={dialog} onclose={() => { stopLearning(); onclose?.(); }} onclick={(e) => e.target === dialog && dialog.close()} aria-label={t(id ? 'maison.groupes_stores.modifier' : 'maison.groupes_stores.creer')}>
   <form onsubmit={save}>
     <header>
       <h2>{t(id ? 'maison.groupes_stores.modifier' : 'maison.groupes_stores.creer')}</h2>
@@ -199,6 +226,7 @@
           </div>
           {#each SLOTS as slot (slot)}
             {@const waiting = learning?.device === sw.device && learning.slot === slot}
+            {@const also = waiting ? [] : alsoIn(sw.device, sw[slot])}
             <div class="slot">
               <span class="slot-name">{t(`maison.groupes_stores.${SLOT_WORD[slot]}`)}</span>
               <span class="press" class:none={!sw[slot]} class:waiting>{waiting ? t('maison.groupes_stores.appuyez') : pressWord(sw[slot])}</span>
@@ -207,6 +235,7 @@
               {/if}
               <button type="button" class="btn small" class:main={waiting} onclick={() => learn(sw.device, slot)}>{waiting ? t('commun.annuler') : t('maison.groupes_stores.apprendre')}</button>
             </div>
+            {#if also.length}<p class="help warn">{t('maison.groupes_stores.aussi', { groups: also.join(', ') })}</p>{/if}
           {/each}
         </div>
       {/each}

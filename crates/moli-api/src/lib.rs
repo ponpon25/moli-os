@@ -221,6 +221,10 @@ fn house_routes(humans: &Arc<session::Sessions>, options: &Options) -> Router<Hu
             get(cover_groups::list).post(cover_groups::create),
         )
         .route(
+            "/api/cover-groups/learning",
+            axum::routing::post(cover_groups::learning),
+        )
+        .route(
             "/api/cover-groups/{id}",
             put(cover_groups::update).delete(cover_groups::remove),
         )

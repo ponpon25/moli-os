@@ -365,6 +365,7 @@
   "maison.groupes_stores.aucune_touche": "aucune touche",
   "maison.groupes_stores.effacer_touche": "Effacer cette touche",
   "maison.groupes_stores.deja_prise": "Cette touche sert déjà à « {what} » : elle y a été retirée.",
+  "maison.groupes_stores.aussi": "Cette touche commande aussi « {groups} » : un appui les commandera ensemble.",
   "maison.stores.titre": "Stores",
   "maison.stores.aucun": "Aucun store pour l'instant.",
   "maison.accueil.calme_court": "Tout est calme.",

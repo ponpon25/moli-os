@@ -365,6 +365,7 @@
   "maison.groupes_stores.aucune_touche": "no button",
   "maison.groupes_stores.effacer_touche": "Clear this button",
   "maison.groupes_stores.deja_prise": "This button already did “{what}”: it was taken off there.",
+  "maison.groupes_stores.aussi": "This button also commands “{groups}”: one press will command them together.",
   "maison.stores.titre": "Shutters",
   "maison.stores.aucun": "No shutter yet.",
   "maison.accueil.calme_court": "All is calm.",

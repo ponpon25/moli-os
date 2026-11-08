@@ -524,6 +524,8 @@
   "pilotes.covers.acteur": "groupe « {name} »",
   "pilotes.covers.personne": "aucun store de ce groupe ne répond",
   "pilotes.covers.groupe_inconnu": "groupe de stores inconnu",
+  "pilotes.covers.interrupteur_invalide": "chaque interrupteur doit avoir au moins une touche, sans touche en double (8 interrupteurs au plus)",
+  "pilotes.covers.pas_un_interrupteur": "{id} n'est pas un interrupteur",
   "pilotes.covers.commande_inconnue": "commande inconnue : {key}",
   "pilotes.covers.nom_attendu": "un nom de {max} caractères au plus",
   "pilotes.covers.pas_un_store": "{id} n'est pas un store",

@@ -20,6 +20,82 @@
   let chosen = $state(new Set(start?.members ?? []));
   let busy = $state(false);
 
+  // ---- switches: a real switch's presses open, close or stop the group ----
+  const SLOTS = ['open', 'close', 'stop'];
+  const SLOT_WORD = { open: 'ouvrir', close: 'fermer', stop: 'arreter' };
+  /** `[{ device, open, close, stop }]`, as the server keeps them. */
+  let switches = $state([]);
+  /** Read once: a family's change while the dialog is open is not lost. */
+  let switchesRead = $state(!id);
+  /** `{ device, slot, since }` while waiting for a press. */
+  let learning = $state(null);
+
+  onMount(async () => {
+    if (!id) return;
+    try {
+      const res = await fetch('/api/cover-groups');
+      const answer = await res.json();
+      const mine = (answer.groups ?? []).find((g) => g.device === id);
+      switches = (mine?.switches ?? []).map((s) => ({ device: s.device, open: s.open ?? null, close: s.close ?? null, stop: s.stop ?? null }));
+      switchesRead = true;
+    } catch (err) {
+      note(t('maison.groupes_stores.echec', { error: err.message }), 'error');
+    }
+  });
+
+  /** Devices whose presses arrive on `action` (Zigbee remotes). */
+  const remotes = $derived(
+    Object.values(hub.devices)
+      .filter((d) => d.points.some((p) => p.key === 'action'))
+      .map((d) => ({ id: d.id, name: nameOf(d.id), room: roomOf(d) }))
+      .sort((a, b) => collator.compare(a.name, b.name)),
+  );
+  const addable = $derived(remotes.filter((r) => !switches.some((s) => s.device === r.id)));
+
+  function addSwitch(deviceId) {
+    if (!deviceId) return;
+    switches = [...switches, { device: deviceId, open: null, close: null, stop: null }];
+  }
+
+  function removeSwitch(deviceId) {
+    switches = switches.filter((s) => s.device !== deviceId);
+    if (learning?.device === deviceId) learning = null;
+  }
+
+  function setPress(deviceId, slot, press) {
+    switches = switches.map((s) => {
+      if (s.device !== deviceId) return s;
+      const next = { ...s, [slot]: press };
+      // One button, one meaning: taken off the slot that had it.
+      for (const other of SLOTS) {
+        if (other !== slot && press && next[other] === press) {
+          next[other] = null;
+          note(t('maison.groupes_stores.deja_prise', { what: t(`maison.groupes_stores.${SLOT_WORD[other]}`) }));
+        }
+      }
+      return next;
+    });
+  }
+
+  function learn(deviceId, slot) {
+    const now = device(deviceId)?.state?.action?.ts ?? 0;
+    learning = learning?.device === deviceId && learning.slot === slot ? null : { device: deviceId, slot, since: now };
+  }
+
+  // The first press after « Apprendre » is the one.
+  $effect(() => {
+    if (!learning) return;
+    const seen = device(learning.device)?.state?.action;
+    if (seen && seen.ts > learning.since && typeof seen.value === 'string' && seen.value !== '') {
+      const { device: d, slot } = learning;
+      learning = null;
+      setPress(d, slot, seen.value);
+    }
+  });
+
+  /** `on_top` → « on top »: readable enough beside the learning. */
+  const pressWord = (p) => (p ? p.replaceAll('_', ' ') : t('maison.groupes_stores.aucune_touche'));
+
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
   /** Every shutter, by room; a member whose driver is away stays listed. */
   const shutters = $derived.by(() => {
@@ -64,6 +140,7 @@
     e.preventDefault();
     if (!ready) return;
     const body = { name, members: [...chosen] };
+    if (switchesRead) body.switches = switches.filter((s) => SLOTS.some((k) => s[k]));
     const done = id ? await send('PUT', `/api/cover-groups/${encodeURIComponent(native)}`, body) : await send('POST', '/api/cover-groups', body);
     if (!done) return;
     if (!id) showOnDashboard(done.device, true);
@@ -106,6 +183,45 @@
       {:else}
         <p class="help">{t('maison.groupes_stores.aucun_store')}</p>
       {/each}
+    </fieldset>
+
+    <fieldset class="switches">
+      <legend>{t('maison.groupes_stores.interrupteurs')}</legend>
+      <p class="help">{t('maison.groupes_stores.interrupteurs_aide')}</p>
+      {#each switches as sw (sw.device)}
+        <div class="switch">
+          <div class="switch-head">
+            <span class="who">
+              <b>{device(sw.device) ? nameOf(sw.device) : sw.device}</b>
+              {#if !device(sw.device)}<small>{t('commun.volet.injoignable')}</small>{/if}
+            </span>
+            <button type="button" class="close" onclick={() => removeSwitch(sw.device)} aria-label={t('maison.groupes_stores.retirer_interrupteur')}><Icon name="close" size={18} /></button>
+          </div>
+          {#each SLOTS as slot (slot)}
+            {@const waiting = learning?.device === sw.device && learning.slot === slot}
+            <div class="slot">
+              <span class="slot-name">{t(`maison.groupes_stores.${SLOT_WORD[slot]}`)}</span>
+              <span class="press" class:none={!sw[slot]} class:waiting>{waiting ? t('maison.groupes_stores.appuyez') : pressWord(sw[slot])}</span>
+              {#if sw[slot] && !waiting}
+                <button type="button" class="close" onclick={() => setPress(sw.device, slot, null)} aria-label={t('maison.groupes_stores.effacer_touche')}><Icon name="close" size={16} /></button>
+              {/if}
+              <button type="button" class="btn small" class:main={waiting} onclick={() => learn(sw.device, slot)}>{waiting ? t('commun.annuler') : t('maison.groupes_stores.apprendre')}</button>
+            </div>
+          {/each}
+        </div>
+      {/each}
+      {#if !switchesRead}
+        <p class="help">…</p>
+      {:else if addable.length}
+        <select class="add" value="" onchange={(e) => { addSwitch(e.currentTarget.value); e.currentTarget.value = ''; }}>
+          <option value="">{t('maison.groupes_stores.ajouter_interrupteur')}</option>
+          {#each addable as r (r.id)}
+            <option value={r.id}>{r.name}{r.room ? ` · ${r.room}` : ''}</option>
+          {/each}
+        </select>
+      {:else if !switches.length}
+        <p class="help">{t('maison.groupes_stores.aucun_interrupteur')}</p>
+      {/if}
     </fieldset>
 
     <p class="help">{t('maison.groupes_stores.aide')}</p>
@@ -229,6 +345,82 @@
   .who small {
     font-size: 12px;
     color: var(--ink-3);
+  }
+
+  .switches {
+    gap: 8px;
+  }
+
+  .switch {
+    display: grid;
+    gap: 2px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-2);
+  }
+
+  .switch-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .slot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    border-top: 1px solid var(--line);
+  }
+
+  .slot-name {
+    flex: none;
+    width: 70px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .press {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .press.none {
+    color: var(--ink-3);
+  }
+
+  .press.waiting {
+    color: var(--warm-ink);
+    font-weight: 650;
+  }
+
+  .btn.small {
+    min-height: 32px;
+    padding: 4px 12px;
+    font-size: 13px;
+    background: var(--surface);
+  }
+
+  .btn.small.main {
+    background: var(--warm-soft);
+  }
+
+  .add {
+    min-height: 40px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-2);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
   }
 
   .help {

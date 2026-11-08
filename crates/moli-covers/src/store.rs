@@ -20,6 +20,12 @@ pub const MAX_NAME: usize = 60;
 pub const MAX_MEMBERS: usize = 32;
 /// Most groups in a house.
 pub const MAX_GROUPS: usize = 64;
+/// Most switches commanding one group.
+pub const MAX_SWITCHES: usize = 8;
+/// The point a switch's presses arrive on (Zigbee remotes: `action`).
+pub const PRESS: &str = "action";
+/// Longest press name kept.
+const MAX_PRESS: usize = 64;
 
 /// One group of shutters.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +36,32 @@ pub struct Group {
     pub name: String,
     /// Device ids. A shutter may be in any number of groups.
     pub members: Vec<String>,
+    /// Wall switches that command the group, press by press.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub switches: Vec<Switch>,
+}
+
+/// A real switch that commands a group: which of its presses (values of its
+/// [`PRESS`] point) opens, closes or stops it. A switch may serve several
+/// groups (left side one, right side another).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Switch {
+    /// Its device id.
+    pub device: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<String>,
+}
+
+impl Switch {
+    /// The presses it uses, set ones only.
+    fn presses(&self) -> impl Iterator<Item = &String> {
+        [&self.open, &self.close, &self.stop].into_iter().flatten()
+    }
 }
 
 impl Group {
@@ -176,6 +208,56 @@ impl Groups {
         Ok(members)
     }
 
+    /// Switches Moli knows (those already set may stay while their driver
+    /// is away), each with at least one press, no press twice.
+    fn switches(&self, already: &[Switch], asked: &[Switch]) -> Result<Vec<Switch>, GroupError> {
+        let invalid =
+            || GroupError::Invalid(moli_i18n::tr!("pilotes.covers.interrupteur_invalide"));
+        if asked.len() > MAX_SWITCHES {
+            return Err(invalid());
+        }
+        let mut kept: Vec<Switch> = Vec::with_capacity(asked.len());
+        for switch in asked {
+            let clean = |p: &Option<String>| {
+                p.as_deref()
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_owned)
+            };
+            let switch = Switch {
+                device: switch.device.clone(),
+                open: clean(&switch.open),
+                close: clean(&switch.close),
+                stop: clean(&switch.stop),
+            };
+            let presses: Vec<&String> = switch.presses().collect();
+            let distinct = presses
+                .iter()
+                .enumerate()
+                .all(|(i, p)| !presses[..i].contains(p));
+            if presses.is_empty()
+                || !distinct
+                || presses.iter().any(|p| p.chars().count() > MAX_PRESS)
+                || kept.iter().any(|k| k.device == switch.device)
+            {
+                return Err(invalid());
+            }
+            let known = self
+                .0
+                .hub
+                .device(&DeviceId::from(switch.device.as_str()))
+                .is_some_and(|v| v.device.point(PRESS).is_some());
+            if !known && !already.iter().any(|a| a.device == switch.device) {
+                return Err(GroupError::Invalid(moli_i18n::tr!(
+                    "pilotes.covers.pas_un_interrupteur",
+                    id = switch.device
+                )));
+            }
+            kept.push(switch);
+        }
+        Ok(kept)
+    }
+
     /// Written aside then renamed: never half a file. Memory follows only
     /// once it is on disk.
     fn commit(&self, saved: &mut Saved, next: Saved) -> Result<(), GroupError> {
@@ -192,8 +274,19 @@ impl Groups {
     }
 
     pub fn create(&self, name: &str, members: &[String]) -> Result<Group, GroupError> {
+        self.create_with(name, members, &[])
+    }
+
+    /// Like [`Self::create`], with the switches that command it.
+    pub fn create_with(
+        &self,
+        name: &str,
+        members: &[String],
+        switches: &[Switch],
+    ) -> Result<Group, GroupError> {
         let name = clean_name(name)?;
         let members = self.members(&[], members)?;
+        let switches = self.switches(&[], switches)?;
         let mut saved = self.saved();
         if saved.groups.len() >= MAX_GROUPS {
             return Err(GroupError::Invalid(moli_i18n::tr!(
@@ -207,6 +300,7 @@ impl Groups {
             id: format!("g{}", next.next),
             name,
             members,
+            switches,
         };
         next.groups.push(group.clone());
         self.commit(&mut saved, next)?;
@@ -214,6 +308,17 @@ impl Groups {
     }
 
     pub fn update(&self, id: &str, name: &str, members: &[String]) -> Result<Group, GroupError> {
+        self.update_with(id, name, members, None)
+    }
+
+    /// Like [`Self::update`]; `switches`: `None` keeps those it has.
+    pub fn update_with(
+        &self,
+        id: &str,
+        name: &str,
+        members: &[String],
+        switches: Option<&[Switch]>,
+    ) -> Result<Group, GroupError> {
         let name = clean_name(name)?;
         let mut saved = self.saved();
         let at = saved
@@ -222,11 +327,17 @@ impl Groups {
             .position(|g| g.id == id)
             .ok_or(GroupError::UnknownGroup)?;
         let members = self.members(&saved.groups[at].members, members)?;
+        let before = &saved.groups[at].switches;
+        let switches = match switches {
+            Some(asked) => self.switches(before, asked)?,
+            None => before.clone(),
+        };
         let mut next = saved.clone();
         let group = Group {
             id: id.to_owned(),
             name,
             members,
+            switches,
         };
         next.groups[at] = group.clone();
         self.commit(&mut saved, next)?;

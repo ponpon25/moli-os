@@ -524,6 +524,8 @@
   "pilotes.covers.acteur": "group “{name}”",
   "pilotes.covers.personne": "no shutter of this group answers",
   "pilotes.covers.groupe_inconnu": "unknown shutter group",
+  "pilotes.covers.interrupteur_invalide": "each switch needs at least one button, no button twice (8 switches at most)",
+  "pilotes.covers.pas_un_interrupteur": "{id} is not a switch",
   "pilotes.covers.commande_inconnue": "unknown command: {key}",
   "pilotes.covers.nom_attendu": "a name of at most {max} characters",
   "pilotes.covers.pas_un_store": "{id} is not a shutter",

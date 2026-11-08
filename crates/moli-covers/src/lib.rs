@@ -32,7 +32,9 @@ use moli_core::{
     Value,
 };
 use moli_runtime::{BoxFuture, CommandRequest, Driver, DriverCtx, Hub};
-pub use store::{Group, GroupError, Groups, MAX_GROUPS, MAX_MEMBERS, MAX_NAME};
+pub use store::{
+    Group, GroupError, Groups, MAX_GROUPS, MAX_MEMBERS, MAX_NAME, MAX_SWITCHES, PRESS, Switch,
+};
 use tokio::sync::broadcast::error::RecvError;
 
 /// The instance (and the devices' prefix: `groupes-stores:g1`).
@@ -415,7 +417,15 @@ impl Covers {
             .published
             .retain(|id, _| groups.iter().any(|g| &g.id == id));
         house.members.clear();
+        house.switches.clear();
         for group in &groups {
+            for switch in &group.switches {
+                house
+                    .switches
+                    .entry(DeviceId::from(switch.device.as_str()))
+                    .or_default()
+                    .push((group.id.clone(), switch.clone()));
+            }
             for member in &group.members {
                 house
                     .members
@@ -430,6 +440,37 @@ impl Covers {
             );
         }
         house.groups = groups.into_iter().map(|g| (g.id.clone(), g)).collect();
+    }
+
+    /// A switch was pressed: the groups it serves obey, each from its own
+    /// task, as if told from the dashboard.
+    fn pressed(&self, house: &House, device: &DeviceId, value: &Value) {
+        let Value::Text(press) = value else { return };
+        let Some(served) = house.switches.get(device) else {
+            return;
+        };
+        for (id, switch) in served {
+            let is = |p: &Option<String>| p.as_deref() == Some(&**press);
+            let order = if is(&switch.open) {
+                Order::Open
+            } else if is(&switch.close) {
+                Order::Close
+            } else if is(&switch.stop) {
+                Order::Stop
+            } else {
+                continue;
+            };
+            let Some(group) = house.groups.get(id).cloned() else {
+                continue;
+            };
+            let hub = self.hub.clone();
+            let device = device.clone();
+            tokio::spawn(async move {
+                if let Err(error) = give(&hub, &group, order).await {
+                    tracing::warn!(group = %group.id, switch = %device, %error, "cover group: a press was not obeyed");
+                }
+            });
+        }
     }
 
     /// Answered from its own task: a member slow to answer holds back neither
@@ -469,6 +510,8 @@ struct House {
     groups: BTreeMap<String, Group>,
     /// Which groups each shutter is in.
     members: HashMap<DeviceId, Vec<String>>,
+    /// The groups each switch commands, and with which presses.
+    switches: HashMap<DeviceId, Vec<(String, Switch)>>,
     published: HashMap<String, Published>,
 }
 
@@ -518,6 +561,12 @@ impl Driver for Covers {
                         house.groups.keys().cloned().collect()
                     }
                     Next::Event(Ok(event)) => {
+                        if let Event::State { point, value, .. } = &event
+                            && let Some((device, key)) = point.split()
+                            && key == PRESS
+                        {
+                            self.pressed(&house, &device, value);
+                        }
                         let device = match &event {
                             Event::State { point, .. } => point.split().map(|(d, _)| d),
                             Event::Availability { device, .. }

@@ -365,9 +365,9 @@ Limites de `Turn` : 14 derniers messages renvoyés au modèle, 2 000 caractères
 
 | Méthode | Chemin | Accès | Entrée | Réponse | Erreurs |
 |---|---|---|---|---|---|
-| GET | `/api/cover-groups` | libre | aucune | `{groups:[{id, device, name, members}]}` | aucune |
-| POST | `/api/cover-groups` | **foyer** (pas les invités) | `{name, members}` : 1 à 60 caractères, 1 à 32 stores | `201 {id, device, name, members}` ; `device` est l'appareil `groupes-stores:g<n>` | `403` ; `422` nom, nombre ou appareil qui n'est pas un store ; `503` maison de démonstration |
-| PUT | `/api/cover-groups/{id}` | **foyer** | `{name, members}` | `{id, device, name, members}` ; l'appareil et son `aid` HomeKit restent | `403` ; `404` ; `422` ; `503` |
+| GET | `/api/cover-groups` | libre | aucune | `{groups:[{id, device, name, members, switches}]}` | aucune |
+| POST | `/api/cover-groups` | **foyer** (pas les invités) | `{name, members, switches?}` : 1 à 60 caractères, 1 à 32 stores ; `switches` = `[{device, open?, close?, stop?}]` (8 au plus), les appuis (valeurs du point `action`) qui ouvrent, ferment ou arrêtent le groupe | `201 {id, device, name, members}` ; `device` est l'appareil `groupes-stores:g<n>` | `403` ; `422` nom, nombre ou appareil qui n'est pas un store ; `503` maison de démonstration |
+| PUT | `/api/cover-groups/{id}` | **foyer** | `{name, members, switches?}` (`switches` absent = inchangé) | `{id, device, name, members, switches}` ; l'appareil et son `aid` HomeKit restent | `403` ; `404` ; `422` ; `503` |
 | DELETE | `/api/cover-groups/{id}` | **foyer** | aucune | `{removed}` ; le numéro n'est jamais réutilisé | `403` ; `404` ; `503` |
 | GET | `/api/homekit` | libre ; le code d'appairage et le QR seulement à une session **humaine** | aucune | `{enabled:false}`, ou `{enabled, human, status:{name, port, policy, controllers, exposed, truncated, setup_code?, setup_uri?}, devices:[{id, name, room?, kinds, exposed, exception, absent}]}` | aucune |
 | PUT | `/api/homekit/policy` | **humain** | `{policy:"all"\|"none"}` | `{policy}` | `403` ; `503` pas de pont |

@@ -204,7 +204,15 @@ fn on_publish(
     };
     if let Ok(serde_json::Value::Object(payload)) = serde_json::from_slice(&publish.payload) {
         for (key, value) in entry.decode(&payload) {
-            ctx.set_state(&entry.device.id, &key, value);
+            // A press (`action`) is an occurrence: the same button twice is
+            // two presses. Z2M sends `""` between them on some setups.
+            if &*key == ACTION {
+                if matches!(&value, Value::Text(t) if !t.is_empty()) {
+                    ctx.pulse_state(&entry.device.id, &key, value);
+                }
+            } else {
+                ctx.set_state(&entry.device.id, &key, value);
+            }
         }
         if let Some(cover) = covers.get_mut(&entry.ieee) {
             cover.on_report(&payload, Instant::now());
@@ -235,6 +243,9 @@ fn queue_reads(
 }
 
 /// One device read every half second.
+/// The point a remote's presses arrive on.
+const ACTION: &str = "action";
+
 const READ_PACE: Duration = Duration::from_millis(500);
 
 /// Answer to a command received while the broker is not connected.

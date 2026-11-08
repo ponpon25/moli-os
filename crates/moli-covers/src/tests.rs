@@ -8,7 +8,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 
-/// Shutters `a`, `b`, `c`, the opener `d` (no position), and the lamp `lamp`.
+/// Shutters `a`, `b`, `c`, the opener `d` (no position), the lamp `lamp`,
+/// and the wall switch `switch` (an order to its `action` is a press).
 #[derive(Debug, Default)]
 struct Fake {
     orders: Mutex<Vec<(String, Value)>>,
@@ -54,12 +55,19 @@ impl Driver for Fake {
 
     fn run<'a>(&'a self, ctx: &'a mut DriverCtx) -> BoxFuture<'a, anyhow::Result<()>> {
         Box::pin(async move {
-            let shapes: [(&str, Vec<PointSpec>); 5] = [
+            let press = point(
+                PRESS,
+                Kind::Enum {
+                    values: vec!["on_top".into(), "off_top".into(), "on_bottom".into()],
+                },
+            );
+            let shapes: [(&str, Vec<PointSpec>); 6] = [
                 ("a", vec![percent(), control(), point("gone", Kind::Binary)]),
                 ("b", vec![percent(), control(), point("gone", Kind::Binary)]),
                 ("c", vec![percent(), control(), point("gone", Kind::Binary)]),
                 ("d", vec![control(), point("gone", Kind::Binary)]),
                 ("lamp", vec![point("on", Kind::Binary)]),
+                ("switch", vec![press]),
             ];
             for (name, points) in shapes {
                 ctx.upsert_device(Device {
@@ -76,7 +84,9 @@ impl Driver for Fake {
             }
             ctx.ready();
             while let Some(cmd) = ctx.next_command().await {
-                if &*cmd.key == "gone" {
+                if &*cmd.key == PRESS {
+                    ctx.pulse_state(&cmd.device.id, PRESS, cmd.value.clone());
+                } else if &*cmd.key == "gone" {
                     ctx.set_availability(&cmd.device.id, cmd.value != Value::Bool(true));
                 } else {
                     let native = cmd.device.id.as_str().split_once(':').unwrap().1;
@@ -469,4 +479,108 @@ fn what_a_group_shows() {
             unreachable: 0,
         }
     );
+}
+
+fn switch(open: Option<&str>, close: Option<&str>, stop: Option<&str>) -> Switch {
+    Switch {
+        device: "fake:switch".into(),
+        open: open.map(Into::into),
+        close: close.map(Into::into),
+        stop: stop.map(Into::into),
+    }
+}
+
+#[tokio::test]
+async fn a_switch_commands_its_groups_press_after_press() {
+    let h = house(None).await;
+    let left = h
+        .groups
+        .create_with(
+            "Vie",
+            &ids(&["a"]),
+            &[switch(Some("on_top"), Some("off_top"), None)],
+        )
+        .unwrap();
+    let right = h
+        .groups
+        .create_with(
+            "Tout",
+            &ids(&["b"]),
+            &[switch(Some("on_bottom"), None, None)],
+        )
+        .unwrap();
+    until(|| {
+        h.hub.device(&left.device_id()).is_some() && h.hub.device(&right.device_id()).is_some()
+    })
+    .await;
+
+    let press = "fake:switch/action";
+    set(&h.hub, press, Value::from("on_top")).await;
+    until(|| !h.fake.orders.lock().unwrap().is_empty()).await;
+    assert_eq!(
+        given(&h.fake),
+        [("a/control".to_owned(), Value::from("open"))]
+    );
+    // The same button again is another press.
+    set(&h.hub, press, Value::from("on_top")).await;
+    until(|| !h.fake.orders.lock().unwrap().is_empty()).await;
+    assert_eq!(
+        given(&h.fake),
+        [("a/control".to_owned(), Value::from("open"))]
+    );
+    set(&h.hub, press, Value::from("off_top")).await;
+    until(|| !h.fake.orders.lock().unwrap().is_empty()).await;
+    assert_eq!(
+        given(&h.fake),
+        [("a/control".to_owned(), Value::from("close"))]
+    );
+    set(&h.hub, press, Value::from("on_bottom")).await;
+    until(|| !h.fake.orders.lock().unwrap().is_empty()).await;
+    assert_eq!(
+        given(&h.fake),
+        [("b/control".to_owned(), Value::from("open"))]
+    );
+}
+
+#[tokio::test]
+async fn switches_are_checked_and_kept_unless_given() {
+    let h = house(None).await;
+    let invalid = |r: Result<Group, GroupError>| matches!(r, Err(GroupError::Invalid(_)));
+    // No press, the same press twice, a lamp, the same switch twice.
+    assert!(invalid(h.groups.create_with(
+        "X",
+        &ids(&["a"]),
+        &[switch(None, None, None)]
+    )));
+    assert!(invalid(h.groups.create_with(
+        "X",
+        &ids(&["a"]),
+        &[switch(Some("on_top"), Some("on_top"), None)]
+    )));
+    let mut lamp = switch(Some("on_top"), None, None);
+    lamp.device = "fake:lamp".into();
+    assert!(invalid(h.groups.create_with("X", &ids(&["a"]), &[lamp])));
+    let one = switch(Some("on_top"), None, None);
+    assert!(invalid(h.groups.create_with(
+        "X",
+        &ids(&["a"]),
+        &[one.clone(), one.clone()]
+    )));
+
+    let group = h
+        .groups
+        .create_with(
+            "Vie",
+            &ids(&["a"]),
+            &[switch(Some(" on_top "), Some(""), None)],
+        )
+        .unwrap();
+    assert_eq!(group.switches, std::slice::from_ref(&one));
+    let renamed = h.groups.update(&group.id, "Séjour", &ids(&["a"])).unwrap();
+    assert_eq!(renamed.switches, [one]);
+    let cleared = h
+        .groups
+        .update_with(&group.id, "Séjour", &ids(&["a"]), Some(&[]))
+        .unwrap();
+    assert!(cleared.switches.is_empty());
 }

@@ -1,8 +1,12 @@
 //! The groups of shutters, as the dashboard makes them (crate `moli-covers`):
 //!
 //! - `GET /api/cover-groups`: the groups, each with its device.
-//! - `POST /api/cover-groups` `{ name, members }`: a new group.
-//! - `PUT /api/cover-groups/{id}` `{ name, members }`: renamed, other shutters.
+//! - `POST /api/cover-groups` `{ name, members, switches? }`: a new group.
+//! - `PUT /api/cover-groups/{id}` `{ name, members, switches? }`: renamed,
+//!   other shutters; `switches` left out keeps those it has.
+//!
+//! A switch is `{ device, open?, close?, stop? }`: the presses (values of its
+//! `action` point) that open, close or stop the group.
 //! - `DELETE /api/cover-groups/{id}`
 //!
 //! The writes are the household's, like the rest of how the dashboard is
@@ -16,7 +20,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use moli_core::{CoverGroupChange, Origin};
-use moli_covers::{Group, GroupError, Groups};
+use moli_covers::{Group, GroupError, Groups, Switch};
 use moli_runtime::{Hub, LabelPatch};
 use serde::Deserialize;
 use serde_json::json;
@@ -69,6 +73,7 @@ fn view(group: &Group) -> serde_json::Value {
         "device": group.device_id().as_str(),
         "name": group.name,
         "members": group.members,
+        "switches": group.switches,
     })
 }
 
@@ -96,6 +101,8 @@ fn journal(
 pub(crate) struct Body {
     name: String,
     members: Vec<String>,
+    #[serde(default)]
+    switches: Option<Vec<Switch>>,
 }
 
 pub(crate) async fn list(Extension(CoverGroupsGate(gate)): Extension<CoverGroupsGate>) -> Response {
@@ -115,7 +122,11 @@ pub(crate) async fn create(
     if let Some(refusal) = refused(&caller) {
         return refusal;
     }
-    match groups.create(&body.name, &body.members) {
+    match groups.create_with(
+        &body.name,
+        &body.members,
+        body.switches.as_deref().unwrap_or_default(),
+    ) {
         Ok(group) => {
             journal(
                 &hub,
@@ -144,7 +155,7 @@ pub(crate) async fn update(
     if let Some(refusal) = refused(&caller) {
         return refusal;
     }
-    let group = match groups.update(&id, &body.name, &body.members) {
+    let group = match groups.update_with(&id, &body.name, &body.members, body.switches.as_deref()) {
         Ok(group) => group,
         Err(e) => return failed(&e),
     };

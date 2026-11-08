@@ -19,6 +19,10 @@ pub enum Event {
         point: PointId,
         value: Value,
         ts: u64,
+        /// An occurrence (a button press): the same value again is a new
+        /// event, not a repeat to ignore.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pulse: bool,
     },
     Availability {
         device: DeviceId,

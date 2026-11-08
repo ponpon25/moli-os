@@ -202,7 +202,27 @@ pub struct Binding {
     pub write: Option<ValueId>,
     /// Named numbers: the name Moli shows, the number Z-Wave takes.
     pub states: Vec<(Arc<str>, i64)>,
+    /// What it is to a dimmer, beside its level.
+    pub dim: Dim,
 }
+
+/// A dimmer's write-only points beside its level.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Dim {
+    /// A point like any other.
+    #[default]
+    None,
+    /// On at the level it remembers (Multilevel Switch 255).
+    Restore,
+    /// Up until stopped (the node's own level change: it stops at the top).
+    Up,
+    /// Down until stopped, never off: Moli glides it to the lowest level and
+    /// pins it where it is when stopped (the node's own change goes to 0).
+    Down,
+}
+
+/// The lowest level a dimmer is dimmed down to (1 %: still on).
+pub const DIM_FLOOR: i64 = 1;
 
 /// A node as a Moli device, and how each point maps back.
 #[derive(Clone, Debug, PartialEq)]
@@ -362,6 +382,14 @@ pub fn map(instance: &InstanceId, home: u32, node: &Node) -> Option<Mapped> {
         } else {
             label
         };
+        // A dimmer can also be told « on, as you were » (the level it
+        // remembers is its own: a wall press, a scene), and to dim up or
+        // down until told to stop (a button held).
+        let extras = if id.command_class == MULTILEVEL_SWITCH && merged {
+            dimmer_extras(node, id, &key, write.as_ref())
+        } else {
+            Vec::new()
+        };
         points.push(PointSpec {
             key: key.as_str().into(),
             label: label.into(),
@@ -379,8 +407,13 @@ pub fn map(instance: &InstanceId, home: u32, node: &Node) -> Option<Mapped> {
                 read: id.clone(),
                 write,
                 states,
+                dim: Dim::None,
             },
         );
+        for (key, spec, binding) in extras {
+            points.push(spec);
+            bindings.insert(key, binding);
+        }
     }
     let model = config.label.clone().or_else(|| node.label.clone());
     let name = node
@@ -410,6 +443,80 @@ pub fn map(instance: &InstanceId, home: u32, node: &Node) -> Option<Mapped> {
     })
 }
 
+/// A dimmer's write-only points beside its level `key`: `<key>_restore`
+/// (on at the level it remembers), `<key>_down` and `<key>_up` (true starts
+/// the change, false stops it), each when the node offers it.
+fn dimmer_extras(
+    node: &Node,
+    level: &ValueId,
+    key: &str,
+    target: Option<&ValueId>,
+) -> Vec<(String, PointSpec, Binding)> {
+    let suffix = |base: String| {
+        if level.endpoint > 0 {
+            format!("{base} ({})", level.endpoint)
+        } else {
+            base
+        }
+    };
+    let point = |key: &str, label: String| PointSpec {
+        key: key.into(),
+        label: suffix(label).into(),
+        semantic: Semantic::Other,
+        kind: Kind::Binary,
+        access: Access {
+            read: false,
+            write: true,
+        },
+        unit: None,
+    };
+    let mut extras = Vec::new();
+    if let Some(target) = target {
+        let restore = format!("{key}_restore");
+        extras.push((
+            restore.clone(),
+            point(&restore, moli_i18n::tr!("pilotes.zwave.rallumer")),
+            Binding {
+                read: level.clone(),
+                write: Some(target.clone()),
+                states: Vec::new(),
+                dim: Dim::Restore,
+            },
+        ));
+        let down = format!("{key}_down");
+        extras.push((
+            down.clone(),
+            point(&down, moli_i18n::tr!("pilotes.zwave.baisser")),
+            Binding {
+                read: level.clone(),
+                write: Some(target.clone()),
+                states: Vec::new(),
+                dim: Dim::Down,
+            },
+        ));
+    }
+    if let Some(change) = node.values.iter().find(|v| {
+        v.id.named("On")
+            && v.id.command_class == level.command_class
+            && v.id.endpoint == level.endpoint
+            && v.metadata.writeable
+    }) {
+        let key = format!("{key}_up");
+        extras.push((
+            key.clone(),
+            point(&key, moli_i18n::tr!("pilotes.zwave.monter")),
+            Binding {
+                // Never reported: nothing is read here.
+                read: change.id.clone(),
+                write: Some(change.id.clone()),
+                states: Vec::new(),
+                dim: Dim::Up,
+            },
+        ));
+    }
+    extras
+}
+
 /// `<instance>:<home id>-<node>`: a new stick (another home id) never
 /// mistakes its nodes for the old ones.
 pub fn device_id(instance: &InstanceId, home: u32, node: u16) -> DeviceId {
@@ -419,7 +526,10 @@ pub fn device_id(instance: &InstanceId, home: u32, node: u16) -> DeviceId {
 impl Mapped {
     /// The point a value feeds, with the value as Moli holds it.
     pub fn reading(&self, id: &ValueId, raw: &Json) -> Option<(&str, Value)> {
-        let (key, b) = self.points.iter().find(|(_, b)| b.read == *id)?;
+        let (key, b) = self
+            .points
+            .iter()
+            .find(|(_, b)| b.read == *id && b.dim == Dim::None)?;
         let value = match raw
             .as_i64()
             .and_then(|n| b.states.iter().find(|(_, v)| *v == n))
@@ -438,10 +548,42 @@ impl Mapped {
             .filter_map(|v| self.reading(&v.id, v.value.as_ref()?))
     }
 
+    /// What a point is to a dimmer, and its level's key (`ep1.level`).
+    pub fn dim(&self, key: &str) -> Option<(Dim, &str)> {
+        let b = self.points.get(key)?;
+        if b.dim == Dim::None {
+            return None;
+        }
+        let (level, _) = self
+            .points
+            .iter()
+            .find(|(_, l)| l.read == b.read && l.dim == Dim::None)
+            .or_else(|| {
+                let base = key.rsplit_once('_')?.0;
+                self.points.get_key_value(base)
+            })?;
+        Some((b.dim, level.as_str()))
+    }
+
+    /// Where a dimmer's level is written (`targetValue`).
+    pub fn target(&self, level: &str) -> Option<Json> {
+        self.points.get(level)?.write.as_ref().map(ValueId::json)
+    }
+
     /// What to send for an order on `key`: the value id and the value.
     pub fn order(&self, key: &str, value: &Value) -> Result<(Json, Json), String> {
         let b = self.points.get(key).ok_or("unknown point")?;
         let target = b.write.as_ref().ok_or("read-only point")?;
+        if b.dim == Dim::Down {
+            return Err("a glide is the driver's".into());
+        }
+        if b.dim == Dim::Restore {
+            // 255: the level it had last time it was on; off is 0.
+            return match value {
+                Value::Bool(on) => Ok((target.json(), json!(if *on { 255 } else { 0 }))),
+                _ => Err("on or off expected".into()),
+            };
+        }
         let wire = match value {
             Value::Text(name) if !b.states.is_empty() => {
                 let (_, n) = b
@@ -477,6 +619,69 @@ mod tests {
 
     fn nodes() -> Vec<Node> {
         serde_json::from_value(state()["nodes"].clone()).unwrap()
+    }
+
+    #[test]
+    fn a_dimmer_dims_up_and_down_and_comes_back_as_it_was() {
+        let node: Node = serde_json::from_value(json!({
+            "nodeId": 9,
+            "name": "Lampe",
+            "values": [
+                {"commandClass": 38, "endpoint": 1, "property": "currentValue",
+                 "metadata": {"type": "number", "readable": true, "min": 0, "max": 99}, "value": 0},
+                {"commandClass": 38, "endpoint": 1, "property": "targetValue",
+                 "metadata": {"type": "number", "readable": true, "writeable": true, "min": 0, "max": 99}},
+                {"commandClass": 38, "endpoint": 1, "property": "On",
+                 "metadata": {"type": "boolean", "readable": false, "writeable": true}},
+                {"commandClass": 38, "endpoint": 1, "property": "Off",
+                 "metadata": {"type": "boolean", "readable": false, "writeable": true}}
+            ]
+        }))
+        .unwrap();
+        let dimmer = map(&InstanceId::from("zwave"), 1, &node).unwrap();
+        let keys: Vec<&str> = dimmer.device.points.iter().map(|p| &*p.key).collect();
+        assert_eq!(
+            keys,
+            [
+                "ep1.level",
+                "ep1.level_restore",
+                "ep1.level_down",
+                "ep1.level_up"
+            ]
+        );
+        assert!(
+            dimmer.device.points[1..]
+                .iter()
+                .all(|p| p.access.write && !p.access.read && p.semantic == Semantic::Other)
+        );
+        let target = json!({"commandClass": 38, "endpoint": 1, "property": "targetValue"});
+        assert_eq!(
+            dimmer
+                .order("ep1.level_restore", &Value::Bool(true))
+                .unwrap(),
+            (target.clone(), json!(255))
+        );
+        assert_eq!(
+            dimmer
+                .order("ep1.level_restore", &Value::Bool(false))
+                .unwrap(),
+            (target, json!(0))
+        );
+        assert_eq!(
+            dimmer.order("ep1.level_up", &Value::Bool(true)).unwrap(),
+            (
+                json!({"commandClass": 38, "endpoint": 1, "property": "On"}),
+                json!(true)
+            )
+        );
+        // Down is the driver's glide, never the node's own change to 0.
+        assert!(dimmer.order("ep1.level_down", &Value::Bool(true)).is_err());
+        assert_eq!(dimmer.dim("ep1.level_down"), Some((Dim::Down, "ep1.level")));
+        assert_eq!(dimmer.dim("ep1.level_up"), Some((Dim::Up, "ep1.level")));
+        assert_eq!(dimmer.dim("ep1.level"), None);
+        // Its level is still read where it was.
+        let readings: Vec<(&str, Value)> = dimmer.readings(&node).collect();
+        assert_eq!(readings, [("ep1.level", Value::Int(0))]);
     }
 
     #[test]

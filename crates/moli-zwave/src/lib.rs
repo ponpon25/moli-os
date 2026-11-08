@@ -11,11 +11,11 @@ mod model;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
-use model::{Mapped, Node, ValueId};
-use moli_core::DeviceId;
+use model::{DIM_FLOOR, Dim, Mapped, Node, ValueId};
+use moli_core::{DeviceId, Value};
 use moli_net::ws::WebSocket;
 use moli_runtime::{BoxFuture, CommandRequest, Driver, DriverCtx};
 use serde::Deserialize;
@@ -198,6 +198,7 @@ async fn session(ws: &mut WebSocket, ctx: &mut DriverCtx) -> anyhow::Result<Sess
     let mut sent = 0u64;
     let mut again: Option<tokio::time::Instant> = None;
     let mut revive = Revive::default();
+    let mut glides = Glides::default();
     let mut ping = tokio::time::interval(Duration::from_secs(30));
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let outcome = loop {
@@ -227,16 +228,11 @@ async fn session(ws: &mut WebSocket, ctx: &mut DriverCtx) -> anyhow::Result<Sess
             }
             command = ctx.next_command() => {
                 let Some(command) = command else { break Session::Stop };
-                let order = net
-                    .by_device(&command.device.id)
-                    .ok_or_else(|| "unknown node".to_owned())
-                    .and_then(|(node, mapped)| {
-                        let (id, value) = mapped.order(&command.key, &command.value)?;
-                        Ok(json!({"command": "node.set_value", "nodeId": node.id, "valueId": id, "value": value}))
-                    });
-                match order {
+                match order_for(ctx, &net, &mut glides, &command) {
                     Err(e) => command.reply(Err(e)),
-                    Ok(mut order) => {
+                    // Nothing to send (a stop with nothing moving).
+                    Ok(None) => command.reply(Ok(())),
+                    Ok(Some(mut order)) => {
                         sent += 1;
                         let id = format!("set-{sent}");
                         order["messageId"] = json!(id);
@@ -257,6 +253,119 @@ async fn session(ws: &mut WebSocket, ctx: &mut DriverCtx) -> anyhow::Result<Sess
         command.reply(Err("z-wave network read again".into()));
     }
     Ok(outcome)
+}
+
+/// What to send for an order: `None` when there is nothing to send (a stop
+/// with nothing moving).
+fn order_for(
+    ctx: &DriverCtx,
+    net: &Network,
+    glides: &mut Glides,
+    command: &CommandRequest,
+) -> Result<Option<Json>, String> {
+    let (node, mapped) = net
+        .by_device(&command.device.id)
+        .ok_or_else(|| "unknown node".to_owned())?;
+    match glides.order(ctx, node.id, mapped, command)? {
+        Plan::Send(order) => Ok(Some(order)),
+        Plan::Nothing => Ok(None),
+        Plan::Plain => {
+            let (id, value) = mapped.order(&command.key, &command.value)?;
+            Ok(Some(
+                json!({"command": "node.set_value", "nodeId": node.id, "valueId": id, "value": value}),
+            ))
+        }
+    }
+}
+
+/// What the glides make of an order.
+enum Plan {
+    /// Not theirs: the plain order.
+    Plain,
+    Send(Json),
+    /// Done, nothing to send.
+    Nothing,
+}
+
+/// A dimmer held down: Moli glides it to [`DIM_FLOOR`] (its own level
+/// change would go on to off) and, when let go, pins it where it has got to.
+#[derive(Default)]
+struct Glides(HashMap<(u16, String), Glide>);
+
+struct Glide {
+    from: f64,
+    started: Instant,
+    secs: f64,
+}
+
+impl Glides {
+    /// Seconds from the top (99) to the floor.
+    const FULL: f64 = 5.0;
+    const TOP: f64 = 99.0;
+
+    fn order(
+        &mut self,
+        ctx: &DriverCtx,
+        node: u16,
+        mapped: &Mapped,
+        command: &CommandRequest,
+    ) -> Result<Plan, String> {
+        let Some((dim, level)) = mapped.dim(&command.key) else {
+            return Ok(Plan::Plain);
+        };
+        let held = command.value == Value::Bool(true);
+        let at = (node, level.to_owned());
+        let set = |value: i64, secs: f64| -> Result<Plan, String> {
+            let target = mapped.target(level).ok_or("read-only point")?;
+            let mut order = json!({"command": "node.set_value", "nodeId": node, "valueId": target, "value": value});
+            order["options"] = json!({ "transitionDuration": format!("{secs}s") });
+            Ok(Plan::Send(order))
+        };
+        match (dim, held) {
+            (Dim::Down, true) => {
+                let now = ctx
+                    .current(&command.device.id, level)
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                #[allow(clippy::cast_precision_loss)]
+                let floor = DIM_FLOOR as f64;
+                // Off stays off; at the floor, nothing lower.
+                if now <= floor {
+                    self.0.remove(&at);
+                    return Ok(Plan::Nothing);
+                }
+                let secs = ((now - floor) / (Self::TOP - floor) * Self::FULL)
+                    .round()
+                    .max(1.0);
+                self.0.insert(
+                    at,
+                    Glide {
+                        from: now,
+                        started: Instant::now(),
+                        secs,
+                    },
+                );
+                set(DIM_FLOOR, secs)
+            }
+            (Dim::Up | Dim::Down, false) => match self.0.remove(&at) {
+                Some(glide) => {
+                    let done = (glide.started.elapsed().as_secs_f64() / glide.secs).min(1.0);
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+                    let pinned = (glide.from - (glide.from - DIM_FLOOR as f64) * done)
+                        .round()
+                        .clamp(DIM_FLOOR as f64, Self::TOP) as i64;
+                    set(pinned, 0.0)
+                }
+                None if dim == Dim::Down => Ok(Plan::Nothing),
+                None => Ok(Plan::Plain),
+            },
+            (Dim::Up, true) => {
+                self.0.remove(&at);
+                Ok(Plan::Plain)
+            }
+            _ => Ok(Plan::Plain),
+        }
+    }
 }
 
 /// Z-Wave JS says a module dead after one missed reply and keeps it so

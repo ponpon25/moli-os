@@ -174,6 +174,10 @@ struct Camera {
     state: String,
     #[serde(default, rename = "featureFlags")]
     flags: Flags,
+    /// The network address (« E063DA3FB342 »); for a camera the console
+    /// adopted over ONVIF, the machine that serves it.
+    #[serde(default)]
+    mac: String,
 }
 
 /// What the console says a camera can do.
@@ -196,6 +200,44 @@ impl Camera {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-')
     }
+}
+
+/// A MAC address as the console writes it: hex digits only, upper case.
+fn plain_mac(mac: &str) -> String {
+    mac.chars()
+        .filter(char::is_ascii_hexdigit)
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// The MAC addresses of this machine. Moli serves cameras again over
+/// RTSP/ONVIF ([rtsp]); a console that adopted one of them lists it under
+/// one of these addresses, and reading it back would make the same camera
+/// a second device (a loop through the console).
+fn own_macs() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| std::fs::read_to_string(e.path().join("address")).ok())
+        .map(|m| plain_mac(&m))
+        .filter(|m| m.len() == 12 && m.chars().any(|c| c != '0'))
+        .collect()
+}
+
+/// Drops the cameras this machine serves itself (see [`own_macs`]).
+fn not_ours(cameras: Vec<Camera>, own: &[String]) -> Vec<Camera> {
+    cameras
+        .into_iter()
+        .filter(|c| {
+            let ours = own.contains(&plain_mac(&c.mac));
+            if ours {
+                tracing::debug!(camera = %c.name, "unifi: camera served by Moli itself, skipped");
+            }
+            !ours
+        })
+        .collect()
 }
 
 fn parse_cameras(body: &[u8]) -> anyhow::Result<Vec<Camera>> {
@@ -732,7 +774,10 @@ async fn refresh(
     ctx: &DriverCtx,
     known: &mut Cameras,
 ) -> anyhow::Result<()> {
-    let cameras = parse_cameras(&console.json("/cameras").await?)?;
+    let cameras = not_ours(
+        parse_cameras(&console.json("/cameras").await?)?,
+        &own_macs(),
+    );
     for id in ctx.devices() {
         if !cameras.iter().any(|c| ctx.device_id(&c.id) == id) {
             ctx.remove_device(&id);
@@ -946,6 +991,17 @@ mod tests {
         assert_eq!(cameras[0].name, "Caméra extérieure");
         assert_eq!(cameras[0].model, "UVC G3 Pro");
         assert!(cameras.iter().all(Camera::online));
+    }
+
+    #[test]
+    fn a_camera_served_by_moli_itself_is_not_read_back() {
+        let body = r#"[{"id":"a1","name":"Caméra","type":"G4","state":"CONNECTED","mac":"E063DA3FB342"},
+            {"id":"b2","name":"Moli Sonnette","type":"Sonnette","state":"CONNECTED","mac":"000C29BA18CC"}]"#;
+        let own = vec![plain_mac("00:0c:29:ba:18:cc\n")];
+        let cameras = not_ours(parse_cameras(body.as_bytes()).unwrap(), &own);
+        assert_eq!(cameras.len(), 1);
+        assert_eq!(cameras[0].id, "a1");
+        assert_eq!(not_ours(parse_cameras(body.as_bytes()).unwrap(), &[]).len(), 2);
     }
 
     #[test]

@@ -251,6 +251,7 @@ async fn labels_persist_and_reload() {
 
     // A fresh hub reloads the label from disk.
     let reloaded = Hub::new(opts).unwrap();
+    let mut events = reloaded.subscribe();
     let cancel2 = CancellationToken::new();
     spawn_driver(
         &reloaded,
@@ -263,6 +264,20 @@ async fn labels_persist_and_reload() {
         reloaded.device(&device).unwrap().label.room.as_deref(),
         Some("Bureau")
     );
+    // A dashboard already listening learns it right after the device: a
+    // driver slower than the dashboards must not show it unnamed.
+    let mut order = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        match event {
+            Event::DeviceUpserted { device: d } if d.id == device => order.push("device"),
+            Event::LabelChanged { device: d, label } if d == device => {
+                assert_eq!(label.room.as_deref(), Some("Bureau"));
+                order.push("label");
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(order, ["device", "label"]);
 
     cancel.cancel();
     cancel2.cancel();

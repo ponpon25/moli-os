@@ -1377,7 +1377,7 @@ impl Hub {
 
     pub(crate) fn upsert_device(&self, device: Device) {
         let device = Arc::new(device);
-        let restored = {
+        let (restored, label) = {
             let mut model = self.write();
             if model
                 .devices
@@ -1386,6 +1386,14 @@ impl Hub {
             {
                 return;
             }
+            // A device seen for the first time since the start (a cloud
+            // driver answers after the dashboards reconnected): its label
+            // follows, or a listener would show it unnamed and in no room.
+            let label = if model.devices.contains_key(&device.id) {
+                None
+            } else {
+                model.labels.get(&device.id).cloned()
+            };
             // Claim cached values for the points this definition declares.
             // The rest stays cached: a device first published without its
             // definition (interview in progress) must not lose its history.
@@ -1410,9 +1418,13 @@ impl Hub {
                 model.restored.insert(device.id.clone(), cached);
             }
             model.devices.insert(device.id.clone(), Arc::clone(&device));
-            restored
+            (restored, label)
         };
+        let id = device.id.clone();
         self.emit(Event::DeviceUpserted { device });
+        if let Some(label) = label {
+            self.emit(Event::LabelChanged { device: id, label });
+        }
         for event in restored {
             self.emit(event);
         }

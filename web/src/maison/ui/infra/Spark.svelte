@@ -3,7 +3,7 @@
   import { t } from '../../../lib/i18n.svelte.js';
 
   /** The last hours of a point, as a small filled line (from the history). */
-  let { point, hours = 6, max = null, label = '', unit = '' } = $props();
+  let { point, hours = 6, max = null, label = '', unit = '', span = null } = $props();
 
   let series = $state([]);
   async function load() {
@@ -41,7 +41,7 @@
 
 <figure class="spark">
   <figcaption>
-    <span>{label}, {hours} h</span>
+    <span>{label}, {span ?? `${hours} h`}</span>
     {#if peak != null}<span class="muted">{t('systeme.infra.spark.pointe', { value: `${Math.round(peak)}${unit}` })}</span>{/if}
   </figcaption>
   {#if path}

@@ -131,7 +131,8 @@
   const groups = $derived.by(() => {
     const map = new Map();
     for (const x of shown) {
-      if (by === 'source' && groupsSection && isCoverGroup(x.d)) continue;
+      // Shown in their own section above: not again by source or in their room.
+      if ((by === 'source' || by === 'room') && groupsSection && isCoverGroup(x.d)) continue;
       const k = by === 'room' ? (x.room ?? '') : by === 'name' ? 'all' : by === 'state' ? (onHome(x.d.id) ? 'on' : 'off') : source(x.d);
       if (!map.has(k)) map.set(k, []);
       map.get(k).push(x);

@@ -8,6 +8,8 @@
   import { newAlert } from '../lib/auto.svelte.js';
   import Sortable from '../ui/Sortable.svelte';
   import Personalize from '../ui/Personalize.svelte';
+  import { arranged } from '../lib/order.svelte.js';
+  import { onMount } from 'svelte';
 
   const KIND_ICON = {
     garage: 'gate',
@@ -39,6 +41,17 @@
   let by = $state('room');
   /** the groups opened, as `by:group`: all start folded, a line each */
   let opened = $state(new Set());
+
+  /** Two columns that stack on their own: a group opened on one side
+   *  leaves no hole on the other. Reading order stays row by row. */
+  let wide = $state(true);
+  onMount(() => {
+    const media = matchMedia('(min-width: 761px)');
+    wide = media.matches;
+    const update = (e) => (wide = e.matches);
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  });
   let editing = $state(false);
   const VIEW_KEY = 'moli-equipements-ciel';
   try {
@@ -269,7 +282,7 @@
   {/if}
 
   {#snippet groupBlock([src, list])}
-    <details class="group" open={looking || opened.has(`${by}:${src}`)} ontoggle={(e) => folded(`${by}:${src}`, e.currentTarget.open)}>
+    <details class="group" open={!editing && (looking || opened.has(`${by}:${src}`))} ontoggle={(e) => !editing && folded(`${by}:${src}`, e.currentTarget.open)}>
       <summary>
       <h2>
         {groupName(src)} <small>{list.length}</small>
@@ -315,9 +328,20 @@
   {/snippet}
 
   {#if groups.length}
-    <div class="groups">
-    <Sortable list="equipements-{by}" items={groups} id={([src]) => src || '-'} label={([src]) => groupName(src)} {editing} hideable={false} span={([src]) => (looking || opened.has(`${by}:${src}`) ? 2 : 1)} item={groupBlock} />
-    </div>
+    {#if wide && !editing}
+      {@const ordered = arranged(`equipements-${by}`, groups, ([src]) => src || '-')}
+      <div class="columns">
+        {#each [0, 1] as side (side)}
+          <div class="column">
+            {#each ordered.filter((_, i) => i % 2 === side) as g (g[0] || '-')}{@render groupBlock(g)}{/each}
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <div class="groups">
+      <Sortable list="equipements-{by}" items={groups} id={([src]) => src || '-'} label={([src]) => groupName(src)} {editing} hideable={false} item={groupBlock} />
+      </div>
+    {/if}
   {:else if !bridges.length}
     <p class="empty">{t('maison.equipements.rien')}</p>
   {/if}
@@ -435,7 +459,21 @@
     color: var(--warm-ink);
   }
 
-  /* A group, folded: one pane of glass. Two side by side; open, the whole width. */
+  /* A group: one pane of glass, two side by side, open or folded (an open
+     one keeps its column, so nothing moves around it). */
+  .columns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    align-items: start;
+  }
+
+  .column {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
   .groups {
     --sort-cols: repeat(2, minmax(0, 1fr));
     --sort-gap: 8px;

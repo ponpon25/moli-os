@@ -129,6 +129,9 @@
     return list.sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
   });
 
+  /** Every bridge with its own interface: outside the « par origine » view,
+   *  where each group carries its link, they are listed once under the bar. */
+  const webBridges = $derived((hub.drivers ?? []).filter((x) => x.web));
   /** Bridges with an interface but no device yet: where pairing starts. */
   const bridges = $derived(by !== 'source' ? [] : (hub.drivers ?? []).filter((x) => x.web && !devices.some((d) => source(d.d) === x.instance)));
 
@@ -225,6 +228,15 @@
       {/each}
     </div>
   </div>
+
+  {#if by !== 'source' && webBridges.length}
+    <nav class="bridges" aria-label={t('maison.equipements.interfaces')}>
+      <span>{t('maison.equipements.interfaces')}</span>
+      {#each webBridges as b (b.instance)}
+        <a href={b.web} target="_blank" rel="noopener noreferrer" title={t('maison.equipements.interface_de', { name: driverName(b) })}>{driverName(b)} ↗</a>
+      {/each}
+    </nav>
+  {/if}
 
   {#if groupsSection}
     <details class="group" open={looking || opened.has('cover-groups')} ontoggle={(e) => folded('cover-groups', e.currentTarget.open)}>
@@ -653,6 +665,25 @@
 
   .empty {
     color: var(--ink-3);
+  }
+
+  .bridges {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 16px;
+    font-size: 13px;
+    color: var(--ink-3);
+  }
+
+  .bridges a {
+    font-weight: 700;
+    color: var(--warm-ink);
+    text-decoration: none;
+  }
+
+  .bridges a:hover {
+    text-decoration: underline;
   }
 
   .more {

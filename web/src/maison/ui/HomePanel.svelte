@@ -2,7 +2,7 @@
   // What opens from the home page: a use of the house, or a room. The orders
   // go through the real cards and `act`: the guard and the code still hold.
   import { onMount } from 'svelte';
-  import { act, clock, isOn, nameOf, num, roomOf, value, hub } from '../lib/home.svelte.js';
+  import { act, clock, deviceKind, isOn, nameOf, num, roomOf, value, hub } from '../lib/home.svelte.js';
   import { alarms, allLightsOff, cameras, chargers, clims, coverGroups, covers, coversWord, garages, lightOf, lights, rooms, shortName, smokes, speakers } from '../lib/accueil.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
@@ -16,6 +16,7 @@
   import CameraTile from './CameraTile.svelte';
   import ChargerCard from './ChargerCard.svelte';
   import ClimateCard from './ClimateCard.svelte';
+  import ThermoCard from './ThermoCard.svelte';
   import EnergyCard from './EnergyCard.svelte';
   import GarageCard from './GarageCard.svelte';
   import Routines from './Routines.svelte';
@@ -65,6 +66,17 @@
     for (const d of talkers) act(`${d.id}/quiet`, !hushed, hushed ? t('maison.accueil.annonces_retablies') : t('maison.accueil.annonces_coupees'));
   }
 
+  // The thermometers, with the clims: called by their room when it has one only.
+  const thermometers = $derived(
+    Object.values(hub.devices)
+      .filter((d) => deviceKind(d) === 'sensor' && d.points.some((p) => p.key === 'temperature') && !d.points.some((p) => p.key === 'weather_code'))
+      .sort((a, b) => (roomOf(a) ?? '~').localeCompare(roomOf(b) ?? '~')),
+  );
+  const thermoName = (d) => {
+    const r = roomOf(d);
+    return r && thermometers.filter((x) => roomOf(x) === r).length === 1 ? r : nameOf(d.id);
+  };
+
   let self = $state();
   onMount(() => self?.focus());
 </script>
@@ -104,6 +116,12 @@
     <div class="cards">
       {#each clims() as d (d.id)}<ClimateCard id={d.id} name={nameOf(d.id)} />{/each}
     </div>
+    {#if thermometers.length}
+      <h3>{t('maison.accueil.temperatures')}</h3>
+      <div class="cards">
+        {#each thermometers as d (d.id)}<ThermoCard id={d.id} name={thermoName(d)} />{/each}
+      </div>
+    {/if}
   {:else if panel === 'tv' && atv}
     <button class="wide" class:on={atvOn} aria-pressed={atvOn} onclick={() => act(`${atv}/power`, !atvOn, atvOn ? t('salon.tele.eteindre') : t('salon.tele.allumer'))}>
       <Icon name="power" size={18} />{atvOn ? t('salon.tele.eteindre_television') : t('salon.tele.allumer_television')}

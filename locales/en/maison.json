@@ -417,6 +417,7 @@
   "maison.accueil.piece_vide": "Nothing to set in this room.",
   "maison.accueil.tout_eteindre": "Turn everything off",
   "maison.accueil.sans_piece": "No room",
+  "maison.accueil.temperatures": "Temperatures",
   "maison.accueil.groupes": "Groups",
   "maison.accueil.tout_voir": "See it all: {page}",
   "maison.accueil.garage_ouvert": "{name} is open",

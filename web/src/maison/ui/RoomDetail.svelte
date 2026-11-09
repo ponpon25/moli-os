@@ -27,7 +27,10 @@
   const shutters = $derived(kinds('cover'));
   const moods = $derived(lampsOf(room.room));
   const speakers = $derived(kinds('speaker'));
-  const readings = $derived(sensors ? kinds('sensor').filter((d) => !isAlarm(d) && !isSmoke(d) && !isCharger(d)) : []);
+  // A thermometer, not the weather forecast (which reads a temperature too).
+  const isThermo = (d) => d.points.some((p) => p.key === 'temperature') && !d.points.some((p) => p.key === 'weather_code');
+  /** Thermometers are always shown (their curve); other sensors only where asked. */
+  const readings = $derived(kinds('sensor').filter((d) => !isAlarm(d) && !isSmoke(d) && !isCharger(d) && (sensors || isThermo(d))));
   const short = (d) => shortName(d, room.name);
 </script>
 
@@ -75,7 +78,7 @@
   {#each room.devices.filter(isCharger) as d (d.id)}<ChargerCard id={d.id} />{/each}
   {#each kinds('camera') as d (d.id)}<section class="card"><CameraTile id={d.id} name={nameOf(d.id)} refresh={15} /></section>{/each}
   <!-- A thermometer gets its curve, as on the home page; other sensors their readings in words. -->
-  {#each readings as d (d.id)}{#if d.points.some((p) => p.key === 'temperature')}<ThermoCard id={d.id} name={short(d)} />{:else}<SensorCard id={d.id} />{/if}{/each}
+  {#each readings as d (d.id)}{#if isThermo(d)}<ThermoCard id={d.id} name={short(d)} />{:else}<SensorCard id={d.id} />{/if}{/each}
 </div>
 
 <style>

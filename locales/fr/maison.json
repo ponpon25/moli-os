@@ -417,6 +417,7 @@
   "maison.accueil.piece_vide": "Rien à régler dans cette pièce.",
   "maison.accueil.tout_eteindre": "Tout éteindre",
   "maison.accueil.sans_piece": "Sans pièce",
+  "maison.accueil.temperatures": "Températures",
   "maison.accueil.groupes": "Groupes",
   "maison.accueil.tout_voir": "Tout voir : {page}",
   "maison.accueil.garage_ouvert": "{name} est ouverte",

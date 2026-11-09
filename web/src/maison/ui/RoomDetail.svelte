@@ -18,6 +18,7 @@
   import ClimateCard from './ClimateCard.svelte';
   import GarageCard from './GarageCard.svelte';
   import SensorCard from './SensorCard.svelte';
+  import ThermoCard from './ThermoCard.svelte';
 
   let { room, sensors = false } = $props();
 
@@ -73,7 +74,8 @@
   {#each kinds('garage') as d (d.id)}<GarageCard id={d.id} />{/each}
   {#each room.devices.filter(isCharger) as d (d.id)}<ChargerCard id={d.id} />{/each}
   {#each kinds('camera') as d (d.id)}<section class="card"><CameraTile id={d.id} name={nameOf(d.id)} refresh={15} /></section>{/each}
-  {#each readings as d (d.id)}<SensorCard id={d.id} />{/each}
+  <!-- A thermometer gets its curve, as on the home page; other sensors their readings in words. -->
+  {#each readings as d (d.id)}{#if d.points.some((p) => p.key === 'temperature')}<ThermoCard id={d.id} name={short(d)} />{:else}<SensorCard id={d.id} />{/if}{/each}
 </div>
 
 <style>

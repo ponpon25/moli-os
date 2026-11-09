@@ -86,8 +86,9 @@
 <div class="home">
     <section class="lead">
       <h1 class="home-h1">
-        {greeting(home.now)}.<br />
-        {#if urgent}<em class="warn">{urgent.text}.</em>{:else}<em>{t('maison.accueil.calme_court')}</em>{/if}
+        {greeting(home.now)}.
+        <!-- Only what needs an eye takes a second line: « tout est calme » took room for nothing. -->
+        {#if urgent}<br /><em class="warn">{urgent.text}.</em>{/if}
       </h1>
 
       {#if urgent}

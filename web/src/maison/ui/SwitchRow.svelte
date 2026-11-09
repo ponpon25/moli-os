@@ -5,7 +5,7 @@
   import { isOn, nameOf, num, reachable, setPower, value } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
-  import Spark from './infra/Spark.svelte';
+  import HistoryCurve from './HistoryCurve.svelte';
 
   let { d, icon = 'power', name } = $props();
   const on = $derived(isOn(d.id));
@@ -66,7 +66,7 @@
         {/each}
       </div>
       {#key hours}
-        <Spark point={`${d.id}/power`} {hours} label={t('maison.prise.puissance')} span={hours === 24 ? t('maison.prise.h24') : t('maison.prise.j7')} unit=" W" />
+        <HistoryCurve point={`${d.id}/power`} {hours} live={on ? watts : 0} unit=" W" zero step hue={60} minSpread={5} online={reachable(d.id)} label={t('maison.prise.puissance')} spanLabel={hours === 24 ? t('maison.prise.dernieres_24h') : t('maison.prise.derniers_7j')} />
       {/key}
     </div>
   {/if}

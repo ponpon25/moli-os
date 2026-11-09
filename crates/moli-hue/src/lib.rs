@@ -51,6 +51,14 @@ pub struct Config {
     /// learned and stored at first contact (no secret store).
     #[serde(default)]
     pub cert_sha256: Option<String>,
+    /// Hue rooms and zones as devices of their own (one switch for all the
+    /// lights of a room). `false` keeps only the lamps and accessories.
+    #[serde(default = "yes")]
+    pub groups: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug)]
@@ -135,7 +143,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
     };
 
     let bridge = Arc::new(Bridge::new(&config.host, pin, Some(key))?);
-    let mut index = match full_load(&bridge, ctx).await {
+    let mut index = match full_load(&bridge, ctx, config.groups).await {
         Ok(index) => index,
         Err(e) if e.is::<KeyRejected>() && !from_env => {
             // Revoked from the Hue app, bridge reset…: pair again.
@@ -179,7 +187,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
                     for payload in payloads {
                         if apply_events(ctx, &index, &payload) {
                             tracing::info!(instance = %ctx.instance(), "hue topology changed, reloading");
-                            index = full_load(&bridge, ctx).await?;
+                            index = full_load(&bridge, ctx, config.groups).await?;
                         }
                     }
                 }
@@ -190,7 +198,7 @@ async fn run(config: &Config, ctx: &mut DriverCtx) -> anyhow::Result<()> {
             }
         }
         // Whatever happened during the silence, start again from the truth.
-        index = full_load(&bridge, ctx).await?;
+        index = full_load(&bridge, ctx, config.groups).await?;
     }
 }
 
@@ -261,7 +269,7 @@ async fn pair(config: &Config, ctx: &mut DriverCtx, pin: String) -> anyhow::Resu
 }
 
 /// Loads every resource, publishes devices and their current values.
-async fn full_load(bridge: &Bridge, ctx: &DriverCtx) -> anyhow::Result<Index> {
+async fn full_load(bridge: &Bridge, ctx: &DriverCtx, groups: bool) -> anyhow::Result<Index> {
     let (status, body) = bridge.send(Method::GET, "/clip/v2/resource", None).await?;
     if status == http::StatusCode::FORBIDDEN || status == http::StatusCode::UNAUTHORIZED {
         return Err(anyhow!(KeyRejected));
@@ -273,7 +281,7 @@ async fn full_load(bridge: &Bridge, ctx: &DriverCtx) -> anyhow::Result<Index> {
     let resources = json["data"]
         .as_array()
         .context("no data in hue resources")?;
-    let Load { devices, index } = model::load(ctx.instance(), resources);
+    let Load { devices, index } = model::load(ctx.instance(), resources, groups);
 
     let keep: Vec<DeviceId> = devices.iter().map(|d| d.id.clone()).collect();
     for id in ctx.devices() {

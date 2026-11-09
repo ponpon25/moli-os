@@ -115,7 +115,8 @@ fn numeric(min: Option<f64>, max: Option<f64>) -> Kind {
 }
 
 /// Builds devices and the routing index from `GET /clip/v2/resource`.
-pub fn load(instance: &InstanceId, resources: &[Json]) -> Load {
+/// `groups`: also the Hue rooms and zones, each as a device.
+pub fn load(instance: &InstanceId, resources: &[Json], groups_too: bool) -> Load {
     let by_id: HashMap<&str, &Json> = resources
         .iter()
         .filter_map(|r| Some((r.get("id")?.as_str()?, r)))
@@ -187,7 +188,9 @@ pub fn load(instance: &InstanceId, resources: &[Json]) -> Load {
             points,
         });
     }
-    groups(instance, resources, &by_id, &mut load);
+    if groups_too {
+        groups(instance, resources, &by_id, &mut load);
+    }
     load
 }
 
@@ -700,7 +703,11 @@ mod tests {
             "../../../integrations/hue/fixtures/resources.json"
         ))
         .unwrap();
-        load(&InstanceId::from("hue"), raw["data"].as_array().unwrap())
+        load(
+            &InstanceId::from("hue"),
+            raw["data"].as_array().unwrap(),
+            true,
+        )
     }
 
     fn device<'a>(load: &'a Load, name: &str) -> &'a Device {
@@ -772,7 +779,38 @@ mod tests {
     }
 
     fn load_fn(resources: &[Json]) -> Load {
-        load(&InstanceId::from("hue"), resources)
+        load(&InstanceId::from("hue"), resources, true)
+    }
+
+    #[test]
+    fn rooms_and_zones_can_be_left_out() {
+        let raw: Json = serde_json::from_slice(include_bytes!(
+            "../../../integrations/hue/fixtures/resources.json"
+        ))
+        .unwrap();
+        let without = load(
+            &InstanceId::from("hue"),
+            raw["data"].as_array().unwrap(),
+            false,
+        );
+        let all = fixture();
+        let groups = all
+            .devices
+            .iter()
+            .filter(|d| matches!(d.model.as_deref(), Some("room" | "zone")))
+            .count();
+        assert!(groups > 0);
+        assert!(
+            without
+                .devices
+                .iter()
+                .all(|d| !matches!(d.model.as_deref(), Some("room" | "zone")))
+        );
+        assert_eq!(without.devices.len() + groups, all.devices.len());
+        assert!(
+            without.devices.iter().any(|d| d.native_room.is_some()),
+            "lamps still suggest their Hue room"
+        );
     }
 
     #[test]

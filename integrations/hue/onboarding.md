@@ -8,3 +8,5 @@
    appuie, le pilote redemande toutes les 2 s jusqu'à l'appui.
 5. Tester : lumières, pièces et zones publiées ; allumer puis éteindre une lampe neutre
    (jamais dans une chambre), humain présent.
+6. Option `groups = false` : ne publie pas les pièces et zones Hue comme appareils (seulement
+   les lampes et accessoires ; la pièce Hue reste proposée comme pièce de chaque lampe).

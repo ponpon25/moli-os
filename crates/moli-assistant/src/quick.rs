@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use moli_core::{DeviceId, Kind as PointKind, PointId, PointSpec, Semantic, Value};
 use moli_runtime::DeviceView;
 
+use crate::Config;
 use crate::house::{Layout, name_of, no_room, norm};
 use crate::word_list;
 
@@ -534,13 +535,13 @@ struct Catalog<'a> {
 
 impl<'a> Catalog<'a> {
     #[allow(clippy::too_many_lines)]
-    fn new(devices: &'a [DeviceView], layout: &Layout, aliases: &BTreeMap<String, String>) -> Self {
+    fn new(devices: &'a [DeviceView], layout: &Layout, config: &Config) -> Self {
         let lex = Lex::load();
         let no_room = no_room();
         // The rooms that hold something one can order.
         let mut named: BTreeSet<String> = BTreeSet::new();
         for view in devices {
-            if layout.hides(view.device.id.as_str()) {
+            if layout.hides(view.device.id.as_str()) || skipped(config, view) {
                 continue;
             }
             if let Some((cat, group)) = category(view)
@@ -567,7 +568,7 @@ impl<'a> Catalog<'a> {
                 }
             }
         }
-        for (alias, room) in aliases {
+        for (alias, room) in &config.room_aliases {
             let canonical = layout.room(room);
             if named.contains(&canonical) {
                 rooms.push((tokens(alias), canonical));
@@ -591,7 +592,7 @@ impl<'a> Catalog<'a> {
             .map(|(k, v)| (k.clone(), tokens(v).join(" ")))
             .collect();
         for view in devices {
-            if layout.hides(view.device.id.as_str()) {
+            if layout.hides(view.device.id.as_str()) || skipped(config, view) {
                 continue;
             }
             let Some((cat, group)) = category(view) else {
@@ -680,6 +681,14 @@ impl<'a> Catalog<'a> {
     }
 }
 
+/// A device the house asked the quick path never to order.
+fn skipped(config: &Config, view: &DeviceView) -> bool {
+    config
+        .quick_skip
+        .iter()
+        .any(|id| id == view.device.id.as_str())
+}
+
 /// « chambre Léa » → « chambre de Léa », « chez Léa », « Léa ».
 fn person_forms(lex: &Lex, room: &str) -> Vec<(Phrase, String)> {
     let t = tokens(room);
@@ -738,9 +747,9 @@ pub(crate) fn interpret(
     room: Option<&str>,
     devices: &[DeviceView],
     layout: &Layout,
-    aliases: &BTreeMap<String, String>,
+    config: &Config,
 ) -> Outcome {
-    let cat = Catalog::new(devices, layout, aliases);
+    let cat = Catalog::new(devices, layout, config);
     let room = room
         .filter(|r| !r.trim().is_empty())
         .map(|r| layout.room(r))
@@ -1666,8 +1675,20 @@ mod tests {
 
     /// What was ordered, as `device/key=value`, sorted.
     fn said(text: &str, room: Option<&str>) -> Result<Vec<String>, String> {
-        let aliases = BTreeMap::from([("chambre parentale".to_owned(), "Chambre Léa".to_owned())]);
-        match interpret(text, room, &house(), &layout(), &aliases) {
+        said_with(
+            json!({ "room_aliases": { "chambre parentale": "Chambre Léa" } }),
+            text,
+            room,
+        )
+    }
+
+    fn said_with(
+        config: serde_json::Value,
+        text: &str,
+        room: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        let config: Config = serde_json::from_value(config).unwrap();
+        match interpret(text, room, &house(), &layout(), &config) {
             Outcome::Run(orders) => {
                 let mut list: Vec<String> = orders
                     .iter()
@@ -1880,9 +1901,14 @@ mod tests {
         passes("Allume la lumière du grenier", None, "no-room");
         passes("Allume la lumière du garage", None, "sensitive");
         passes("Mets la lumière à 300", Some("Salon"), "bad-value");
-        let none = BTreeMap::new();
         assert_eq!(
-            interpret("C'est bon, merci", None, &house(), &layout(), &none),
+            interpret(
+                "C'est bon, merci",
+                None,
+                &house(),
+                &layout(),
+                &Config::default()
+            ),
             Outcome::End
         );
     }
@@ -1904,6 +1930,22 @@ mod tests {
             None,
             &["z:cuisine/control=close"],
         );
+    }
+
+    /// A device in `quick_skip` is never ordered, by its room or by its name.
+    #[test]
+    fn a_skipped_device_is_never_ordered() {
+        let skip = json!({ "quick_skip": ["zw:salon"] });
+        let said = |text: &str| said_with(skip.clone(), text, None);
+        assert_eq!(said("Éteins la lumière du salon"), Err("no-device".into()));
+        assert_eq!(said("Éteins le salon"), Err("no-device".into()));
+        // Everything else of the room still answers.
+        assert_eq!(
+            said("Ferme le store fenêtre"),
+            Ok(vec!["z:fenetre/control=close".into()])
+        );
+        // Without the list, it is ordered.
+        assert!(said_with(json!({}), "Éteins la lumière du salon", None).is_ok());
     }
 
     #[test]

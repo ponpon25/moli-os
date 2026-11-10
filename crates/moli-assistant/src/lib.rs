@@ -118,6 +118,10 @@ pub struct Config {
     /// for the words a house uses and its devices don't.
     #[serde(default)]
     pub room_aliases: std::collections::BTreeMap<String, String>,
+    /// Devices the quick path never orders (an ambilight strip that follows
+    /// the TV by itself): by id, like `hidden` in `home.json`.
+    #[serde(default)]
+    pub quick_skip: Vec<String>,
 }
 
 impl Default for Config {
@@ -144,6 +148,7 @@ impl Default for Config {
             quick: false,
             quick_only: false,
             room_aliases: std::collections::BTreeMap::new(),
+            quick_skip: Vec::new(),
         }
     }
 }
@@ -966,7 +971,7 @@ impl Assistant {
             turn.room.as_deref(),
             &devices,
             &layout,
-            &self.0.config.room_aliases,
+            &self.0.config,
         ) {
             quick::Outcome::Pass(why) => return Quick::Pass(why),
             quick::Outcome::End => {

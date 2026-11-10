@@ -149,6 +149,8 @@ modèle (ou, sans modèle, « je n'ai pas su répondre ») et **rien n'est fait*
   ni texte ne parte vers un fournisseur, vider aussi `transcribe_model` et `speech_model` : une clé expirée n'empêche pas
   l'envoi, seulement la réponse. L'écoute passe alors par Whisper (`local_listen`, sur n'importe quelle machine du
   réseau) et la voix par Piper (`local_speech`).
+- **Appareils à ne jamais commander** : `[assistant] quick_skip = ["hue:…"]` (par exemple un ruban qui suit la télé tout seul)
+  sort ces appareils de « la lumière du salon » ; ils restent commandables ailleurs (tableau de bord, modèle).
 - **Le contexte** : `room` dans la requête (la pièce du micro ou de l'écran) complète « ferme les stores ».
 - **Essai sans risque** : `dry_run: true` dit ce qui serait fait (`actions[].status = "dry"`) sans rien envoyer, et ne
   consulte jamais le modèle (il pourrait agir).

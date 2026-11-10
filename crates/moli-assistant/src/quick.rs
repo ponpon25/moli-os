@@ -1038,7 +1038,7 @@ impl Catalog<'_> {
         }
         let list = on
             .iter()
-            .map(|(d, p)| format!("{} ({} %)", d.name, number_text(*p)))
+            .map(|(d, p)| format!("{} ({} %)", d.name, percent_text(*p)))
             .collect::<Vec<_>>()
             .join(", ");
         Outcome::Say {
@@ -1059,7 +1059,7 @@ impl Catalog<'_> {
                 } else if p <= 0.5 {
                     t("assistant.quick.state_closed")
                 } else {
-                    moli_i18n::tr!("assistant.quick.state_open_part", percent = number_text(p))
+                    moli_i18n::tr!("assistant.quick.state_open_part", percent = percent_text(p))
                 })
             }
             Cat::Light => {
@@ -1071,7 +1071,7 @@ impl Catalog<'_> {
                 } else {
                     moli_i18n::tr!(
                         "assistant.quick.state_light_level",
-                        percent = number_text(p)
+                        percent = percent_text(p)
                     )
                 })
             }
@@ -1751,6 +1751,12 @@ fn light_percent(d: &Dev<'_>) -> Option<f64> {
         Some(Value::Bool(true)) => Some(d.number("brightness").unwrap_or(100.0)),
         _ => None,
     }
+}
+
+/// A percentage as one says it: whole (« 61 % », never « 60.6 % »).
+#[allow(clippy::cast_possible_truncation)]
+fn percent_text(v: f64) -> String {
+    format!("{}", v.round() as i64)
 }
 
 /// « 21,5 » → `21.5`, « 22,0 » → `22` (the voice says it right).

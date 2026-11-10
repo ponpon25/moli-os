@@ -141,6 +141,11 @@ modèle (ou, sans modèle, « je n'ai pas su répondre ») et **rien n'est fait*
   consigne d'une clim (« à 22 », « à vingt et un degrés », « en chaud ») ; la musique (pause, reprendre, suivante,
   coupe le son, « mets du jazz », volume) ; les chaînes et applications de la télé ; plusieurs ordres (« … et … ») ;
   les nombres dits en mots ; les mots mal entendus (« sallon ») quand une seule correction est possible.
+- **Les questions sur l'état** (sans modèle, lecture seule) : « quelle est la température dans la chambre de Léa ? »
+  (la moyenne des sondes de la pièce, sinon la clim), « les stores du salon sont fermés ? », « la lumière du bureau est
+  allumée ? », « la clim est allumée ? », « la musique joue ? », « qu'est-ce qui est allumé ? », et l'état de la porte de
+  garage ou de l'alarme (les lire est sans risque, les commander reste refusé). La réponse est dite et les appareils
+  concernés s'affichent ; `tools` vaut `quick-say`. Sans pièce, appareil ou valeur lisible : rien n'est deviné.
 - **Ce qu'il refuse toujours** (le modèle ou l'écran prend le relais) : les questions, les négations et exceptions
   (« sauf… », « ne… pas »), les ordres différés ou conditionnels (« dans dix minutes », « ce soir », « si… »),
   l'alarme, la porte de garage et tout ce qui ressemble à une porte, un appareil inconnu ou ambigu, une valeur hors

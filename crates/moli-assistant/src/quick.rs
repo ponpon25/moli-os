@@ -44,6 +44,12 @@ pub(crate) enum Outcome {
     Run(Vec<Order>),
     /// The person ends the conversation.
     End,
+    /// A question about the state of the house, answered from what Moli
+    /// knows: the sentence to say and the devices it is about.
+    Say {
+        text: String,
+        devices: Vec<DeviceId>,
+    },
     /// Not sure: nothing is done. The reason is for the history.
     Pass(&'static str),
 }
@@ -125,6 +131,12 @@ struct Lex {
     x20: BTreeSet<String>,
     twenty: BTreeSet<String>,
     not_after: BTreeSet<String>,
+    ask_temperature: Vec<Phrase>,
+    ask_whats_on: Vec<Phrase>,
+    garage_words: Vec<Phrase>,
+    alarm_words: Vec<Phrase>,
+    garage_states: Vec<(Phrase, String)>,
+    alarm_states: Vec<(Phrase, String)>,
 }
 
 /// Case, accents, hyphens and apostrophes don't count; `,` and `?` stand alone.
@@ -255,6 +267,12 @@ impl Lex {
             x20: set("number_x20"),
             twenty: set("number_20"),
             not_after: set("number_not_after"),
+            ask_temperature: list("ask_temperature"),
+            ask_whats_on: list("ask_whats_on"),
+            garage_words: list("garage_words"),
+            alarm_words: list("alarm_words"),
+            garage_states: pairs("assistant.quick.garage_states"),
+            alarm_states: pairs("assistant.quick.alarm_states"),
         }
     }
 
@@ -285,7 +303,16 @@ impl Lex {
             &self.resume,
             &self.music_intro,
         ];
-        let more: [&Vec<Phrase>; 4] = [&self.next, &self.previous, &self.mute, &self.unmute];
+        let more: [&Vec<Phrase>; 8] = [
+            &self.next,
+            &self.previous,
+            &self.mute,
+            &self.unmute,
+            &self.ask_temperature,
+            &self.ask_whats_on,
+            &self.garage_words,
+            &self.alarm_words,
+        ];
         lists
             .into_iter()
             .chain(more)
@@ -523,9 +550,18 @@ fn category(view: &DeviceView) -> Option<(Cat, bool)> {
     Some((cat, false))
 }
 
+/// A temperature read in a room.
+struct Sensor {
+    room: String,
+    value: f64,
+    /// Read by an air conditioner rather than by a sensor.
+    clim: bool,
+}
+
 struct Catalog<'a> {
     lex: Lex,
     devs: Vec<Dev<'a>>,
+    sensors: Vec<Sensor>,
     /// Every way to say a room → its name.
     rooms: Vec<(Phrase, String)>,
     room_words: BTreeSet<String>,
@@ -534,7 +570,7 @@ struct Catalog<'a> {
 }
 
 impl<'a> Catalog<'a> {
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
     fn new(devices: &'a [DeviceView], layout: &Layout, config: &Config) -> Self {
         let lex = Lex::load();
         let no_room = no_room();
@@ -552,6 +588,32 @@ impl<'a> Catalog<'a> {
                 let room = layout.room_of(view);
                 if room != no_room {
                     named.insert(room);
+                }
+            }
+        }
+        // The temperatures read in a room (a room can be only read, never ordered).
+        let mut readings: Vec<(&DeviceView, f64)> = Vec::new();
+        for view in devices {
+            if layout.hides(view.device.id.as_str()) || skipped(config, view) {
+                continue;
+            }
+            for p in view
+                .device
+                .points
+                .iter()
+                .filter(|p| p.access.read && p.semantic == Semantic::Temperature)
+            {
+                let value = match view.state.get(&*p.key).map(|s| &s.value) {
+                    Some(Value::Float(f)) => Some(*f),
+                    Some(Value::Int(i)) => Some(*i as f64),
+                    _ => None,
+                };
+                if let Some(v) = value {
+                    readings.push((view, v));
+                    let room = layout.room_of(view);
+                    if room != no_room {
+                        named.insert(room);
+                    }
                 }
             }
         }
@@ -663,9 +725,29 @@ impl<'a> Catalog<'a> {
         vocab.extend(room_words.iter().cloned());
         vocab.extend(devs.iter().flat_map(|d| d.spec.iter().cloned()));
         vocab.retain(|w| w.chars().count() >= FUZZY_MIN_LEN);
+        let sensors = readings
+            .iter()
+            .filter_map(|(view, value)| {
+                let room = Some(layout.room_of(view))
+                    .filter(|r| *r != no_room)
+                    .or_else(|| {
+                        let t = tokens(name_of(view));
+                        room_names
+                            .iter()
+                            .find(|(p, _)| find(&t, p).is_some())
+                            .map(|(_, r)| r.clone())
+                    })?;
+                Some(Sensor {
+                    room,
+                    value: *value,
+                    clim: category(view).is_some_and(|(c, _)| c == Cat::Clim),
+                })
+            })
+            .collect();
         Self {
             lex,
             devs,
+            sensors,
             rooms,
             room_words,
             modes,
@@ -776,7 +858,9 @@ impl Catalog<'_> {
             || has(&toks, &lex.question_any)
             || (toks.last().is_some_and(|t| t == "?") && !said_something_to_do)
         {
-            return Outcome::Pass("question");
+            return self
+                .answer(&toks, box_room)
+                .unwrap_or(Outcome::Pass("question"));
         }
         if lex
             .sensitive
@@ -815,6 +899,206 @@ impl Catalog<'_> {
             Outcome::Pass("too-many")
         } else {
             Outcome::Run(orders)
+        }
+    }
+
+    /// A question about the state of the house, answered from the inventory:
+    /// never a guess (nothing readable, no room, no device: `None`).
+    fn answer(&self, toks: &[String], box_room: Option<&str>) -> Option<Outcome> {
+        let lex = &self.lex;
+        let said_room = self.room_in(toks);
+        let room = said_room.clone().or_else(|| box_room.map(str::to_owned));
+        if has(toks, &lex.ask_temperature) || toks.iter().any(|t| lex.degree.contains(t)) {
+            return self.say_temperature(room.as_deref());
+        }
+        if has(toks, &lex.ask_whats_on) {
+            return Some(self.say_whats_on());
+        }
+        // The garage door and the alarm: reading them is harmless.
+        let sensitive = if has(toks, &lex.garage_words) {
+            Some((true, &lex.garage_states))
+        } else if has(toks, &lex.alarm_words) {
+            Some((false, &lex.alarm_states))
+        } else {
+            None
+        };
+        if let Some((garage, states)) = sensitive {
+            let (asked, read) = if garage {
+                ("target", "state")
+            } else {
+                ("mode", "mode")
+            };
+            let lines: Vec<(&Dev, String)> = self
+                .devs
+                .iter()
+                .filter(|d| d.cat == Cat::Sensitive && d.view.device.point(asked).is_some())
+                .filter_map(|d| match d.view.state.get(read).map(|s| &s.value) {
+                    Some(Value::Text(t)) => states
+                        .iter()
+                        .find(|(k, _)| *k == tokens(t))
+                        .map(|(_, v)| (d, v.clone())),
+                    _ => None,
+                })
+                .collect();
+            return Self::say_lines(&lines);
+        }
+        let cat = lex
+            .noun(toks)
+            .filter(|c| matches!(c, Cat::Cover | Cat::Light | Cat::Clim | Cat::Speaker))?;
+        let devs: Vec<&Dev> = if cat == Cat::Speaker {
+            self.devs
+                .iter()
+                .filter(|d| d.cat == Cat::Speaker)
+                .filter(|d| room.as_deref().is_none_or(|r| d.room.as_deref() == Some(r)))
+                .collect()
+        } else {
+            let spec: BTreeSet<String> = toks
+                .iter()
+                .map(|t| lex.spec_alias.get(t).cloned().unwrap_or_else(|| t.clone()))
+                .filter(|t| self.is_spec(t) && !self.room_words.contains(t))
+                .collect();
+            let everywhere = has(toks, &lex.everywhere);
+            self.pick(
+                &Op::On,
+                Some(cat),
+                said_room.as_deref(),
+                &spec,
+                toks,
+                box_room,
+                everywhere,
+            )
+            .ok()?
+        };
+        let lines: Vec<(&Dev, String)> = devs
+            .into_iter()
+            .filter_map(|d| self.state_text(d).map(|t| (d, t)))
+            .collect();
+        Self::say_lines(&lines)
+    }
+
+    fn say_lines(lines: &[(&Dev, String)]) -> Option<Outcome> {
+        if lines.is_empty() {
+            return None;
+        }
+        let text = lines
+            .iter()
+            .map(|(d, state)| {
+                moli_i18n::tr!("assistant.quick.say_item", name = d.name, state = state)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        Some(Outcome::Say {
+            text,
+            devices: lines.iter().map(|(d, _)| d.id.clone()).collect(),
+        })
+    }
+
+    /// The mean of what the room's sensors read (its air conditioner only
+    /// when it has no sensor).
+    #[allow(clippy::cast_precision_loss)]
+    fn say_temperature(&self, room: Option<&str>) -> Option<Outcome> {
+        let room = room?;
+        let here = |clim: bool| -> Vec<f64> {
+            self.sensors
+                .iter()
+                .filter(|s| s.room == room && s.clim == clim)
+                .map(|s| s.value)
+                .collect()
+        };
+        let mut values = here(false);
+        if values.is_empty() {
+            values = here(true);
+        }
+        if values.is_empty() {
+            return None;
+        }
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        Some(Outcome::Say {
+            text: moli_i18n::tr!(
+                "assistant.quick.say_temperature",
+                room = room,
+                value = number_text(mean)
+            ),
+            devices: Vec::new(),
+        })
+    }
+
+    fn say_whats_on(&self) -> Outcome {
+        let on: Vec<(&Dev, f64)> = self
+            .devs
+            .iter()
+            .filter(|d| d.cat == Cat::Light)
+            .filter_map(|d| light_percent(d).filter(|p| *p > 0.0).map(|p| (d, p)))
+            .collect();
+        if on.is_empty() {
+            return Outcome::Say {
+                text: moli_i18n::tr!("assistant.quick.say_nothing_on"),
+                devices: Vec::new(),
+            };
+        }
+        let list = on
+            .iter()
+            .map(|(d, p)| format!("{} ({} %)", d.name, number_text(*p)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Outcome::Say {
+            text: moli_i18n::tr!("assistant.quick.say_whats_on", list = list),
+            devices: on.iter().map(|(d, _)| d.id.clone()).collect(),
+        }
+    }
+
+    /// How one device is, in a word: `None` when its state is not known.
+    #[allow(clippy::unused_self)]
+    fn state_text(&self, d: &Dev<'_>) -> Option<String> {
+        let t = |key: &str| moli_i18n::tr(key);
+        match d.cat {
+            Cat::Cover => {
+                let p = d.number("percent_control")?;
+                Some(if p >= 99.5 {
+                    t("assistant.quick.state_open")
+                } else if p <= 0.5 {
+                    t("assistant.quick.state_closed")
+                } else {
+                    moli_i18n::tr!("assistant.quick.state_open_part", percent = number_text(p))
+                })
+            }
+            Cat::Light => {
+                let p = light_percent(d)?;
+                Some(if p <= 0.0 {
+                    t("assistant.quick.state_light_off")
+                } else if p >= 99.0 {
+                    t("assistant.quick.state_light_on")
+                } else {
+                    moli_i18n::tr!(
+                        "assistant.quick.state_light_level",
+                        percent = number_text(p)
+                    )
+                })
+            }
+            Cat::Clim => match d.view.state.get("on").map(|s| &s.value) {
+                Some(Value::Bool(false)) => Some(t("assistant.quick.state_light_off")),
+                Some(Value::Bool(true)) => {
+                    let mode = match d.view.state.get("mode").map(|s| &s.value) {
+                        Some(Value::Text(m)) => Some(m.to_string()),
+                        _ => None,
+                    };
+                    match (mode, d.number("target_temperature")) {
+                        (Some(mode), Some(target)) => Some(moli_i18n::tr!(
+                            "assistant.quick.state_clim_on",
+                            mode = mode,
+                            target = number_text(target)
+                        )),
+                        _ => Some(t("assistant.quick.state_light_on")),
+                    }
+                }
+                _ => None,
+            },
+            Cat::Speaker => match d.view.state.get("playing").map(|s| &s.value) {
+                Some(Value::Bool(true)) => Some(t("assistant.quick.state_playing")),
+                Some(Value::Bool(false)) => Some(t("assistant.quick.state_idle")),
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -857,6 +1141,19 @@ impl Catalog<'_> {
                 if let Some((best, word)) = scored.first()
                     && scored.get(1).is_none_or(|(second, _)| second < best)
                 {
+                    t.clone_from(word);
+                } else if scored.is_empty()
+                    && let Some(word) = self
+                        .vocab
+                        .iter()
+                        .filter(|w| {
+                            w.chars().count() >= 5
+                                && t.ends_with(w.as_str())
+                                && t.chars().count() - w.chars().count() <= 3
+                        })
+                        .max_by_key(|w| w.len())
+                {
+                    // « bévitrée » for « baie vitrée »: it ends like a word we know.
                     t.clone_from(word);
                 }
             }
@@ -1443,6 +1740,30 @@ impl Catalog<'_> {
     }
 }
 
+/// A light's level in percent (0 when it is off); `None` when unknown.
+fn light_percent(d: &Dev<'_>) -> Option<f64> {
+    if let Some((level, _)) = d.dimmer() {
+        let (_, hi) = d.range(&level);
+        return d.number(&level).map(|v| v * 100.0 / hi.unwrap_or(99.0));
+    }
+    match d.view.state.get("on").map(|s| &s.value) {
+        Some(Value::Bool(false)) => Some(0.0),
+        Some(Value::Bool(true)) => Some(d.number("brightness").unwrap_or(100.0)),
+        _ => None,
+    }
+}
+
+/// « 21,5 » → `21.5`, « 22,0 » → `22` (the voice says it right).
+#[allow(clippy::cast_possible_truncation)]
+fn number_text(v: f64) -> String {
+    let r = (v * 10.0).round() / 10.0;
+    if (r - r.round()).abs() < 0.05 {
+        format!("{}", r.round() as i64)
+    } else {
+        format!("{r:.1}")
+    }
+}
+
 fn has_prefix(toks: &[String], list: &[Phrase]) -> bool {
     list.iter().any(|p| toks.starts_with(p))
 }
@@ -1544,6 +1865,10 @@ mod tests {
     }
 
     fn blind(id: &str, name: &str, room: &str) -> DeviceView {
+        blind_at(id, name, room, 100.0)
+    }
+
+    fn blind_at(id: &str, name: &str, room: &str, percent: f64) -> DeviceView {
         view(
             id,
             name,
@@ -1553,8 +1878,36 @@ mod tests {
                 point("control", choice(&["open", "stop", "close"])),
                 point("percent_control", numeric(0.0, 100.0)),
             ],
-            &[],
+            &[("percent_control", Value::Float(percent))],
         )
+    }
+
+    /// A temperature read in a room, by a sensor.
+    fn sensor(id: &str, name: &str, room: &str, value: f64) -> DeviceView {
+        let mut v = view(
+            id,
+            name,
+            Some(room),
+            None,
+            Vec::new(),
+            &[("temperature", Value::Float(value))],
+        );
+        Arc::make_mut(&mut v.device).points.push(PointSpec {
+            key: "temperature".into(),
+            label: "temperature".into(),
+            kind: PointKind::Numeric {
+                min: None,
+                max: None,
+                step: None,
+            },
+            access: Access {
+                read: true,
+                write: false,
+            },
+            unit: None,
+            semantic: Semantic::Temperature,
+        });
+        v
     }
 
     fn group(id: &str, name: &str) -> DeviceView {
@@ -1591,10 +1944,12 @@ mod tests {
     /// A made-up house: nothing here is anyone's.
     fn house() -> Vec<DeviceView> {
         vec![
-            blind("z:baie", "Store baie", "Salon"),
-            blind("z:fenetre", "Store fenêtre", "Salon"),
+            blind("z:baie", "Store baie vitrée", "Salon"),
+            blind_at("z:fenetre", "Store fenêtre", "Salon", 0.0),
             blind("z:cuisine", "Store Cuisine", "Cuisine"),
             blind("z:lea", "Store Chambre Léa", "Chambre Léa"),
+            sensor("s:salon", "Sonde Séjour", "Salon", 21.8),
+            sensor("s:lea", "Sonde Chambre Léa", "Chambre Léa", 21.5),
             group("g:tous", "Général"),
             group("g:vie", "Pièce de vie"),
             view(
@@ -1617,7 +1972,10 @@ mod tests {
                     point("on", PointKind::Binary),
                     point("brightness", numeric(1.0, 100.0)),
                 ],
-                &[("brightness", Value::Float(80.0))],
+                &[
+                    ("brightness", Value::Float(80.0)),
+                    ("on", Value::Bool(true)),
+                ],
             ),
             view(
                 "clim:cuisine",
@@ -1629,7 +1987,11 @@ mod tests {
                     point("mode", choice(&["auto", "froid", "chaud"])),
                     point("target_temperature", numeric(16.0, 32.0)),
                 ],
-                &[],
+                &[
+                    ("on", Value::Bool(true)),
+                    ("mode", Value::Text("chaud".into())),
+                    ("target_temperature", Value::Float(21.0)),
+                ],
             ),
             speaker("sonos:salon", "Salon", None, true),
             speaker("sonos:move", "Move", Some("Salon"), false),
@@ -1654,8 +2016,11 @@ mod tests {
                 "Porte de garage",
                 None,
                 None,
-                vec![point("target", choice(&["open", "closed"]))],
-                &[],
+                vec![
+                    point("target", choice(&["open", "closed"])),
+                    point("state", PointKind::Text),
+                ],
+                &[("state", Value::Text("closed".into()))],
             ),
             view(
                 "alarme:maison",
@@ -1707,6 +2072,7 @@ mod tests {
                 Ok(list)
             }
             Outcome::End => Err("end".into()),
+            Outcome::Say { .. } => Err("say".into()),
             Outcome::Pass(why) => Err(why.into()),
         }
     }
@@ -1892,11 +2258,7 @@ mod tests {
         passes("Ouvre la porte de la cuisine", None, "sensitive");
         passes("Ouvre le garage", None, "sensitive");
         passes("Désarme l'alarme", None, "sensitive");
-        passes(
-            "Est-ce que les stores du salon sont fermés ?",
-            None,
-            "question",
-        );
+        passes("Quel temps fait-il demain ?", None, "question");
         passes("Il fait chaud ici", None, "nothing");
         passes("Allume la lumière du grenier", None, "no-room");
         passes("Allume la lumière du garage", None, "sensitive");
@@ -1930,6 +2292,12 @@ mod tests {
             None,
             &["z:cuisine/control=close"],
         );
+        // A word glued to the one before it: « bévitrée » for « baie vitrée ».
+        ok(
+            "Ferme le store de la bévitrée",
+            None,
+            &["z:baie/control=close"],
+        );
     }
 
     /// A device in `quick_skip` is never ordered, by its room or by its name.
@@ -1946,6 +2314,62 @@ mod tests {
         );
         // Without the list, it is ordered.
         assert!(said_with(json!({}), "Éteins la lumière du salon", None).is_ok());
+    }
+
+    /// What a question about the house is answered, from the inventory alone.
+    #[test]
+    fn questions_about_the_state_are_answered() {
+        let heard = |text: &str, room: Option<&str>| {
+            let config = Config::default();
+            match interpret(text, room, &house(), &layout(), &config) {
+                Outcome::Say { text, .. } => Ok(text),
+                Outcome::Pass(why) => Err(why),
+                other => panic!("{other:?}"),
+            }
+        };
+        let said = |s: &str| Ok(s.to_owned());
+        assert_eq!(
+            heard("Quelle est la température dans la chambre de Léa ?", None),
+            said("Chambre Léa : 21.5 °C.")
+        );
+        assert_eq!(
+            heard("Il fait combien dans le salon ?", None),
+            said("Salon : 21.8 °C.")
+        );
+        assert_eq!(
+            heard("Quelle est la température ?", Some("Salon")),
+            said("Salon : 21.8 °C.")
+        );
+        assert_eq!(heard("Quelle est la température ?", None), Err("question"));
+        assert_eq!(
+            heard("Est-ce que les stores du salon sont fermés ?", None),
+            said("Store baie vitrée : ouvert. Store fenêtre : fermé.")
+        );
+        assert_eq!(
+            heard("La lumière du salon est allumée ?", None),
+            said("Lumière salon : éteinte.")
+        );
+        assert_eq!(
+            heard("La clim de la cuisine est allumée ?", None),
+            said("Clim Cuisine : allumée, chaud, 21 °C.")
+        );
+        assert_eq!(
+            heard("Est-ce que la porte de garage est ouverte ?", None),
+            said("Porte de garage : fermée.")
+        );
+        assert_eq!(
+            heard("Qu'est-ce qui est allumé ?", None),
+            said("Allumé : Bandeau (80 %).")
+        );
+        assert_eq!(
+            heard("Est-ce que la musique joue ?", Some("Salon")),
+            said("Salon : joue. Move : à l'arrêt.")
+        );
+        // A question needs a room or a device it can name.
+        assert_eq!(
+            heard("Est-ce que les stores sont fermés ?", None),
+            Err("question")
+        );
     }
 
     #[test]

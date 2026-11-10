@@ -974,6 +974,18 @@ impl Assistant {
             &self.0.config,
         ) {
             quick::Outcome::Pass(why) => return Quick::Pass(why),
+            quick::Outcome::Say { text, devices } => {
+                // A question: the answer, and the devices it is about on screen.
+                let mut reply = Reply::quick(Vec::new());
+                reply.reply = text;
+                reply.tools = vec!["quick-say".into()];
+                for d in devices.iter().take(MAX_CARDS) {
+                    if !layout.hides(d.as_str()) {
+                        reply.cards.push(json!({ "kind": "device", "id": d }));
+                    }
+                }
+                return Quick::Done(reply);
+            }
             quick::Outcome::End => {
                 return Quick::Done(Reply {
                     end: true,

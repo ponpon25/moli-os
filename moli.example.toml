@@ -88,6 +88,8 @@ base_topic = "zigbee2mqtt"
 
 # Moli, l'assistant (API compatible OpenAI). Clé : <source> | moli-os secrets set assistant api_key
 # [assistant]
+# quick = true                       # les ordres de tous les jours sans modèle (ferme les stores du salon…), sous la garde
+# room_aliases = { "séjour" = "Salon" }   # d'autres façons de dire une pièce, pour quick
 # model = "gpt-4.1-mini"
 # transcribe_model = "gpt-4o-mini-transcribe"   # écoute cloud ; "" = Whisper local seulement
 # speech_model = "gpt-4o-mini-tts"              # voix cloud ; "" = Piper local seulement

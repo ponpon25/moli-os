@@ -22,6 +22,7 @@ mod llm;
 mod outside;
 mod pricing;
 mod provider;
+mod quick;
 mod recap;
 mod recordings;
 mod satellite;
@@ -105,6 +106,14 @@ pub struct Config {
     pub latitude: Option<f64>,
     #[serde(default)]
     pub longitude: Option<f64>,
+    /// The everyday orders (« ferme les stores du salon ») understood without
+    /// the model, under the same guard; anything unsure goes to the model.
+    #[serde(default)]
+    pub quick: bool,
+    /// Other ways to say a room to the quick path (« séjour » = « Salon »),
+    /// for the words a house uses and its devices don't.
+    #[serde(default)]
+    pub room_aliases: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -128,6 +137,8 @@ impl Default for Config {
             door_speakers: Vec::new(),
             latitude: None,
             longitude: None,
+            quick: false,
+            room_aliases: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -270,6 +281,13 @@ pub struct Turn {
     /// The question was spoken and the answer will be heard.
     #[serde(default)]
     pub spoken: bool,
+    /// The room of the microphone or screen the question comes from, when it
+    /// is known: « ferme les stores » then means that room's.
+    #[serde(default)]
+    pub room: Option<String>,
+    /// Understand and say what would be done, without doing it (tests).
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -307,6 +325,33 @@ pub struct Reply {
     /// thinking), for the history.
     #[serde(skip)]
     pub draft_cost: f64,
+}
+
+impl Reply {
+    /// A reply of the quick path: no model, so no cost and no cards of its own.
+    fn quick(actions: Vec<Action>) -> Self {
+        Self {
+            reply: String::new(),
+            cards: Vec::new(),
+            actions,
+            model: "quick".into(),
+            usage: Usage::default(),
+            end: false,
+            tools: vec!["quick".into()],
+            search_cost: 0.0,
+            draft_cost: 0.0,
+        }
+    }
+}
+
+/// What the quick path made of a question.
+enum Quick {
+    /// Not switched on, or nothing to read.
+    Off,
+    /// Understood and done (or said).
+    Done(Reply),
+    /// Not sure: the model answers, and the reason goes to the history.
+    Pass(&'static str),
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -454,6 +499,7 @@ impl Assistant {
             "listen": ready && (cloud_listen || local_listen),
             "speak": ready && (cloud_voice || local_voice),
             "voices": { "cloud": cloud_voice, "local": local_voice },
+            "quick": c.quick,
         })
     }
 
@@ -629,7 +675,23 @@ impl Assistant {
             .map(|m| m.content.clone());
         let surface = turn.surface.clone().unwrap_or_default();
         let spoken = turn.spoken;
-        let result = self.converse(turn).await;
+        let result = match self.quick(&turn).await {
+            Quick::Done(reply) => Ok(reply),
+            Quick::Off => self.converse(turn).await,
+            Quick::Pass(why) => match self.converse(turn).await {
+                Ok(mut reply) => {
+                    reply.tools.push(format!("quick-pass:{why}"));
+                    Ok(reply)
+                }
+                // No model to ask (no key): say so in a word, not an error.
+                Err(AssistantError::NotConfigured(_)) => Ok(Reply {
+                    reply: moli_i18n::tr!("assistant.reply.unknown"),
+                    tools: vec![format!("quick-pass:{why}")],
+                    ..Reply::quick(Vec::new())
+                }),
+                Err(e) => Err(e),
+            },
+        };
         if let Some(question) = question {
             let heard = self.take_heard();
             let active = self.active();
@@ -873,6 +935,116 @@ impl Assistant {
             }
         }
         sent
+    }
+
+    /// The everyday orders, without the model (see `quick.rs`).
+    async fn quick(&self, turn: &Turn) -> Quick {
+        if !self.0.config.quick {
+            return Quick::Off;
+        }
+        let Some(question) = turn.messages.last().filter(|m| m.role == Role::User) else {
+            return Quick::Off;
+        };
+        let layout = Layout::load(self.0.layout_path.as_deref()).await;
+        let devices = self.0.hub.snapshot().devices;
+        let orders = match quick::interpret(
+            &question.content,
+            turn.room.as_deref(),
+            &devices,
+            &layout,
+            &self.0.config.room_aliases,
+        ) {
+            quick::Outcome::Pass(why) => return Quick::Pass(why),
+            quick::Outcome::End => {
+                return Quick::Done(Reply {
+                    end: true,
+                    ..Reply::quick(Vec::new())
+                });
+            }
+            quick::Outcome::Run(orders) => orders,
+        };
+        let mut actions = Vec::with_capacity(orders.len());
+        for o in &orders {
+            actions.push(if turn.dry_run {
+                Action {
+                    point: o.point.clone(),
+                    device: o.device.clone(),
+                    value: o.value.to_json(),
+                    status: "dry",
+                    request: None,
+                    reason: None,
+                    error: None,
+                }
+            } else {
+                self.order(o).await
+            });
+        }
+        let mut reply = Reply::quick(actions);
+        reply.reply = if turn.dry_run {
+            let list: Vec<String> = reply
+                .actions
+                .iter()
+                .map(|a| format!("{} → {}", a.device, a.value))
+                .collect();
+            moli_i18n::tr!("assistant.quick.dry", orders = list.join(" ; "))
+        } else if reply.actions.iter().any(|a| a.status == "held") {
+            moli_i18n::tr!("assistant.quick.held")
+        } else if reply.actions.iter().all(|a| a.status == "failed") {
+            moli_i18n::tr!("assistant.quick.failed")
+        } else {
+            moli_i18n::tr!("assistant.reply.done")
+        };
+        // What was acted on shows up on the screen.
+        for action in &reply.actions {
+            if let Some((device, _)) = action.point.split() {
+                let shown = reply.cards.iter().any(|c| c["id"] == device.as_str());
+                if !shown && !layout.hides(device.as_str()) && reply.cards.len() < MAX_CARDS {
+                    reply.cards.push(json!({ "kind": "device", "id": device }));
+                }
+            }
+        }
+        tracing::info!(
+            actions = reply.actions.len(),
+            dry = turn.dry_run,
+            "assistant quick turn"
+        );
+        Quick::Done(reply)
+    }
+
+    /// One order of the quick path, under the guard like any agent's.
+    async fn order(&self, o: &quick::Order) -> Action {
+        let result = self
+            .0
+            .hub
+            .command(
+                &o.point,
+                o.value.clone(),
+                Origin::Assistant,
+                Some("Moli".into()),
+            )
+            .await;
+        let mut action = Action {
+            point: o.point.clone(),
+            device: o.device.clone(),
+            value: o.value.to_json(),
+            status: "done",
+            request: None,
+            reason: None,
+            error: None,
+        };
+        match result {
+            Ok(()) => {}
+            Err(CommandError::NeedsApproval { id, reason }) => {
+                action.status = "held";
+                action.request = Some(id);
+                action.reason = Some(reason);
+            }
+            Err(e) => {
+                action.status = "failed";
+                action.error = Some(e.to_string());
+            }
+        }
+        action
     }
 
     async fn converse(&self, turn: Turn) -> Result<Reply, AssistantError> {
@@ -2629,6 +2801,102 @@ mod tests {
         )
         .await;
         assert!(moli.turn(spoken("Allume le rien")).await.is_err());
+    }
+
+    /// A light the quick path can read (on + brightness), off.
+    async fn quick_moli(config: serde_json::Value) -> (Assistant, moli_runtime::Hub) {
+        let hub = hub_with(Fake(vec![(
+            "Lumière",
+            vec![
+                point("on", moli_core::Kind::Binary, true),
+                point(
+                    "brightness",
+                    moli_core::Kind::Numeric {
+                        min: Some(1.0),
+                        max: Some(100.0),
+                        step: None,
+                    },
+                    true,
+                ),
+            ],
+            vec![("on", Value::Bool(false))],
+        )]))
+        .await;
+        let config: Config = serde_json::from_value(config).unwrap();
+        (
+            Assistant::new(hub.clone(), None, None, None, config).unwrap(),
+            hub,
+        )
+    }
+
+    fn light_is_on(hub: &moli_runtime::Hub) -> bool {
+        let devices = hub.snapshot().devices;
+        let light = devices
+            .iter()
+            .find(|d| d.device.native_name.as_ref() == "Lumière")
+            .unwrap();
+        light.state.get("on").map(|s| s.value.clone()) == Some(Value::Bool(true))
+    }
+
+    /// The everyday orders need no model: this one has no key and no provider.
+    #[tokio::test]
+    async fn a_quick_order_is_carried_out_without_the_model() {
+        let (moli, hub) = quick_moli(json!({ "quick": true })).await;
+        let reply = moli.turn(spoken("Allume la lumière")).await.unwrap();
+        assert_eq!(reply.model, "quick");
+        assert_eq!(reply.usage.steps, 0);
+        assert_eq!(reply.actions.len(), 1);
+        assert_eq!(reply.actions[0].status, "done");
+        assert_eq!(reply.reply, "Voilà.");
+        assert!(light_is_on(&hub));
+        // The screen shows what was acted on.
+        assert_eq!(reply.cards.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_says_what_would_be_done_and_does_nothing() {
+        let (moli, hub) = quick_moli(json!({ "quick": true })).await;
+        let turn: Turn = serde_json::from_value(json!({
+            "dry_run": true,
+            "messages": [{ "role": "user", "content": "Allume la lumière" }],
+        }))
+        .unwrap();
+        let reply = moli.turn(turn).await.unwrap();
+        assert_eq!(reply.actions[0].status, "dry");
+        assert!(reply.reply.starts_with("Simulation"), "{}", reply.reply);
+        assert!(!light_is_on(&hub));
+    }
+
+    #[tokio::test]
+    async fn the_quick_path_is_off_unless_asked_for() {
+        let (moli, hub) = quick_moli(json!({})).await;
+        // No key and no quick path: the model cannot be asked.
+        assert!(moli.turn(spoken("Allume la lumière")).await.is_err());
+        assert!(!light_is_on(&hub));
+    }
+
+    /// Not sure → nothing is done; with no model to ask, one word says so.
+    #[tokio::test]
+    async fn what_the_quick_path_cannot_read_is_passed_on() {
+        let (moli, hub) = quick_moli(json!({ "quick": true })).await;
+        for text in [
+            "Éteins la lumière sauf celle-ci",
+            "Allume la lumière dans dix minutes",
+            "Quelle heure est-il ?",
+        ] {
+            let reply = moli.turn(spoken(text)).await.unwrap();
+            assert_eq!(
+                reply.reply,
+                moli_i18n::tr!("assistant.reply.unknown"),
+                "{text}"
+            );
+            assert!(reply.actions.is_empty(), "{text}");
+            assert!(
+                reply.tools.iter().any(|t| t.starts_with("quick-pass:")),
+                "{text}"
+            );
+        }
+        assert!(!light_is_on(&hub));
     }
 
     /// « Bon, on arrête là » or any other words: the conversation ends,

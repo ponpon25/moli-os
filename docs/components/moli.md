@@ -126,6 +126,33 @@ Le nœud « Moli écrit » : un texte chaleureux de 80 mots maxi à partir de l'
 (`{{texte}}` pour l'étape suivante). Des mots, jamais une décision. Un échec arrête la branche
 (aucun message vide n'est envoyé).
 
+## Ordres rapides (sans modèle)
+
+Les ordres de tous les jours (« ferme les stores du salon », « mets la clim à 22 », « pause », « mets TF1 »)
+n'ont pas besoin d'un modèle : `quick = true` dans `[assistant]` les fait comprendre par Moli lui-même
+(`crates/moli-assistant/src/quick.rs`), en une fraction de seconde, sans clé, sans réseau, et **toujours sous la
+garde** (`Origin::Assistant`, pièces protégées et heures calmes comprises). Tout ce dont Moli n'est pas sûr passe au
+modèle (ou, sans modèle, « je n'ai pas su répondre ») et **rien n'est fait**.
+
+- **Ce qu'il lit** : l'inventaire (noms, pièces, ce que chaque valeur sait faire), les alias de pièces de `home.json`
+  (`rooms[].aliases`), `[assistant] room_aliases = { "séjour" = "Salon" }` pour les mots de la maison que ses appareils n'emploient pas, et des formes dérivées (« chambre de Léa », « chez Léa »).
+  Aucun nom d'appareil ni de pièce n'est écrit dans le code.
+- **Ce qu'il comprend** : allumer, éteindre, ouvrir, fermer, arrêter, à moitié, à N %, plus/moins fort ou clair ; la
+  consigne d'une clim (« à 22 », « à vingt et un degrés », « en chaud ») ; la musique (pause, reprendre, suivante,
+  coupe le son, « mets du jazz », volume) ; les chaînes et applications de la télé ; plusieurs ordres (« … et … ») ;
+  les nombres dits en mots ; les mots mal entendus (« sallon ») quand une seule correction est possible.
+- **Ce qu'il refuse toujours** (le modèle ou l'écran prend le relais) : les questions, les négations et exceptions
+  (« sauf… », « ne… pas »), les ordres différés ou conditionnels (« dans dix minutes », « ce soir », « si… »),
+  l'alarme, la porte de garage et tout ce qui ressemble à une porte, un appareil inconnu ou ambigu, une valeur hors
+  bornes, une pièce non dite quand plusieurs sont possibles.
+- **Le contexte** : `room` dans la requête (la pièce du micro ou de l'écran) complète « ferme les stores ».
+- **Essai sans risque** : `dry_run: true` dit ce qui serait fait (`actions[].status = "dry"`) sans rien envoyer.
+- **Journal** : `tools` de l'historique vaut `quick` (fait) ou `quick-pass:<raison>` (passé au modèle) : question,
+  sensitive, negation, deferred, no-device, no-room, ambiguous, bad-value, unsupported, nothing…
+  C'est là qu'on voit ce qu'il faut apprendre à Moli.
+- **Langues** : les mots (verbes, noms, expressions, nombres) sont dans `locales/<langue>/assistant.json`
+  (`assistant.quick.*`). Le français est complet ; l'anglais est un point de départ.
+
 ## Voix (conversation, 7 oct.)
 
 Un appui sur « Parler avec Moli » (bulle ou page Moli), puis on discute : Moli écoute, répond

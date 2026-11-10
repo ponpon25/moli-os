@@ -331,8 +331,8 @@ Légende « Accès » : **libre** = aucune condition au-delà de la garde `Host`
 
 | Méthode | Chemin | Accès | Entrée | Réponse | Erreurs |
 |---|---|---|---|---|---|
-| GET | `/api/assistant` | libre | aucune | `{ready, model, listen}` ; non configuré : `{ready:false, listen:false, configured:false}` | aucune |
-| POST | `/api/assistant` | libre ; Moli agit en origine `assistant` | `Turn` : `{messages:[{role:"user"\|"assistant", content}], surface?: "bubble"\|"page"}`, dernier message = utilisateur | `Reply` : `{reply, cards:[…], actions:[{point, device, value, status:"done"\|"held"\|"failed", request?, reason?, error?}], model, usage:{prompt_tokens, completion_tokens, steps}}` | `400` ; `429` occupé (2 tours simultanés, 60 tours / 10 min tous clients confondus) ; `502` fournisseur du modèle ; `503` non configuré / pas de clé |
+| GET | `/api/assistant` | libre | aucune | `{ready, model, listen, quick}` ; non configuré : `{ready:false, listen:false, configured:false}` | aucune |
+| POST | `/api/assistant` | libre ; Moli agit en origine `assistant` | `Turn` : `{messages:[{role:"user"\|"assistant", content}], surface?: "bubble"\|"page", spoken?, room?, dry_run?}` (`room` : pièce du micro ; `dry_run` : dit ce qui serait fait, sans rien envoyer ; voir « Ordres rapides » dans moli.md), dernier message = utilisateur | `Reply` : `{reply, cards:[…], actions:[{point, device, value, status:"done"\|"held"\|"failed", request?, reason?, error?}], model, usage:{prompt_tokens, completion_tokens, steps}}` | `400` ; `429` occupé (2 tours simultanés, 60 tours / 10 min tous clients confondus) ; `502` fournisseur du modèle ; `503` non configuré / pas de clé |
 | POST | `/api/assistant/listen` | libre | corps = audio brut, `content-type: audio/*`, ≥ 200 octets | `{text}` (transcription) | `400` pas de l'audio / trop court ; `429` ; `502` ; `503` voix désactivée |
 | PUT | `/api/assistant/recording` | **humain** | `{days}` (7 au plus, 0 = arrêt) | `{recording_until}` : ce qu'entendent les boîtiers est gardé jusque-là | `403` ; `503` |
 | GET | `/api/assistant/recordings/{name}` | **humain** | aucune | le WAV d'un boîtier (gardé 7 jours) | `403` ; `404` |

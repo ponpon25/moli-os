@@ -675,9 +675,16 @@ impl Assistant {
             .map(|m| m.content.clone());
         let surface = turn.surface.clone().unwrap_or_default();
         let spoken = turn.spoken;
+        let dry_run = turn.dry_run;
         let result = match self.quick(&turn).await {
             Quick::Done(reply) => Ok(reply),
             Quick::Off => self.converse(turn).await,
+            // A simulation never asks the model: it could act.
+            Quick::Pass(why) if dry_run => Ok(Reply {
+                reply: moli_i18n::tr!("assistant.reply.unknown"),
+                tools: vec![format!("quick-pass:{why}")],
+                ..Reply::quick(Vec::new())
+            }),
             Quick::Pass(why) => match self.converse(turn).await {
                 Ok(mut reply) => {
                     reply.tools.push(format!("quick-pass:{why}"));
@@ -2864,6 +2871,26 @@ mod tests {
         let reply = moli.turn(turn).await.unwrap();
         assert_eq!(reply.actions[0].status, "dry");
         assert!(reply.reply.starts_with("Simulation"), "{}", reply.reply);
+        assert!(!light_is_on(&hub));
+    }
+
+    /// A simulation never reaches the model (here, nothing even listens).
+    #[tokio::test]
+    async fn a_dry_run_never_asks_the_model() {
+        let (moli, hub) =
+            quick_moli(json!({ "quick": true, "base_url": "http://127.0.0.1:1/v1" })).await;
+        let ask = |dry_run: bool| -> Turn {
+            serde_json::from_value(json!({
+                "dry_run": dry_run,
+                "messages": [{ "role": "user", "content": "Éteins tout sauf la lumière" }],
+            }))
+            .unwrap()
+        };
+        let reply = moli.turn(ask(true)).await.unwrap();
+        assert!(reply.actions.is_empty());
+        assert_eq!(reply.tools, ["quick-pass:negation"]);
+        // For real, the same sentence does go to the model (which is down).
+        assert!(moli.turn(ask(false)).await.is_err());
         assert!(!light_is_on(&hub));
     }
 

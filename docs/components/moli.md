@@ -146,7 +146,8 @@ modèle (ou, sans modèle, « je n'ai pas su répondre ») et **rien n'est fait*
   l'alarme, la porte de garage et tout ce qui ressemble à une porte, un appareil inconnu ou ambigu, une valeur hors
   bornes, une pièce non dite quand plusieurs sont possibles.
 - **Le contexte** : `room` dans la requête (la pièce du micro ou de l'écran) complète « ferme les stores ».
-- **Essai sans risque** : `dry_run: true` dit ce qui serait fait (`actions[].status = "dry"`) sans rien envoyer.
+- **Essai sans risque** : `dry_run: true` dit ce qui serait fait (`actions[].status = "dry"`) sans rien envoyer, et ne
+  consulte jamais le modèle (il pourrait agir).
 - **Journal** : `tools` de l'historique vaut `quick` (fait) ou `quick-pass:<raison>` (passé au modèle) : question,
   sensitive, negation, deferred, no-device, no-room, ambiguous, bad-value, unsupported, nothing…
   C'est là qu'on voit ce qu'il faut apprendre à Moli.

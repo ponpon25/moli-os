@@ -145,6 +145,10 @@ modèle (ou, sans modèle, « je n'ai pas su répondre ») et **rien n'est fait*
   (« sauf… », « ne… pas »), les ordres différés ou conditionnels (« dans dix minutes », « ce soir », « si… »),
   l'alarme, la porte de garage et tout ce qui ressemble à une porte, un appareil inconnu ou ambigu, une valeur hors
   bornes, une pièce non dite quand plusieurs sont possibles.
+- **Tout à la maison** : `quick_only = true` ne consulte jamais le modèle (« je n'ai pas su répondre »). Pour que ni audio
+  ni texte ne parte vers un fournisseur, vider aussi `transcribe_model` et `speech_model` : une clé expirée n'empêche pas
+  l'envoi, seulement la réponse. L'écoute passe alors par Whisper (`local_listen`, sur n'importe quelle machine du
+  réseau) et la voix par Piper (`local_speech`).
 - **Le contexte** : `room` dans la requête (la pièce du micro ou de l'écran) complète « ferme les stores ».
 - **Essai sans risque** : `dry_run: true` dit ce qui serait fait (`actions[].status = "dry"`) sans rien envoyer, et ne
   consulte jamais le modèle (il pourrait agir).

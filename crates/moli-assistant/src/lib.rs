@@ -110,6 +110,10 @@ pub struct Config {
     /// the model, under the same guard; anything unsure goes to the model.
     #[serde(default)]
     pub quick: bool,
+    /// With `quick`, a sentence it cannot read is never sent to a model:
+    /// « je n'ai pas su répondre ». Nothing leaves the house.
+    #[serde(default)]
+    pub quick_only: bool,
     /// Other ways to say a room to the quick path (« séjour » = « Salon »),
     /// for the words a house uses and its devices don't.
     #[serde(default)]
@@ -138,6 +142,7 @@ impl Default for Config {
             latitude: None,
             longitude: None,
             quick: false,
+            quick_only: false,
             room_aliases: std::collections::BTreeMap::new(),
         }
     }
@@ -676,11 +681,13 @@ impl Assistant {
         let surface = turn.surface.clone().unwrap_or_default();
         let spoken = turn.spoken;
         let dry_run = turn.dry_run;
+        let quick_only = self.0.config.quick && self.0.config.quick_only;
         let result = match self.quick(&turn).await {
             Quick::Done(reply) => Ok(reply),
             Quick::Off => self.converse(turn).await,
-            // A simulation never asks the model: it could act.
-            Quick::Pass(why) if dry_run => Ok(Reply {
+            // A simulation never asks the model (it could act), nor does a
+            // house that keeps everything at home.
+            Quick::Pass(why) if dry_run || quick_only => Ok(Reply {
                 reply: moli_i18n::tr!("assistant.reply.unknown"),
                 tools: vec![format!("quick-pass:{why}")],
                 ..Reply::quick(Vec::new())
@@ -2892,6 +2899,21 @@ mod tests {
         // For real, the same sentence does go to the model (which is down).
         assert!(moli.turn(ask(false)).await.is_err());
         assert!(!light_is_on(&hub));
+    }
+
+    /// `quick_only`: nothing is asked of a model, even a reachable one.
+    #[tokio::test]
+    async fn quick_only_keeps_every_sentence_at_home() {
+        let (url, task) = crate::llm::tests::fake_http(200, b"{}").await;
+        let (moli, hub) =
+            quick_moli(json!({ "quick": true, "quick_only": true, "base_url": url })).await;
+        let reply = moli.turn(spoken("Quelle heure est-il ?")).await.unwrap();
+        assert_eq!(reply.reply, moli_i18n::tr!("assistant.reply.unknown"));
+        assert_eq!(reply.tools, ["quick-pass:question"]);
+        assert!(!light_is_on(&hub));
+        // The provider was never called.
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
     }
 
     #[tokio::test]

@@ -995,13 +995,16 @@ mod tests {
 
     #[test]
     fn a_camera_served_by_moli_itself_is_not_read_back() {
-        let body = r#"[{"id":"a1","name":"Caméra","type":"G4","state":"CONNECTED","mac":"E063DA3FB342"},
-            {"id":"b2","name":"Moli Sonnette","type":"Sonnette","state":"CONNECTED","mac":"000C29BA18CC"}]"#;
-        let own = vec![plain_mac("00:0c:29:ba:18:cc\n")];
+        let body = r#"[{"id":"a1","name":"Caméra","type":"G4","state":"CONNECTED","mac":"A1B2C3D4E5F6"},
+            {"id":"b2","name":"Moli Sonnette","type":"Sonnette","state":"CONNECTED","mac":"AABBCCDDEEFF"}]"#;
+        let own = vec![plain_mac("aa:bb:cc:dd:ee:ff\n")];
         let cameras = not_ours(parse_cameras(body.as_bytes()).unwrap(), &own);
         assert_eq!(cameras.len(), 1);
         assert_eq!(cameras[0].id, "a1");
-        assert_eq!(not_ours(parse_cameras(body.as_bytes()).unwrap(), &[]).len(), 2);
+        assert_eq!(
+            not_ours(parse_cameras(body.as_bytes()).unwrap(), &[]).len(),
+            2
+        );
     }
 
     #[test]

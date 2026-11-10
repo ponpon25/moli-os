@@ -441,6 +441,14 @@ impl Dev<'_> {
         self.view.device.point(key).filter(|p| p.access.write)
     }
 
+    /// A speaker that is playing right now.
+    fn is_playing(&self) -> bool {
+        matches!(
+            self.view.state.get("playing").map(|s| &s.value),
+            Some(Value::Bool(true))
+        )
+    }
+
     fn enum_has(&self, key: &str, value: &str) -> bool {
         self.point(key).is_some_and(|p| {
             matches!(&p.kind, PointKind::Enum { values } if values.iter().any(|v| &**v == value))
@@ -1140,7 +1148,30 @@ impl Catalog<'_> {
         if cands.is_empty() {
             return Err("no-device");
         }
-        if cat == Some(Cat::Speaker) && cands.len() > 1 {
+        // « pause », « plus fort » with no room said: what is playing now.
+        if cat == Some(Cat::Speaker)
+            && cands.len() > 1
+            && room.is_none()
+            && matches!(
+                op,
+                Op::Pause
+                    | Op::Next
+                    | Op::Prev
+                    | Op::Mute
+                    | Op::Unmute
+                    | Op::Up
+                    | Op::Down
+                    | Op::Level(_)
+                    | Op::Off
+                    | Op::Stop
+            )
+        {
+            let playing: Vec<&Dev> = cands.iter().copied().filter(|d| d.is_playing()).collect();
+            if playing.len() == 1 {
+                cands = playing;
+            }
+        }
+        if cat == Some(Cat::Speaker) && cands.len() > 1 && room.is_some() {
             // The room's own speaker, named after it, over a portable one.
             let main: Vec<&Dev> = cands
                 .iter()
@@ -1528,7 +1559,7 @@ mod tests {
         )
     }
 
-    fn speaker(id: &str, name: &str, room: Option<&str>) -> DeviceView {
+    fn speaker(id: &str, name: &str, room: Option<&str>, playing: bool) -> DeviceView {
         view(
             id,
             name,
@@ -1541,7 +1572,10 @@ mod tests {
                 point("skip", choice(&["next", "previous"])),
                 point("play", PointKind::Text),
             ],
-            &[("volume", Value::Float(40.0))],
+            &[
+                ("volume", Value::Float(40.0)),
+                ("playing", Value::Bool(playing)),
+            ],
         )
     }
 
@@ -1588,8 +1622,8 @@ mod tests {
                 ],
                 &[],
             ),
-            speaker("sonos:salon", "Salon", None),
-            speaker("sonos:move", "Move", Some("Salon")),
+            speaker("sonos:salon", "Salon", None, true),
+            speaker("sonos:move", "Move", Some("Salon"), false),
             view(
                 "maison:tele",
                 "Télé",
@@ -1808,6 +1842,18 @@ mod tests {
             Some("Salon"),
             &["sonos:salon/skip=next"],
         );
+        // No room said: what is playing now.
+        ok("Pause", None, &["sonos:salon/playing=false"]);
+        ok("Baisse le son", None, &["sonos:salon/volume=30"]);
+        // Starting music needs a room: two speakers, none chosen.
+        passes("Mets de la musique", None, "ambiguous");
+        // What Whisper writes: « fermes », « coupe son ».
+        ok(
+            "Fermes les stores du salon",
+            None,
+            &["z:baie/control=close", "z:fenetre/control=close"],
+        );
+        ok("Coupe son", Some("Salon"), &["sonos:salon/mute=true"]);
         ok("Mets TF1", None, &["maison:tf1/on=true"]);
         ok("Allume la télé", None, &["maison:tele/on=true"]);
     }

@@ -218,7 +218,7 @@
   "assistant.quick.alarm_states": "disarmed=off|partial=partly on|total=on",
   "assistant.quick.say_temperature": "{room}: {value} °C.",
   "assistant.quick.say_item": "{name}: {state}.",
-  "assistant.quick.say_whats_on": "On: {list}.",
+  "assistant.quick.say_whats_on": "Lights on: {list}.",
   "assistant.quick.say_nothing_on": "Nothing is on.",
   "assistant.quick.state_open": "open",
   "assistant.quick.state_closed": "closed",
@@ -228,5 +228,17 @@
   "assistant.quick.state_light_off": "off",
   "assistant.quick.state_clim_on": "on, {mode}, {target} °C",
   "assistant.quick.state_playing": "playing",
-  "assistant.quick.state_idle": "stopped"
+  "assistant.quick.state_idle": "stopped",
+  "assistant.quick.say_all": "All {count} {things} are {state}.",
+  "assistant.quick.say_all_in": "{room}: all {count} {things} are {state}.",
+  "assistant.quick.things_cover": "blinds",
+  "assistant.quick.things_light": "lights",
+  "assistant.quick.things_clim": "air conditioners",
+  "assistant.quick.pl_open": "open",
+  "assistant.quick.pl_closed": "closed",
+  "assistant.quick.pl_part": "partly open",
+  "assistant.quick.pl_on": "on",
+  "assistant.quick.pl_off": "off",
+  "assistant.quick.say_playing": "Playing: {list}.",
+  "assistant.quick.say_nothing_playing": "Nothing is playing."
 }

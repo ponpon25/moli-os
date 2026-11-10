@@ -218,7 +218,7 @@
   "assistant.quick.alarm_states": "disarmed=désactivée|partial=activée en partie|total=activée",
   "assistant.quick.say_temperature": "{room} : {value} °C.",
   "assistant.quick.say_item": "{name} : {state}.",
-  "assistant.quick.say_whats_on": "Allumé : {list}.",
+  "assistant.quick.say_whats_on": "Lumières allumées : {list}.",
   "assistant.quick.say_nothing_on": "Rien n'est allumé.",
   "assistant.quick.state_open": "ouvert",
   "assistant.quick.state_closed": "fermé",
@@ -228,5 +228,17 @@
   "assistant.quick.state_light_off": "éteinte",
   "assistant.quick.state_clim_on": "allumée, {mode}, {target} °C",
   "assistant.quick.state_playing": "joue",
-  "assistant.quick.state_idle": "à l'arrêt"
+  "assistant.quick.state_idle": "à l'arrêt",
+  "assistant.quick.say_all": "Les {count} {things} sont {state}.",
+  "assistant.quick.say_all_in": "{room} : les {count} {things} sont {state}.",
+  "assistant.quick.things_cover": "stores",
+  "assistant.quick.things_light": "lumières",
+  "assistant.quick.things_clim": "clims",
+  "assistant.quick.pl_open": "ouverts",
+  "assistant.quick.pl_closed": "fermés",
+  "assistant.quick.pl_part": "ouverts en partie",
+  "assistant.quick.pl_on": "allumées",
+  "assistant.quick.pl_off": "éteintes",
+  "assistant.quick.say_playing": "Ça joue : {list}.",
+  "assistant.quick.say_nothing_playing": "Rien ne joue."
 }

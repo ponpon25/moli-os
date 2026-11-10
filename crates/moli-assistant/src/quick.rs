@@ -969,9 +969,83 @@ impl Catalog<'_> {
             )
             .ok()?
         };
+        if cat == Cat::Speaker {
+            return Self::say_playing(&devs);
+        }
+        self.say_summary(&devs)
+    }
+
+    /// Who plays: only the speakers that do (« rien ne joue » otherwise).
+    fn say_playing(devs: &[&Dev]) -> Option<Outcome> {
+        let known = |d: &&Dev| {
+            matches!(
+                d.view.state.get("playing").map(|s| &s.value),
+                Some(Value::Bool(_))
+            )
+        };
+        if !devs.iter().any(known) {
+            return None;
+        }
+        let playing: Vec<&&Dev> = devs.iter().filter(|d| d.is_playing()).collect();
+        if playing.is_empty() {
+            return Some(Outcome::Say {
+                text: moli_i18n::tr!("assistant.quick.say_nothing_playing"),
+                devices: Vec::new(),
+            });
+        }
+        let list = playing
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(Outcome::Say {
+            text: moli_i18n::tr!("assistant.quick.say_playing", list = list),
+            devices: playing.iter().map(|d| d.id.clone()).collect(),
+        })
+    }
+
+    /// Several devices in the same state are one sentence (« les 2 stores
+    /// sont fermés »); different states are told one by one.
+    fn say_summary(&self, devs: &[&Dev]) -> Option<Outcome> {
+        let kinds: Vec<Option<&'static str>> = devs.iter().map(|d| state_kind(d)).collect();
+        if devs.len() > 1
+            && let Some(Some(kind)) = kinds.first()
+            && kinds.iter().all(|k| k == &Some(*kind))
+        {
+            let things = moli_i18n::tr(match devs[0].cat {
+                Cat::Cover => "assistant.quick.things_cover",
+                Cat::Light => "assistant.quick.things_light",
+                _ => "assistant.quick.things_clim",
+            });
+            let state = moli_i18n::tr(&format!("assistant.quick.pl_{kind}"));
+            let count = devs.len();
+            let room = devs[0]
+                .room
+                .as_deref()
+                .filter(|r| devs.iter().all(|d| d.room.as_deref() == Some(*r)));
+            let text = match room {
+                Some(room) => moli_i18n::tr!(
+                    "assistant.quick.say_all_in",
+                    room = room,
+                    count = count,
+                    things = things,
+                    state = state
+                ),
+                None => moli_i18n::tr!(
+                    "assistant.quick.say_all",
+                    count = count,
+                    things = things,
+                    state = state
+                ),
+            };
+            return Some(Outcome::Say {
+                text,
+                devices: devs.iter().map(|d| d.id.clone()).collect(),
+            });
+        }
         let lines: Vec<(&Dev, String)> = devs
-            .into_iter()
-            .filter_map(|d| self.state_text(d).map(|t| (d, t)))
+            .iter()
+            .filter_map(|d| self.state_text(d).map(|t| (*d, t)))
             .collect();
         Self::say_lines(&lines)
     }
@@ -1036,9 +1110,22 @@ impl Catalog<'_> {
                 devices: Vec::new(),
             };
         }
-        let list = on
+        // By room: « Salon, Bureau (2) » is said faster than four long names.
+        let mut by_room: BTreeMap<&str, usize> = BTreeMap::new();
+        for (d, _) in &on {
+            *by_room
+                .entry(d.room.as_deref().unwrap_or(&d.name))
+                .or_default() += 1;
+        }
+        let list = by_room
             .iter()
-            .map(|(d, p)| format!("{} ({} %)", d.name, percent_text(*p)))
+            .map(|(name, n)| {
+                if *n > 1 {
+                    format!("{name} ({n})")
+                } else {
+                    (*name).to_owned()
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ");
         Outcome::Say {
@@ -1740,6 +1827,33 @@ impl Catalog<'_> {
     }
 }
 
+/// A state reduced to what devices can share (open, closed, on…).
+fn state_kind(d: &Dev<'_>) -> Option<&'static str> {
+    match d.cat {
+        Cat::Cover => {
+            let p = d.number("percent_control")?;
+            Some(if p >= 99.5 {
+                "open"
+            } else if p <= 0.5 {
+                "closed"
+            } else {
+                "part"
+            })
+        }
+        Cat::Light => Some(if light_percent(d)? <= 0.0 {
+            "off"
+        } else {
+            "on"
+        }),
+        Cat::Clim => match d.view.state.get("on").map(|s| &s.value) {
+            Some(Value::Bool(true)) => Some("on"),
+            Some(Value::Bool(false)) => Some("off"),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// A light's level in percent (0 when it is off); `None` when unknown.
 fn light_percent(d: &Dev<'_>) -> Option<f64> {
     if let Some((level, _)) = d.dimmer() {
@@ -2365,11 +2479,30 @@ mod tests {
         );
         assert_eq!(
             heard("Qu'est-ce qui est allumé ?", None),
-            said("Allumé : Bandeau (80 %).")
+            said("Lumières allumées : Bureau.")
         );
         assert_eq!(
             heard("Est-ce que la musique joue ?", Some("Salon")),
-            said("Salon : joue. Move : à l'arrêt.")
+            said("Ça joue : Salon.")
+        );
+        // Devices in the same state are one sentence.
+        let two = vec![
+            blind_at("z:c1", "Store gauche", "Cuisine", 0.0),
+            blind_at("z:c2", "Store droite", "Cuisine", 0.0),
+        ];
+        let config = Config::default();
+        assert_eq!(
+            interpret(
+                "Les stores de la cuisine sont fermés ?",
+                None,
+                &two,
+                &layout(),
+                &config
+            ),
+            Outcome::Say {
+                text: "Cuisine : les 2 stores sont fermés.".into(),
+                devices: vec![DeviceId::from("z:c1"), DeviceId::from("z:c2")],
+            }
         );
         // A question needs a room or a device it can name.
         assert_eq!(

@@ -93,6 +93,7 @@ base_topic = "zigbee2mqtt"
 # room_aliases = { "séjour" = "Salon" }   # d'autres façons de dire une pièce, pour quick
 # quick_skip = ["hue:…"]            # appareils que quick ne commande jamais (ruban lié à la télé)
 # answer_speakers = ["sonos:…"]     # enceintes qui disent les réponses parlées d'une appli (question sans surface)
+# done_replies = ["C'est fait.", "Et voilà le travail."]   # vos façons de dire « c'est fait » (une tirée au hasard)
 # model = "gpt-4.1-mini"
 # transcribe_model = "gpt-4o-mini-transcribe"   # écoute cloud ; "" = Whisper local seulement
 # speech_model = "gpt-4o-mini-tts"              # voix cloud ; "" = Piper local seulement

@@ -127,6 +127,10 @@ pub struct Config {
     /// `surface`: a phone app); a question's own `speakers` come first.
     #[serde(default)]
     pub answer_speakers: Vec<String>,
+    /// The house's own ways to say « c'est fait » (one drawn each time, never
+    /// one of the last few); empty: the catalogue's.
+    #[serde(default)]
+    pub done_replies: Vec<String>,
 }
 
 impl Default for Config {
@@ -155,6 +159,7 @@ impl Default for Config {
             room_aliases: std::collections::BTreeMap::new(),
             quick_skip: Vec::new(),
             answer_speakers: Vec::new(),
+            done_replies: Vec::new(),
         }
     }
 }
@@ -1043,7 +1048,7 @@ impl Assistant {
         } else if reply.actions.iter().all(|a| a.status == "failed") {
             moli_i18n::tr!("assistant.quick.failed")
         } else {
-            done_reply()
+            done_reply(&self.0.config.done_replies)
         };
         // What was acted on shows up on the screen.
         for action in &reply.actions {
@@ -1339,7 +1344,7 @@ impl Assistant {
         } else if run.cards.is_empty() && run.actions.is_empty() {
             moli_i18n::tr!("assistant.reply.unknown")
         } else {
-            done_reply()
+            done_reply(&self.0.config.done_replies)
         };
         tracing::info!(
             steps = run.usage.steps,
@@ -1770,18 +1775,27 @@ fn once(text: &str) -> String {
 }
 
 /// « Voilà. », said differently from one time to the next: one of the
-/// catalogue's variants (`assistant.reply.done_variants`), never one of the
-/// last few again. A catalogue without variants keeps its single word.
-fn done_reply() -> String {
+/// house's `done_replies`, else of the catalogue's variants
+/// (`assistant.reply.done_variants`), never one of the last few again. A
+/// single way of saying it is always said; none: the catalogue's word.
+fn done_reply(house: &[String]) -> String {
     static RECENT: Mutex<Vec<usize>> = Mutex::new(Vec::new());
     let all = moli_i18n::tr!("assistant.reply.done_variants");
-    let variants: Vec<&str> = all
-        .split('|')
+    let variants: Vec<&str> = if house.is_empty() {
+        all.split('|').collect()
+    } else {
+        house.iter().map(String::as_str).collect()
+    };
+    let variants: Vec<&str> = variants
+        .into_iter()
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .collect();
     if variants.len() < 2 {
-        return moli_i18n::tr!("assistant.reply.done");
+        return variants.first().map_or_else(
+            || moli_i18n::tr!("assistant.reply.done"),
+            |v| (*v).to_owned(),
+        );
     }
     let mut recent = RECENT.lock().unwrap_or_else(PoisonError::into_inner);
     pick_fresh(&variants, &mut recent, roll()).to_owned()
@@ -3615,6 +3629,10 @@ mod tests {
         );
     }
 
+    fn done_reply_word() -> String {
+        moli_i18n::tr!("assistant.reply.done")
+    }
+
     /// « Voilà. » keeps being one of the ways to say it is done, and the
     /// same one is not heard again among the last few.
     #[test]
@@ -3631,7 +3649,14 @@ mod tests {
             assert!(!heard.iter().rev().take(keep).any(|h| *h == v), "{v} again");
             heard.push(v);
         }
-        assert!(variants.contains(&done_reply().as_str()));
+        assert!(variants.contains(&done_reply(&[]).as_str()));
+        // A house's own words come first: one of them, or the only one.
+        let house = ["Ça, c'est fait.".to_owned(), "Affaire classée.".to_owned()];
+        for _ in 0..4 {
+            assert!(house.contains(&done_reply(&house)));
+        }
+        assert_eq!(done_reply(&["Fait.".to_owned()]), "Fait.");
+        assert_eq!(done_reply(&[" ".to_owned()]), done_reply_word());
     }
 
     #[test]

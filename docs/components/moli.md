@@ -156,6 +156,7 @@ modèle (ou, sans modèle, « je n'ai pas su répondre ») et **rien n'est fait*
   réseau) et la voix par Piper (`local_speech`).
 - **Appareils à ne jamais commander** : `[assistant] quick_skip = ["hue:…"]` (par exemple un ruban qui suit la télé tout seul)
 - **Réponses parlées sur des enceintes** : une question peut nommer les enceintes qui disent sa réponse (`speakers`, des appareils qui savent annoncer) ; la réponse dit lesquelles l'ont prise (`spoken_on`) et l'écran se tait. `[assistant] answer_speakers = ["sonos:…"]` les donne pour les questions qui ne disent pas d'où elles viennent (sans `surface` : une appli de téléphone). Sur le tableau de bord, le choix se fait par appareil (Système → Moli).
+- **« C'est fait » à la façon de la maison** : Moli tire au hasard une des variantes du catalogue (`assistant.reply.done_variants`), jamais une des dernières dites. `[assistant] done_replies = ["…", "…"]` les remplace par celles de la maison (son humour, sa voix préparée à l'avance).
   sort ces appareils de « la lumière du salon » ; ils restent commandables ailleurs (tableau de bord, modèle).
 - **Le contexte** : `room` dans la requête (la pièce du micro ou de l'écran) complète « ferme les stores ».
 - **Essai sans risque** : `dry_run: true` dit ce qui serait fait (`actions[].status = "dry"`) sans rien envoyer, et ne

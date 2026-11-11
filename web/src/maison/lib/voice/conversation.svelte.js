@@ -130,13 +130,22 @@ async function finish() {
   if (!answer) return stopTalk();
   let reply = answer.reply;
   if (answer.actions.some((a) => a.status === 'held') && !mentionsApproval(reply, i18n.language)) reply += ` ${t('moli.voix.valider_ecran')}`;
+  const tell = answer.spokenOn ? saidElsewhere : say;
   // Asked to stop, in any words: the last answer (if any), then hang up.
   if (answer.end) {
-    if (reply) await say(reply);
+    if (reply) await tell(reply);
     return stopTalk();
   }
-  await say(reply);
+  await tell(reply);
   if (talk.state === 'speaking') listen();
+}
+
+/** A speaker says the answer: the microphone waits for it to be said (a
+ *  second or so to start, then the sentence), not to hear it as a question. */
+function saidElsewhere(text) {
+  talk.state = 'speaking';
+  talk.saying = text;
+  return new Promise((resolve) => setTimeout(resolve, 1500 + 70 * text.length));
 }
 
 async function say(text) {

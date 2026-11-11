@@ -1,7 +1,8 @@
 <script>
   import { onMount } from 'svelte';
   import { home, note } from '../lib/home.svelte.js';
-  import { moli } from '../lib/moli.svelte.js';
+  import { moli, answerSpeaker, setAnswerSpeaker } from '../lib/moli.svelte.js';
+  import { hub } from '../../lib/hub.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import { playSpeech, stop, unlock } from '../lib/voice/player.js';
   import { fetchSpeech } from '../lib/voice/speech.js';
@@ -120,6 +121,14 @@
 
   const label = (v) => v[0].toUpperCase() + v.slice(1);
 
+  /** The speakers that can say an answer (an `announce` point), by name. */
+  const speakers = $derived(
+    Object.values(hub.devices)
+      .filter((d) => d.points?.some((p) => p.key === 'announce'))
+      .map((d) => ({ id: d.id, name: d.label?.name || d.native_name || d.id }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  );
+
   // A tone the house names in its language; the server's own label when this build does not know it.
   const toneName = (tone) => {
     const key = `moli.reglages.ton_${tone.id}`;
@@ -200,6 +209,21 @@
         <button class="btn primary" disabled={busy || key.trim().length < 20}>{busy ? t('moli.reglages.verification') : t('moli.reglages.enregistrer')}</button>
         <small class="muted">{t('moli.reglages.confidentialite')}</small>
       </form>
+    {/if}
+
+    {#if speakers.length}
+      <div class="voice">
+        <div class="head">
+          <b>{t('moli.reglages.enceinte')}</b>
+          <select value={answerSpeaker.id} onchange={(e) => setAnswerSpeaker(e.currentTarget.value)} aria-label={t('moli.reglages.enceinte')}>
+            <option value="">{t('moli.reglages.enceinte_ecran')}</option>
+            {#each speakers as d (d.id)}
+              <option value={d.id}>{d.name}</option>
+            {/each}
+          </select>
+        </div>
+        <small class="muted">{t('moli.reglages.aide_enceinte')}</small>
+      </div>
     {/if}
 
     {#if s.cloud_voice && (s.key || s.local_model)}
@@ -415,6 +439,18 @@
   .voice {
     display: grid;
     gap: 10px;
+  }
+
+  .head select {
+    border: 0;
+    border-radius: 999px;
+    padding: 6px 12px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 650;
+    background: var(--surface);
+    color: var(--ink);
+    max-width: 100%;
   }
 
   .head {

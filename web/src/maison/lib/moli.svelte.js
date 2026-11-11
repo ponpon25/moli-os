@@ -25,6 +25,26 @@ export const moli = $state({
 
 let statusLoaded = false;
 
+// The speaker that says this screen's spoken answers ('' : the screen itself),
+// kept in this browser: a phone in no room speaks through the living room's.
+const SPEAKER_KEY = 'moli-speaker';
+export const answerSpeaker = $state({ id: '' });
+try {
+  answerSpeaker.id = localStorage.getItem(SPEAKER_KEY) ?? '';
+} catch {
+  // Private window: the screen speaks.
+}
+
+export function setAnswerSpeaker(id) {
+  answerSpeaker.id = id;
+  try {
+    if (id) localStorage.setItem(SPEAKER_KEY, id);
+    else localStorage.removeItem(SPEAKER_KEY);
+  } catch {
+    // Same: the choice lasts the visit.
+  }
+}
+
 export async function loadStatus() {
   if (statusLoaded) return;
   statusLoaded = true;
@@ -62,8 +82,9 @@ export function reset() {
 }
 
 /** Asks Moli. `surface`: 'bubble' or 'page'. `spoken`: the answer will be
- *  heard (read aloud here unless `silent`: the conversation speaks it).
- *  Resolves to `{ reply, actions }`, or null on failure. */
+ *  heard (read aloud here unless `silent`: the conversation speaks it, or a
+ *  speaker says it: `answerSpeaker`). Resolves to `{ reply, actions,
+ *  spokenOn }`, or null on failure. */
 export async function ask(text, surface = 'bubble', spoken = false, { silent = false } = {}) {
   const content = text.trim();
   if (!content || moli.busy) return null;
@@ -76,6 +97,7 @@ export async function ask(text, surface = 'bubble', spoken = false, { silent = f
       body: JSON.stringify({
         surface,
         spoken,
+        ...(spoken && answerSpeaker.id ? { speaker: answerSpeaker.id } : {}),
         messages: moli.messages.filter((m) => !m.error).map(({ role, content }) => ({ role, content })),
       }),
     });
@@ -83,8 +105,9 @@ export async function ask(text, surface = 'bubble', spoken = false, { silent = f
     if (!res.ok) throw new Error(humanError(res.status, body.error));
     moli.messages.push({ role: 'assistant', content: body.reply, cards: body.cards ?? [], actions: body.actions ?? [] });
     moli.focus = moli.messages.length - 1;
-    if (spoken && !silent) speak(body.reply);
-    return { reply: body.reply, actions: body.actions ?? [] };
+    // Said by the chosen speaker: the screen keeps quiet.
+    if (spoken && !silent && !body.spoken_on) speak(body.reply);
+    return { reply: body.reply, actions: body.actions ?? [], spokenOn: body.spoken_on ?? null };
   } catch (err) {
     moli.messages.push({ role: 'assistant', content: err.message, error: true });
     return null;

@@ -116,6 +116,7 @@ impl VoiceBrain for Assistant {
                 spoken: true,
                 room: None,
                 dry_run: false,
+                speaker: None,
             };
             self.turn(turn)
                 .await

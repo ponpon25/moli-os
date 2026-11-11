@@ -298,6 +298,10 @@ pub struct Turn {
     /// Understand and say what would be done, without doing it (tests).
     #[serde(default)]
     pub dry_run: bool,
+    /// A speaker that says the spoken answer instead of the screen that
+    /// asked (a device with an `announce` point, `sonos:…`).
+    #[serde(default)]
+    pub speaker: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -325,6 +329,10 @@ pub struct Reply {
     /// The person asked to end the spoken conversation (`end_conversation`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub end: bool,
+    /// The speaker that says the answer (`Turn::speaker`, when it took it):
+    /// the screen that asked stays silent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spoken_on: Option<String>,
     /// The tools called, for the history.
     #[serde(skip)]
     pub tools: Vec<String>,
@@ -347,6 +355,7 @@ impl Reply {
             model: "quick".into(),
             usage: Usage::default(),
             end: false,
+            spoken_on: None,
             tools: vec!["quick".into()],
             search_cost: 0.0,
             draft_cost: 0.0,
@@ -686,8 +695,9 @@ impl Assistant {
         let surface = turn.surface.clone().unwrap_or_default();
         let spoken = turn.spoken;
         let dry_run = turn.dry_run;
+        let speaker = turn.speaker.clone().filter(|_| spoken);
         let quick_only = self.0.config.quick && self.0.config.quick_only;
-        let result = match self.quick(&turn).await {
+        let mut result = match self.quick(&turn).await {
             Quick::Done(reply) => Ok(reply),
             Quick::Off => self.converse(turn).await,
             // A simulation never asks the model (it could act), nor does a
@@ -711,6 +721,10 @@ impl Assistant {
                 Err(e) => Err(e),
             },
         };
+        // The speaker first: the answer is heard sooner.
+        if let (Some(speaker), Ok(reply)) = (speaker.as_deref(), result.as_mut()) {
+            reply.spoken_on = self.say_on(speaker, &reply.reply).await;
+        }
         if let Some(question) = question {
             let heard = self.take_heard();
             let active = self.active();
@@ -1043,6 +1057,35 @@ impl Assistant {
     }
 
     /// One order of the quick path, under the guard like any agent's.
+    /// Says `text` on `speaker` (its `announce` point): the speaker when it
+    /// took it, `None` (the screen that asked says it) otherwise.
+    async fn say_on(&self, speaker: &str, text: &str) -> Option<String> {
+        if text.trim().is_empty() || speaker.is_empty() || speaker.contains('/') {
+            return None;
+        }
+        let point = PointId::new(&DeviceId::from(speaker), "announce");
+        let said = self
+            .0
+            .hub
+            .command(
+                &point,
+                Value::Text(text.into()),
+                Origin::Assistant,
+                Some("Moli".into()),
+            )
+            .await;
+        match said {
+            Ok(()) => {
+                tracing::info!(speaker, "answer sent to the speaker");
+                Some(speaker.to_owned())
+            }
+            Err(e) => {
+                tracing::warn!(speaker, error = %e, "answer not sent to the speaker");
+                None
+            }
+        }
+    }
+
     async fn order(&self, o: &quick::Order) -> Action {
         let result = self
             .0
@@ -1284,6 +1327,7 @@ impl Assistant {
             model: self.model(),
             usage: run.usage,
             end: run.end,
+            spoken_on: None,
             tools: run.tools,
             search_cost: run.search_cost,
             draft_cost: run.draft_cost,
@@ -2926,6 +2970,53 @@ mod tests {
         assert!(light_is_on(&hub));
         // The screen shows what was acted on.
         assert_eq!(reply.cards.len(), 1);
+    }
+
+    /// A spoken answer can be said by a speaker instead of the screen that
+    /// asked: the speaker hears it at once, the screen is told to keep quiet.
+    #[tokio::test]
+    async fn a_spoken_answer_is_said_on_the_chosen_speaker() {
+        let hub = hub_with(Fake(vec![
+            (
+                "Lumière",
+                vec![point("on", moli_core::Kind::Binary, true)],
+                vec![("on", Value::Bool(false))],
+            ),
+            (
+                "Enceinte",
+                vec![point("announce", moli_core::Kind::Text, true)],
+                vec![],
+            ),
+        ]))
+        .await;
+        let config: Config = serde_json::from_value(json!({ "quick": true })).unwrap();
+        let moli = Assistant::new(hub.clone(), None, None, None, config).unwrap();
+        let ask = |speaker: &str, spoken: bool| -> Turn {
+            serde_json::from_value(json!({
+                "spoken": spoken,
+                "speaker": speaker,
+                "messages": [{ "role": "user", "content": "Allume la lumière" }],
+            }))
+            .unwrap()
+        };
+        let said = |hub: &moli_runtime::Hub| {
+            hub.snapshot()
+                .devices
+                .iter()
+                .find(|d| d.device.native_name.as_ref() == "Enceinte")
+                .and_then(|d| d.state.get("announce").map(|s| s.value.clone()))
+        };
+        let reply = moli.turn(ask("fake:Enceinte", true)).await.unwrap();
+        assert_eq!(reply.spoken_on.as_deref(), Some("fake:Enceinte"));
+        assert_eq!(said(&hub), Some(Value::Text(reply.reply.as_str().into())));
+        // Written, not spoken: the screen shows it, no speaker says it.
+        let reply = moli.turn(ask("fake:Enceinte", false)).await.unwrap();
+        assert_eq!(reply.spoken_on, None);
+        // A speaker that cannot speak: the screen that asked says it.
+        let reply = moli.turn(ask("fake:Lumière", true)).await.unwrap();
+        assert_eq!(reply.spoken_on, None);
+        let reply = moli.turn(ask("fake:Enceinte/on", true)).await.unwrap();
+        assert_eq!(reply.spoken_on, None);
     }
 
     #[tokio::test]

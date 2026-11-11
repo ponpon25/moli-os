@@ -1057,8 +1057,9 @@ impl Assistant {
     }
 
     /// One order of the quick path, under the guard like any agent's.
-    /// Says `text` on `speaker` (its `announce` point): the speaker when it
-    /// took it, `None` (the screen that asked says it) otherwise.
+    /// Says `text` on `speaker` (its `announce` point), written as it is said
+    /// (the same words as `/speak`, so the same prepared voice): the speaker
+    /// when it took it, `None` (the screen that asked says it) otherwise.
     async fn say_on(&self, speaker: &str, text: &str) -> Option<String> {
         if text.trim().is_empty() || speaker.is_empty() || speaker.contains('/') {
             return None;
@@ -1069,7 +1070,7 @@ impl Assistant {
             .hub
             .command(
                 &point,
-                Value::Text(text.into()),
+                Value::Text(voice::speakable(text).into()),
                 Origin::Assistant,
                 Some("Moli".into()),
             )
@@ -3008,7 +3009,17 @@ mod tests {
         };
         let reply = moli.turn(ask("fake:Enceinte", true)).await.unwrap();
         assert_eq!(reply.spoken_on.as_deref(), Some("fake:Enceinte"));
-        assert_eq!(said(&hub), Some(Value::Text(reply.reply.as_str().into())));
+        let words = voice::speakable(&reply.reply);
+        assert_eq!(said(&hub), Some(Value::Text(words.as_str().into())));
+        // The speaker gets the words as they are said, like `/speak`.
+        moli.say_on("fake:Enceinte", "Bureau : 22.4 °C.").await;
+        assert_eq!(
+            said(&hub),
+            Some(Value::Text(
+                voice::speakable("Bureau : 22.4 °C.").as_str().into()
+            ))
+        );
+        assert_ne!(said(&hub), Some(Value::Text("Bureau : 22.4 °C.".into())));
         // Written, not spoken: the screen shows it, no speaker says it.
         let reply = moli.turn(ask("fake:Enceinte", false)).await.unwrap();
         assert_eq!(reply.spoken_on, None);

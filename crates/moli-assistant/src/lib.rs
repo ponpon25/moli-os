@@ -122,6 +122,11 @@ pub struct Config {
     /// the TV by itself): by id, like `hidden` in `home.json`.
     #[serde(default)]
     pub quick_skip: Vec<String>,
+    /// Speakers (devices that announce, `sonos:…`) that say the spoken
+    /// answers of a question that does not say where it comes from (no
+    /// `surface`: a phone app); a question's own `speakers` come first.
+    #[serde(default)]
+    pub answer_speakers: Vec<String>,
 }
 
 impl Default for Config {
@@ -149,6 +154,7 @@ impl Default for Config {
             quick_only: false,
             room_aliases: std::collections::BTreeMap::new(),
             quick_skip: Vec::new(),
+            answer_speakers: Vec::new(),
         }
     }
 }
@@ -298,10 +304,10 @@ pub struct Turn {
     /// Understand and say what would be done, without doing it (tests).
     #[serde(default)]
     pub dry_run: bool,
-    /// A speaker that says the spoken answer instead of the screen that
-    /// asked (a device with an `announce` point, `sonos:…`).
+    /// Speakers that say the spoken answer instead of the screen that asked
+    /// (devices with an `announce` point, `sonos:…`).
     #[serde(default)]
-    pub speaker: Option<String>,
+    pub speakers: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -329,10 +335,10 @@ pub struct Reply {
     /// The person asked to end the spoken conversation (`end_conversation`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub end: bool,
-    /// The speaker that says the answer (`Turn::speaker`, when it took it):
-    /// the screen that asked stays silent.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub spoken_on: Option<String>,
+    /// The speakers that say the answer (those of `Turn::speakers`, or
+    /// `answer_speakers`, that took it): the screen that asked stays silent.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub spoken_on: Vec<String>,
     /// The tools called, for the history.
     #[serde(skip)]
     pub tools: Vec<String>,
@@ -355,7 +361,7 @@ impl Reply {
             model: "quick".into(),
             usage: Usage::default(),
             end: false,
-            spoken_on: None,
+            spoken_on: Vec::new(),
             tools: vec!["quick".into()],
             search_cost: 0.0,
             draft_cost: 0.0,
@@ -695,7 +701,7 @@ impl Assistant {
         let surface = turn.surface.clone().unwrap_or_default();
         let spoken = turn.spoken;
         let dry_run = turn.dry_run;
-        let speaker = turn.speaker.clone().filter(|_| spoken);
+        let speakers = self.speakers_for(&turn);
         let quick_only = self.0.config.quick && self.0.config.quick_only;
         let mut result = match self.quick(&turn).await {
             Quick::Done(reply) => Ok(reply),
@@ -721,9 +727,9 @@ impl Assistant {
                 Err(e) => Err(e),
             },
         };
-        // The speaker first: the answer is heard sooner.
-        if let (Some(speaker), Ok(reply)) = (speaker.as_deref(), result.as_mut()) {
-            reply.spoken_on = self.say_on(speaker, &reply.reply).await;
+        // The speakers first: the answer is heard sooner.
+        if let Ok(reply) = result.as_mut() {
+            self.say_answer(&speakers, reply).await;
         }
         if let Some(question) = question {
             let heard = self.take_heard();
@@ -1057,6 +1063,29 @@ impl Assistant {
     }
 
     /// One order of the quick path, under the guard like any agent's.
+    /// Who says a spoken answer aloud: the question's speakers, else the
+    /// house's for a question from no screen of its own (a phone app).
+    fn speakers_for(&self, turn: &Turn) -> Vec<String> {
+        if !turn.spoken {
+            Vec::new()
+        } else if !turn.speakers.is_empty() {
+            turn.speakers.clone()
+        } else if turn.surface.as_deref().unwrap_or_default().is_empty() {
+            self.0.config.answer_speakers.clone()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// The answer said on `speakers`: `spoken_on` names those that took it.
+    async fn say_answer(&self, speakers: &[String], reply: &mut Reply) {
+        for speaker in speakers {
+            if let Some(said) = self.say_on(speaker, &reply.reply).await {
+                reply.spoken_on.push(said);
+            }
+        }
+    }
+
     /// Says `text` on `speaker` (its `announce` point), written as it is said
     /// (the same words as `/speak`, so the same prepared voice): the speaker
     /// when it took it, `None` (the screen that asked says it) otherwise.
@@ -1328,7 +1357,7 @@ impl Assistant {
             model: self.model(),
             usage: run.usage,
             end: run.end,
-            spoken_on: None,
+            spoken_on: Vec::new(),
             tools: run.tools,
             search_cost: run.search_cost,
             draft_cost: run.draft_cost,
@@ -2995,7 +3024,7 @@ mod tests {
         let ask = |speaker: &str, spoken: bool| -> Turn {
             serde_json::from_value(json!({
                 "spoken": spoken,
-                "speaker": speaker,
+                "speakers": [speaker],
                 "messages": [{ "role": "user", "content": "Allume la lumière" }],
             }))
             .unwrap()
@@ -3008,7 +3037,7 @@ mod tests {
                 .and_then(|d| d.state.get("announce").map(|s| s.value.clone()))
         };
         let reply = moli.turn(ask("fake:Enceinte", true)).await.unwrap();
-        assert_eq!(reply.spoken_on.as_deref(), Some("fake:Enceinte"));
+        assert_eq!(reply.spoken_on, ["fake:Enceinte"]);
         let words = voice::speakable(&reply.reply);
         assert_eq!(said(&hub), Some(Value::Text(words.as_str().into())));
         // The speaker gets the words as they are said, like `/speak`.
@@ -3022,12 +3051,59 @@ mod tests {
         assert_ne!(said(&hub), Some(Value::Text("Bureau : 22.4 °C.".into())));
         // Written, not spoken: the screen shows it, no speaker says it.
         let reply = moli.turn(ask("fake:Enceinte", false)).await.unwrap();
-        assert_eq!(reply.spoken_on, None);
+        assert!(reply.spoken_on.is_empty());
         // A speaker that cannot speak: the screen that asked says it.
         let reply = moli.turn(ask("fake:Lumière", true)).await.unwrap();
-        assert_eq!(reply.spoken_on, None);
+        assert!(reply.spoken_on.is_empty());
         let reply = moli.turn(ask("fake:Enceinte/on", true)).await.unwrap();
-        assert_eq!(reply.spoken_on, None);
+        assert!(reply.spoken_on.is_empty());
+    }
+
+    /// The house's speakers say the spoken answers of a question from no
+    /// screen of its own (a phone app); a screen, the satellite or a
+    /// question's own speakers keep theirs.
+    #[tokio::test]
+    async fn the_house_speakers_say_the_phone_apps_answers() {
+        let speaker = || vec![point("announce", moli_core::Kind::Text, true)];
+        let hub = hub_with(Fake(vec![
+            (
+                "Lumière",
+                vec![point("on", moli_core::Kind::Binary, true)],
+                vec![("on", Value::Bool(false))],
+            ),
+            ("Salon", speaker(), vec![]),
+            ("Move", speaker(), vec![]),
+        ]))
+        .await;
+        let config: Config = serde_json::from_value(json!({
+            "quick": true,
+            "answer_speakers": ["fake:Salon", "fake:Move"],
+        }))
+        .unwrap();
+        let moli = Assistant::new(hub.clone(), None, None, None, config).unwrap();
+        let ask = |extra: Json| -> Turn {
+            let mut turn = json!({
+                "spoken": true,
+                "messages": [{ "role": "user", "content": "Allume la lumière" }],
+            });
+            turn.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(turn).unwrap()
+        };
+        let reply = moli.turn(ask(json!({}))).await.unwrap();
+        assert_eq!(reply.spoken_on, ["fake:Salon", "fake:Move"]);
+        for surface in ["bubble", "page", "satellite", "jarvis"] {
+            let reply = moli.turn(ask(json!({ "surface": surface }))).await.unwrap();
+            assert!(reply.spoken_on.is_empty(), "{surface}");
+        }
+        let reply = moli
+            .turn(ask(json!({ "speakers": ["fake:Move"] })))
+            .await
+            .unwrap();
+        assert_eq!(reply.spoken_on, ["fake:Move"]);
+        let reply = moli.turn(ask(json!({ "spoken": false }))).await.unwrap();
+        assert!(reply.spoken_on.is_empty());
     }
 
     #[tokio::test]

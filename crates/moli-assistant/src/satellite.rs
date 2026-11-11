@@ -116,7 +116,7 @@ impl VoiceBrain for Assistant {
                 spoken: true,
                 room: None,
                 dry_run: false,
-                speaker: None,
+                speakers: Vec::new(),
             };
             self.turn(turn)
                 .await

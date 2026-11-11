@@ -97,7 +97,7 @@ export async function ask(text, surface = 'bubble', spoken = false, { silent = f
       body: JSON.stringify({
         surface,
         spoken,
-        ...(spoken && answerSpeaker.id ? { speaker: answerSpeaker.id } : {}),
+        ...(spoken && answerSpeaker.id ? { speakers: [answerSpeaker.id] } : {}),
         messages: moli.messages.filter((m) => !m.error).map(({ role, content }) => ({ role, content })),
       }),
     });
@@ -106,8 +106,8 @@ export async function ask(text, surface = 'bubble', spoken = false, { silent = f
     moli.messages.push({ role: 'assistant', content: body.reply, cards: body.cards ?? [], actions: body.actions ?? [] });
     moli.focus = moli.messages.length - 1;
     // Said by the chosen speaker: the screen keeps quiet.
-    if (spoken && !silent && !body.spoken_on) speak(body.reply);
-    return { reply: body.reply, actions: body.actions ?? [], spokenOn: body.spoken_on ?? null };
+    if (spoken && !silent && !body.spoken_on?.length) speak(body.reply);
+    return { reply: body.reply, actions: body.actions ?? [], spokenOn: body.spoken_on?.length ? body.spoken_on : null };
   } catch (err) {
     moli.messages.push({ role: 'assistant', content: err.message, error: true });
     return null;

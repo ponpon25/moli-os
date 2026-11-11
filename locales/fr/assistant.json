@@ -79,6 +79,7 @@
   "assistant.tools.limit": "Limite atteinte : `{tool}` au plus {max} fois par question. Réponds avec ce que tu sais déjà.",
   "assistant.reply.unknown": "Je n’ai pas su répondre, tu peux reformuler ?",
   "assistant.reply.done": "Voilà.",
+  "assistant.reply.done_variants": "Voilà.|C'est fait.|Et voilà le travail.|C'est réglé.|Affaire classée.|Considère que c'est fait.|Fait. Au suivant.|Mission accomplie.|C'est dans la boîte.|Ça roule.|Rien de plus simple.|Tout est sous contrôle.|C'est bouclé.|Comme sur des roulettes.|Je m'en suis occupé.|Bon. C'est fait.|Une bonne chose de faite.|Même pas transpiré.|Ça, c'est fait.|Facile.",
   "assistant.filter.offers": "que veux-tu|que souhaites-tu|qu'est-ce que tu veux|tu veux|veux-tu|voulez-vous|vous voulez|souhaites-tu|tu souhaites|aimerais-tu|dois-je",
   "assistant.filter.pointers": "voici|voilà|je te montre|je vous montre|je montre|j'affiche|je t'affiche|l'écran",
   "assistant.guess.energy": "consomm|conso |electricit|energie|kwh|watt|facture|courant",

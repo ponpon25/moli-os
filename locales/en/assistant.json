@@ -79,6 +79,7 @@
   "assistant.tools.limit": "Limit reached: `{tool}` at most {max} times per question. Answer with what you already know.",
   "assistant.reply.unknown": "I couldn’t answer that, could you rephrase?",
   "assistant.reply.done": "There you go.",
+  "assistant.reply.done_variants": "There you go.|Done.|All set.|Taken care of.|Consider it done.|Mission accomplished.|Sorted.|Easy.",
   "assistant.filter.offers": "what would you like|what do you want|do you want|would you like|do you wish|want me to|shall i |should i |do you need me",
   "assistant.filter.pointers": "here is|here are|here's|here’s|here you go|i'll show|i’ll show|i'm showing|i’m showing|i show|let me show|the screen",
   "assistant.guess.energy": "consum|electric|energy|kwh|watt|bill|power draw|power use",

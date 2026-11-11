@@ -1023,7 +1023,7 @@ impl Assistant {
         } else if reply.actions.iter().all(|a| a.status == "failed") {
             moli_i18n::tr!("assistant.quick.failed")
         } else {
-            moli_i18n::tr!("assistant.reply.done")
+            done_reply()
         };
         // What was acted on shows up on the screen.
         for action in &reply.actions {
@@ -1266,7 +1266,7 @@ impl Assistant {
         } else if run.cards.is_empty() && run.actions.is_empty() {
             moli_i18n::tr!("assistant.reply.unknown")
         } else {
-            moli_i18n::tr!("assistant.reply.done")
+            done_reply()
         };
         tracing::info!(
             steps = run.usage.steps,
@@ -1693,6 +1693,49 @@ fn once(text: &str) -> String {
         }
     }
     t.to_owned()
+}
+
+/// « Voilà. », said differently from one time to the next: one of the
+/// catalogue's variants (`assistant.reply.done_variants`), never one of the
+/// last few again. A catalogue without variants keeps its single word.
+fn done_reply() -> String {
+    static RECENT: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    let all = moli_i18n::tr!("assistant.reply.done_variants");
+    let variants: Vec<&str> = all
+        .split('|')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .collect();
+    if variants.len() < 2 {
+        return moli_i18n::tr!("assistant.reply.done");
+    }
+    let mut recent = RECENT.lock().unwrap_or_else(PoisonError::into_inner);
+    pick_fresh(&variants, &mut recent, roll()).to_owned()
+}
+
+/// A variant not among the `recent` ones (a third of them, at most five),
+/// chosen by `roll`; `recent` remembers it.
+fn pick_fresh<'a>(variants: &[&'a str], recent: &mut Vec<usize>, roll: usize) -> &'a str {
+    let keep = (variants.len() / 3).clamp(1, 5);
+    recent.retain(|&i| i < variants.len());
+    let fresh: Vec<usize> = (0..variants.len())
+        .filter(|i| !recent.contains(i))
+        .collect();
+    let pick = fresh[roll % fresh.len()];
+    recent.push(pick);
+    while recent.len() > keep {
+        recent.remove(0);
+    }
+    variants[pick]
+}
+
+/// A random number, 0 if the system has none to give.
+fn roll() -> usize {
+    let mut raw = [0u8; 4];
+    if ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw).is_err() {
+        return 0;
+    }
+    usize::try_from(u32::from_le_bytes(raw)).unwrap_or(0)
 }
 
 /// Sentences that only point at the screen (« Voici… ») when cards are
@@ -2878,7 +2921,8 @@ mod tests {
         assert_eq!(reply.usage.steps, 0);
         assert_eq!(reply.actions.len(), 1);
         assert_eq!(reply.actions[0].status, "done");
-        assert_eq!(reply.reply, "Voilà.");
+        let said = moli_i18n::tr!("assistant.reply.done_variants");
+        assert!(said.split('|').any(|v| v == reply.reply), "{}", reply.reply);
         assert!(light_is_on(&hub));
         // The screen shows what was acted on.
         assert_eq!(reply.cards.len(), 1);
@@ -3391,6 +3435,25 @@ mod tests {
             moli_i18n::tr!("assistant.tools.ambiance_held_note"),
             "Pièce protégée : un adulte valide à l'écran, ou choisit l'ambiance lui-même (Pièces → Ambiances). Ne réessaie pas."
         );
+    }
+
+    /// « Voilà. » keeps being one of the ways to say it is done, and the
+    /// same one is not heard again among the last few.
+    #[test]
+    fn done_is_said_differently_each_time() {
+        let said = moli_i18n::tr!("assistant.reply.done_variants");
+        let variants: Vec<&str> = said.split('|').collect();
+        assert!(variants.len() >= 20);
+        assert!(variants.contains(&"Voilà."));
+        let keep = (variants.len() / 3).clamp(1, 5);
+        let mut recent = Vec::new();
+        let mut heard: Vec<&str> = Vec::new();
+        for roll in [0, 0, 0, 7, 7, 3, 0, 19, 1, 1, 1, 1] {
+            let v = pick_fresh(&variants, &mut recent, roll);
+            assert!(!heard.iter().rev().take(keep).any(|h| *h == v), "{v} again");
+            heard.push(v);
+        }
+        assert!(variants.contains(&done_reply().as_str()));
     }
 
     #[test]

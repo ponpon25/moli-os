@@ -25,6 +25,19 @@ pub struct Answer {
     pub text: String,
     /// The person asked to end the conversation (« c'est bon, j'ai fini »).
     pub closes: bool,
+    /// The speakers that said it (those of [`Place::speakers`] that took
+    /// it): the satellite plays nothing.
+    pub spoken_on: Vec<String>,
+}
+
+/// Where a spoken turn comes from and where its answer is heard.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Place {
+    /// The satellite's room: « ferme les stores » then means that room's.
+    pub room: Option<String>,
+    /// Speakers (devices with an `announce` point) that say the answer, for
+    /// a satellite without a speaker of its own.
+    pub speakers: Vec<String>,
 }
 
 /// What Moli made of a sentence said at a door.
@@ -53,8 +66,13 @@ pub trait VoiceBrain: Send + Sync + std::fmt::Debug {
 
     /// One spoken turn: Moli may act (under the guard, like any spoken
     /// order) and answers in one short sentence, or closes the conversation
-    /// when asked. The last line is the person's.
-    fn answer(&self, conversation: Vec<Said>) -> BoxFuture<'_, Result<Answer, String>>;
+    /// when asked. The last line is the person's; `place` says where the
+    /// satellite is and which speakers say the answer.
+    fn answer(
+        &self,
+        conversation: Vec<Said>,
+        place: Place,
+    ) -> BoxFuture<'_, Result<Answer, String>>;
 
     /// An address under `base` the satellite plays: `text` in Moli's voice,
     /// streamed while it is made. `None` when no voice can say it.

@@ -12,7 +12,7 @@ use std::time::Duration;
 use moli_core::{DeviceId, Value};
 use moli_runtime::DriverCtx;
 use moli_runtime::media::Image;
-use moli_runtime::voice::{Answer, Said, Speaker, VoiceBrain};
+use moli_runtime::voice::{Answer, Place, Said, Speaker, VoiceBrain};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
@@ -75,6 +75,8 @@ impl Run {
 pub(crate) struct Voice {
     window: Duration,
     media_base: Option<String>,
+    /// Its room, and the speakers that say the answers when it has none.
+    place: Place,
     run: Option<Run>,
     conversation: Vec<Said>,
     conversation_id: String,
@@ -95,11 +97,16 @@ pub(crate) type Thoughts = mpsc::Receiver<(u64, Thought)>;
 type Sent = anyhow::Result<()>;
 
 impl Voice {
-    pub(crate) fn new(window: Duration, media_base: Option<String>) -> (Self, Thoughts) {
+    pub(crate) fn new(
+        window: Duration,
+        media_base: Option<String>,
+        place: Place,
+    ) -> (Self, Thoughts) {
         let (thoughts_tx, thoughts) = mpsc::channel(8);
         let voice = Self {
             window,
             media_base: media_base.map(|b| b.trim_end_matches('/').to_owned()),
+            place,
             run: None,
             conversation: Vec::new(),
             conversation_id: String::new(),
@@ -109,6 +116,11 @@ impl Voice {
             thoughts_tx,
         };
         (voice, thoughts)
+    }
+
+    /// The device plays nothing: speakers say its answers.
+    fn mute(&self) -> bool {
+        !self.place.speakers.is_empty()
     }
 
     /// When something must happen even if the device says nothing.
@@ -142,7 +154,7 @@ impl Voice {
             Self::state(ctx, id, "idle");
             return Ok(());
         }
-        if ctx.voice_brain().is_none() || self.media_base.is_none() {
+        if ctx.voice_brain().is_none() || (self.media_base.is_none() && !self.mute()) {
             tracing::warn!(instance = %ctx.instance(), "voice request: no assistant or no media_base");
             Self::state(ctx, id, "idle");
             return tx
@@ -227,6 +239,7 @@ impl Voice {
     fn think(&self, brain: Arc<dyn VoiceBrain>, wav: Vec<u8>) {
         let generation = self.generation;
         let conversation = self.conversation.clone();
+        let place = self.place.clone();
         let tx = self.thoughts_tx.clone();
         tokio::spawn(async move {
             let started = Instant::now();
@@ -247,7 +260,7 @@ impl Voice {
                 who: Speaker::Person,
                 text,
             });
-            let thought = match brain.answer(lines).await {
+            let thought = match brain.answer(lines, place).await {
                 Ok(answer) => Thought::Answered(answer),
                 Err(e) => Thought::Failed(e),
             };
@@ -294,9 +307,19 @@ impl Voice {
             Thought::Answered(Answer {
                 text: reply,
                 closes,
+                spoken_on,
             }) => {
                 // Closed without words: the chime, now.
                 if closes && reply.trim().is_empty() {
+                    return self.end(ctx, id, tx, false).await;
+                }
+                // Said by the speakers: the device has nothing to play, the
+                // request is over (the wake word again for the next one).
+                if self.mute() {
+                    if spoken_on.is_empty() {
+                        return self.fail(ctx, id, tx, "no speaker took the answer").await;
+                    }
+                    tracing::info!(instance = %ctx.instance(), speakers = ?spoken_on, "satellite answer said");
                     return self.end(ctx, id, tx, false).await;
                 }
                 let url = match (ctx.voice_brain(), &self.media_base) {
@@ -416,16 +439,20 @@ impl Voice {
             ],
         )
         .await?;
-        let chime = self.media_base.as_ref().and_then(|base| {
-            let name = ctx.media_publisher().publish(
-                "wav",
-                Image {
-                    content_type: "audio/wav".into(),
-                    bytes: sound::chime(),
-                },
-            )?;
-            Some(format!("{base}/api/media/{name}"))
-        });
+        let chime = self
+            .media_base
+            .as_ref()
+            .filter(|_| !self.mute())
+            .and_then(|base| {
+                let name = ctx.media_publisher().publish(
+                    "wav",
+                    Image {
+                        content_type: "audio/wav".into(),
+                        bytes: sound::chime(),
+                    },
+                )?;
+                Some(format!("{base}/api/media/{name}"))
+            });
         if let Some(url) = &chime {
             Self::event(tx, VoiceEvent::TtsEnd, &[("url", url)]).await?;
         }

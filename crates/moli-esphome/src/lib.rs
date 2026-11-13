@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use moli_core::{Access, Device, DeviceId, Kind, PointSpec, Semantic, Unit, Value};
+use moli_runtime::voice::Place;
 use moli_runtime::{BoxFuture, CommandRequest, Driver, DriverCtx};
 use serde::Deserialize;
 use tokio::net::TcpStream;
@@ -75,6 +76,15 @@ pub struct Config {
     /// if it is this one (an address may have gone to another device).
     #[serde(default)]
     pub mac: Option<String>,
+    /// The room the device is in: « ferme les stores » then means that room's.
+    #[serde(default)]
+    pub room: Option<String>,
+    /// Speakers (devices with an `announce` point, `sonos:…`) that say the
+    /// answers, for a satellite without a speaker of its own (a bare
+    /// microphone): then it plays nothing, not even the chime, and each
+    /// request is one sentence (the wake word again for the next).
+    #[serde(default)]
+    pub speakers: Vec<String>,
     /// The device's own log in Moli's, from this level up: `none`,
     /// `error`, `warn`, `info`, `debug`.
     #[serde(default = "default_logs")]
@@ -568,6 +578,10 @@ async fn session(
     let (mut voice, mut thoughts) = satellite::Voice::new(
         Duration::from_secs(config.window_s),
         config.media_base.clone(),
+        Place {
+            room: config.room.clone(),
+            speakers: config.speakers.clone(),
+        },
     );
 
     let mut ping = tokio::time::interval(PING_EVERY);
@@ -897,6 +911,8 @@ mod tests {
             window_s: default_window(),
             wake_words: Vec::new(),
             mac: Some("AA:BB:CC:DD:EE:FF".into()),
+            room: None,
+            speakers: Vec::new(),
             logs: "none".into(),
         };
         let cancel = CancellationToken::new();

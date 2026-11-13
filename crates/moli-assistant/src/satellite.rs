@@ -7,7 +7,7 @@ use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
 use moli_runtime::BoxFuture;
-use moli_runtime::voice::{Answer, AtDoor, Pcm, Said, Speaker, VoiceBrain};
+use moli_runtime::voice::{Answer, AtDoor, Pcm, Place, Said, Speaker, VoiceBrain};
 use ring::rand::{SecureRandom as _, SystemRandom};
 
 use crate::{Assistant, AssistantError, Message, Role, Speech, Turn, voice, word_list};
@@ -98,7 +98,11 @@ impl VoiceBrain for Assistant {
         })
     }
 
-    fn answer(&self, conversation: Vec<Said>) -> BoxFuture<'_, Result<Answer, String>> {
+    fn answer(
+        &self,
+        conversation: Vec<Said>,
+        place: Place,
+    ) -> BoxFuture<'_, Result<Answer, String>> {
         Box::pin(async move {
             let messages = conversation
                 .into_iter()
@@ -114,15 +118,16 @@ impl VoiceBrain for Assistant {
                 messages,
                 surface: Some("satellite".into()),
                 spoken: true,
-                room: None,
+                room: place.room,
                 dry_run: false,
-                speakers: Vec::new(),
+                speakers: place.speakers,
             };
             self.turn(turn)
                 .await
                 .map(|reply| Answer {
                     text: reply.reply,
                     closes: reply.end,
+                    spoken_on: reply.spoken_on,
                 })
                 .map_err(|e| e.to_string())
         })

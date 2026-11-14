@@ -1,5 +1,5 @@
 <script>
-  import { hub, value, act, isOn, powerKey, setPower, dimKey, levelKey, percentOf, protectedRoom, num, nameOf, deviceKind, lampsOf, doorOpen, leak, motion, lowBattery, unpowered, isFixture, note, reachable, quiet, outletsOf, isCharger, chargerPhase } from '../lib/home.svelte.js';
+  import { hub, value, act, isOn, powerKey, setPower, dimKey, levelKey, shownPercent, protectedRoom, num, nameOf, deviceKind, lampsOf, doorOpen, leak, motion, lowBattery, unpowered, isFixture, note, reachable, quiet, outletsOf, isCharger, chargerPhase } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import LightTile from './LightTile.svelte';
@@ -150,7 +150,7 @@
     const top = d.points.find((p) => p.key === dk)?.kind?.max ?? 100;
     if (typeof b !== 'number') return t('commun.piece.allumee');
     // A dimmer's level through the eye's curve, as its slider shows it.
-    return t('commun.pourcent', { n: Math.round(levelKey(d) ? percentOf(b, top) : (b / top) * 100) });
+    return t('commun.pourcent', { n: Math.round(shownPercent(d, b, top)) });
   }
 
   function tap(d, point, outlets, name) {

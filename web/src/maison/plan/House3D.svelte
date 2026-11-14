@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { hub, value, deviceKind, isOn, isFixture, doorOpen, leak, motion } from '../lib/home.svelte.js';
+  import { hub, value, deviceKind, isOn, isFixture, doorOpen, leak, motion, brightnessShare } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
 
   /** The drawn house in 3D (three.js, loaded on demand), alive like the plan. */
@@ -57,8 +57,8 @@
         const shines = kind === 'light';
         if (d.online === false) return { id: s.id, shape, state: 'off', hidden };
         if (shape === 'lamp') {
-          const b = value(d.id, 'brightness');
-          return { id: s.id, shape, state: isOn(d.id) ? 'lit' : 'idle', level: typeof b === 'number' ? Math.max(0.15, b / 100) : 1, hidden, shines };
+          const b = brightnessShare(d.id);
+          return { id: s.id, shape, state: isOn(d.id) ? 'lit' : 'idle', level: b == null ? 1 : Math.max(0.15, b), hidden, shines };
         }
         if (shape === 'sensor') {
           const state = value(d.id, 'smoke') === true || leak(d.id) ? 'alarm' : doorOpen(d.id) === true || motion(d.id) ? 'open' : 'idle';

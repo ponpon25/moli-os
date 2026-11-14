@@ -1,5 +1,5 @@
 <script>
-  import { hub, home, value, deviceKind, isOn, roomOf, num } from '../lib/home.svelte.js';
+  import { hub, home, value, deviceKind, isOn, roomOf, num, brightnessShare } from '../lib/home.svelte.js';
   import { area, bbox, inside, labelAt, points } from './geometry.js';
   import { t, locale } from '../../lib/i18n.svelte.js';
 
@@ -189,8 +189,8 @@
   const LIGHTS = ['light', 'group'];
 
   function level(id) {
-    const b = value(id, 'brightness');
-    return typeof b === 'number' ? Math.max(0.15, Math.min(1, b / 100)) : 1;
+    const b = brightnessShare(id);
+    return b == null ? 1 : Math.max(0.15, b);
   }
 
   /** Lit lights placed on this floor: where they shine, how much, in which room. */

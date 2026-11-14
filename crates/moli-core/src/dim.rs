@@ -19,6 +19,18 @@ pub fn level_of(pct: f64, lo: f64, hi: f64) -> f64 {
     }
 }
 
+/// A brightness that is a dimmer's raw level rather than a percent: a
+/// Zigbee dimmer's 0–254. Seen through the same curve as a Z-Wave level, so
+/// every dimmer in the house answers alike. A brightness already in percent
+/// (Hue, which dims along the eye by itself) stays straight.
+#[must_use]
+pub fn perceived(spec: &crate::spec::PointSpec) -> bool {
+    use crate::spec::{Kind, Semantic, Unit};
+    spec.semantic == Semantic::Brightness
+        && spec.unit != Some(Unit::Percent)
+        && matches!(spec.kind, Kind::Numeric { max: Some(max), .. } if (max - 100.0).abs() > f64::EPSILON)
+}
+
 /// The level → percent (0–100).
 #[must_use]
 pub fn percent_of(level: f64, lo: f64, hi: f64) -> f64 {
@@ -29,6 +41,33 @@ pub fn percent_of(level: f64, lo: f64, hi: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_raw_brightness_is_seen_like_a_dimmer() {
+        use crate::spec::{Access, Kind, PointSpec, Semantic, Unit};
+        let spec = |max: f64, unit: Option<Unit>| PointSpec {
+            key: "brightness".into(),
+            label: "Brightness".into(),
+            kind: Kind::Numeric {
+                min: Some(0.0),
+                max: Some(max),
+                step: None,
+            },
+            access: Access {
+                read: true,
+                write: true,
+            },
+            unit,
+            semantic: Semantic::Brightness,
+        };
+        assert!(perceived(&spec(254.0, None)), "a Zigbee dimmer, 0–254");
+        assert!(
+            !perceived(&spec(100.0, Some(Unit::Percent))),
+            "a Hue, in percent"
+        );
+        assert!(!perceived(&spec(100.0, None)));
+        assert_eq!(level_of(50.0, 0.0, 254.0).round(), 64.0);
+    }
 
     #[test]
     fn fine_at_the_bottom_wide_at_the_top() {

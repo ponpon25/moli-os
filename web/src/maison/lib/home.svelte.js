@@ -520,6 +520,29 @@ export function levelFor(pct, top) {
   return p === 0 ? 0 : Math.max(1, Math.round(top * p * p));
 }
 
+/** Whether a light's level goes through the eye's curve: a dimmer's raw
+ *  level (a Z-Wave level, a Zigbee dimmer's 0–254), as HomeKit and Alexa do.
+ *  A brightness already in percent (Hue, which dims along the eye) stays
+ *  straight. */
+export function perceived(d) {
+  if (levelKey(d)) return true;
+  const p = d?.points.find((q) => q.semantic === 'brightness' && q.access?.write);
+  return !!p && p.unit !== '%' && p.kind?.max != null && p.kind.max !== 100;
+}
+
+/** A light's level → the percent people see, and back, each to its own top. */
+export const shownPercent = (d, level, top) => (perceived(d) ? percentOf(level, top) : (level / top) * 100);
+export const levelAt = (d, pct, top) => (perceived(d) ? levelFor(pct, top) : Math.round((pct / 100) * top));
+
+/** A light's brightness as a share (0–1), as people see it. Null when it has none. */
+export function brightnessShare(id) {
+  const b = value(id, 'brightness');
+  if (typeof b !== 'number') return null;
+  const d = device(id);
+  const top = d?.points.find((p) => p.key === 'brightness')?.kind?.max ?? 100;
+  return Math.min(1, Math.max(0, shownPercent(d, b, top) / 100));
+}
+
 /** The point that dims a light: its brightness, or the level of a dimmer. */
 export const dimKey = (d) => levelKey(d) ?? (d?.points.some((p) => p.key === 'brightness' && p.access?.write) ? 'brightness' : null);
 

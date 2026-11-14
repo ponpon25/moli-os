@@ -735,7 +735,16 @@ fn services_of(device: &Device, name: &str, live: bool) -> (Vec<ServiceSpec>, Ve
                     C_BRIGHTNESS,
                     "int",
                     READ_WRITE_NOTIFY,
-                    Bind::Point(id(&b.key), Conv::Percent { lo, hi }),
+                    Bind::Point(
+                        id(&b.key),
+                        // A dimmer's raw level (Zigbee 0–254) through the
+                        // eye's curve, as a Z-Wave dimmer.
+                        if moli_core::dim::perceived(b) {
+                            Conv::Perceived { lo, hi }
+                        } else {
+                            Conv::Percent { lo, hi }
+                        },
+                    ),
                     "Brightness",
                 )
                 .meta(percent_meta()),

@@ -1,5 +1,5 @@
 <script>
-  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey, inWall, hub, setPower, noteLevel, lastLevelOf, percentOf, levelFor } from '../lib/home.svelte.js';
+  import { device, isOn, pending, reachable, toggle, value, act, nameOf, setLook, note, unpowered, isFixture, powerKey, levelKey, inWall, hub, setPower, noteLevel, lastLevelOf, shownPercent, levelAt } from '../lib/home.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
   import Icon from './Icon.svelte';
   import LightTile from './LightTile.svelte';
@@ -20,10 +20,11 @@
   const label = $derived(nameOf(id, name));
   // The point that dims: « brightness », or the level of a dimmer that has
   // no on/off (Z-Wave), whose own range (0–99) the slider follows through
-  // the eye's curve (as HomeKit and Alexa do).
+  // the eye's curve (as HomeKit and Alexa do), as does a Zigbee dimmer's
+  // brightness (0–254). A Hue's, in percent, stays straight.
   const dimKey = $derived(levelKey(d) ?? 'brightness');
   const dimSpec = $derived(d?.points.find((p) => p.key === dimKey)?.kind);
-  const top = $derived(levelKey(d) ? (dimSpec?.max ?? 100) : 100);
+  const top = $derived(dimSpec?.max ?? 100);
   // The level asked, until the light says it took it: the slider does not
   // jump back to the old one meanwhile. A dimmer off (level 0) shows the
   // level it last had.
@@ -32,7 +33,7 @@
   const level = $derived.by(() => {
     const v = Number(raw) > 0 ? raw : (lastLevelOf(id) ?? raw);
     if (v == null) return null;
-    return levelKey(d) ? percentOf(Number(v), top) : (v / top) * 100;
+    return shownPercent(d, Number(v), top);
   });
   const dimmable = $derived(dimmer && d?.points.some((p) => p.key === dimKey && p.access?.write));
 
@@ -102,7 +103,7 @@
     const v = Number(e.currentTarget.value);
     const was = on;
     dragging = null;
-    act(`${id}/${dimKey}`, levelKey(d) ? levelFor(v, top) : Math.round((v / 100) * top), label);
+    act(`${id}/${dimKey}`, levelAt(d, v, top), label);
     // Off, the level lights a Hue, Zigbee or Z-Wave lamp by itself; one
     // whose switch is apart is switched on too.
     if (!was && !levelKey(d)) setPower(d, true, label);

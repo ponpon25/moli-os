@@ -4,7 +4,7 @@
 
 import {
   home, hub, device, value, isOn, deviceKind, roomList, roomOf, hidden, nameOf, reachable, doorOpen, leak, lowBattery, clock, num,
-  isCoverGroup, isCharger, isSmoke, isThermo, chargerPhase, levelKey, powerKey, dimKey, percentOf, levelFor, act, setPower, unpowered, savePref,
+  isCoverGroup, isCharger, isSmoke, isThermo, chargerPhase, levelKey, powerKey, dimKey, shownPercent, levelAt, act, setPower, unpowered, savePref,
 } from './home.svelte.js';
 import { layout, onHome } from './layout.svelte.js';
 import { isPrinter, phase } from './printers.js';
@@ -63,14 +63,15 @@ export function shortName(d, room) {
 /** What a light is doing, in the percent people see. */
 export function lightOf(d) {
   const key = dimKey(d);
-  const top = levelKey(d) ? (d.points.find((p) => p.key === key)?.kind?.max ?? 100) : 100;
+  // Its own top: a Z-Wave level to 99, a Hue brightness to 100, a Zigbee one to 254.
+  const top = d.points.find((p) => p.key === key)?.kind?.max ?? 100;
   // What was asked shows until the lamp says it took it: it does not fall back
   // to its old state meanwhile.
   const askedLevel = key ? hub.pending[`${d.id}/${key}`] : undefined;
   const askedPower = hub.pending[`${d.id}/${powerKey(d)}`];
   const raw = Number(askedLevel ?? value(d.id, key));
   const on = askedPower != null ? askedPower === true || askedPower === 'ON' : askedLevel != null ? Number(askedLevel) > 0 : isOn(d.id);
-  const pct = !on ? 0 : !key ? 100 : Math.max(1, Math.round(levelKey(d) ? percentOf(raw, top) : (raw / top) * 100)) || 100;
+  const pct = !on ? 0 : !key ? 100 : Math.max(1, Math.round(shownPercent(d, raw, top))) || 100;
   const cut = unpowered(d.id);
   return { id: d.id, on, pct, key, top, cut, ok: reachable(d.id) || levelKey(d) != null, word: cut ? t('commun.lampe.coupee') : !reachable(d.id) && !levelKey(d) ? t('commun.lampe.injoignable') : on ? (key ? t('commun.pourcent', { n: pct }) : t('commun.lampe.allumee')) : t('commun.lampe.eteinte') };
 }
@@ -82,7 +83,7 @@ export function setLight(d, pct) {
   const l = lightOf(d);
   if (pct <= 0) return setPower(d, false, label);
   if (!l.key) return setPower(d, true, label);
-  act(`${d.id}/${l.key}`, levelKey(d) ? levelFor(pct, l.top) : Math.round((pct / 100) * l.top), label);
+  act(`${d.id}/${l.key}`, levelAt(d, pct, l.top), label);
   if (!l.on && !levelKey(d)) setPower(d, true, label);
 }
 

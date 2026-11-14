@@ -378,11 +378,12 @@ impl Endpoint<'_> {
         self.view.state.get(&spec.key).map(|s| &s.value)
     }
 
-    /// A brightness as Alexa says it: a dimmer's level through the eye's
-    /// curve (`moli_core::dim`), any other linearly.
+    /// A brightness as Alexa says it: a dimmer's level (Z-Wave, or a Zigbee
+    /// dimmer's 0–254) through the eye's curve (`moli_core::dim`), any other
+    /// linearly.
     #[allow(clippy::cast_possible_truncation)] // clamped to 0..=100
     fn percent(&self, spec: &PointSpec, value: &Value) -> Option<i32> {
-        if !self.level {
+        if !self.level && !moli_core::dim::perceived(spec) {
             return percent(spec, value);
         }
         let (lo, hi) = range(spec);
@@ -390,7 +391,7 @@ impl Endpoint<'_> {
     }
 
     fn level_at(&self, spec: &PointSpec, pct: f64) -> Value {
-        if !self.level {
+        if !self.level && !moli_core::dim::perceived(spec) {
             return from_percent(spec, pct);
         }
         let (lo, hi) = range(spec);

@@ -197,7 +197,7 @@ async fn session(ws: &mut WebSocket, ctx: &mut DriverCtx) -> anyhow::Result<Sess
     let mut pending: HashMap<String, CommandRequest> = HashMap::new();
     let mut sent = 0u64;
     let mut again: Option<tokio::time::Instant> = None;
-    let mut revive = Revive::default();
+    let mut revive = Revive::seeded(&net);
     let mut glides = Glides::default();
     let mut ping = tokio::time::interval(Duration::from_secs(30));
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -369,42 +369,75 @@ impl Glides {
 }
 
 /// Z-Wave JS says a module dead after one missed reply and keeps it so
-/// until it next speaks (an hour for a dimmer at rest): Moli asks it again
-/// shortly after.
+/// until it next speaks: never, for a mains relay at rest (the garage
+/// door's). Moli asks it again shortly after, then less and less often,
+/// for as long as it stays dead, also when it was already dead when Moli
+/// read the network.
 #[derive(Default)]
-struct Revive(HashMap<u16, tokio::time::Instant>);
+struct Revive(HashMap<u16, (tokio::time::Instant, usize)>);
 
 impl Revive {
-    const AFTER: Duration = Duration::from_secs(20);
+    /// Wait before each ping; the last one repeats.
+    const STEPS: [Duration; 3] = [
+        Duration::from_secs(20),
+        Duration::from_secs(60),
+        Duration::from_secs(300),
+    ];
+
+    fn wait(tries: usize) -> Duration {
+        Self::STEPS[tries.min(Self::STEPS.len() - 1)]
+    }
+
+    /// The modules already dead when the network is read.
+    fn seeded(net: &Network) -> Self {
+        let mut revive = Self::default();
+        for (id, (node, _)) in &net.nodes {
+            if node.status == 3 {
+                revive.dead(*id);
+            }
+        }
+        revive
+    }
+
+    fn dead(&mut self, node: u16) {
+        self.0
+            .entry(node)
+            .or_insert_with(|| (tokio::time::Instant::now() + Self::wait(0), 0));
+    }
 
     fn on_event(&mut self, event: &Json) {
-        if event["source"] == "node"
-            && event["event"] == "dead"
-            && let Some(node) = event["nodeId"].as_u64().and_then(|n| u16::try_from(n).ok())
-        {
-            self.0
-                .entry(node)
-                .or_insert_with(|| tokio::time::Instant::now() + Self::AFTER);
+        if event["source"] != "node" {
+            return;
+        }
+        let Some(node) = event["nodeId"].as_u64().and_then(|n| u16::try_from(n).ok()) else {
+            return;
+        };
+        match event["event"].as_str() {
+            Some("dead") => self.dead(node),
+            Some("alive" | "wake up" | "sleep") => {
+                self.0.remove(&node);
+            }
+            _ => {}
         }
     }
 
     fn next(&self) -> Option<tokio::time::Instant> {
-        self.0.values().min().copied()
+        self.0.values().map(|(when, _)| *when).min()
     }
 
-    /// Pings the modules whose time has come (the answer brings them back
-    /// alive, or not: Z-Wave JS says so by event).
+    /// Pings the modules whose time has come, and plans the next try: the
+    /// answer brings them back alive (Z-Wave JS says so by event, which
+    /// ends the tries), or not.
     async fn ping_due(&mut self, ws: &mut WebSocket, sent: &mut u64) -> anyhow::Result<()> {
         let now = tokio::time::Instant::now();
-        let due: Vec<u16> = self
-            .0
-            .iter()
-            .filter(|(_, when)| **when <= now)
-            .map(|(node, _)| *node)
-            .collect();
-        for node in due {
-            self.0.remove(&node);
+        for (node, (when, tries)) in &mut self.0 {
+            if *when > now {
+                continue;
+            }
+            *tries += 1;
+            *when = now + Self::wait(*tries);
             *sent += 1;
+            tracing::debug!(node, tries = *tries, "z-wave module dead, asked again");
             let order = json!({"command": "node.ping", "nodeId": node, "messageId": format!("ping-{sent}")});
             ws.send_text(&order.to_string()).await?;
         }
@@ -678,17 +711,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_dead_module_is_asked_again_once() {
+    async fn a_dead_module_is_asked_again_until_it_answers() {
         let mut revive = Revive::default();
         revive.on_event(&json!({"source": "node", "event": "alive", "nodeId": 30}));
         assert_eq!(revive.next(), None);
         let before = tokio::time::Instant::now();
         revive.on_event(&json!({"source": "node", "event": "dead", "nodeId": 40}));
         let first = revive.next().expect("asked again");
-        assert!(first >= before + Revive::AFTER);
+        assert!(first >= before + Revive::STEPS[0]);
         // Said dead again meanwhile: still one ping, at the first time.
         revive.on_event(&json!({"source": "node", "event": "dead", "nodeId": 40}));
         assert_eq!(revive.next(), Some(first));
         assert_eq!(revive.0.len(), 1);
+        // No answer: tried again later and later, then every 5 minutes.
+        assert_eq!(Revive::wait(1), Duration::from_secs(60));
+        assert_eq!(Revive::wait(2), Duration::from_secs(300));
+        assert_eq!(Revive::wait(9), Duration::from_secs(300));
+        // Back: no more tries.
+        revive.on_event(&json!({"source": "node", "event": "alive", "nodeId": 40}));
+        assert_eq!(revive.next(), None);
+    }
+
+    #[tokio::test]
+    async fn a_module_dead_when_the_network_is_read_is_asked_again() {
+        let state: Json = serde_json::from_str(include_str!(
+            "../../../integrations/zwave/fixtures/state.json"
+        ))
+        .unwrap();
+        let nodes: Vec<Node> = serde_json::from_value(state["nodes"].clone()).unwrap();
+        let instance = moli_core::InstanceId::from("zwave");
+        let mut net = Network {
+            home: 1,
+            ..Network::default()
+        };
+        for mut node in nodes {
+            // The relay was said dead before Moli connected.
+            node.status = if node.id == 2 { 3 } else { 4 };
+            if let Some(m) = model::map(&instance, 1, &node) {
+                net.nodes.insert(node.id, (node, m));
+            }
+        }
+        assert!(net.nodes.len() > 1);
+        let revive = Revive::seeded(&net);
+        assert_eq!(revive.0.keys().copied().collect::<Vec<_>>(), vec![2]);
+        assert_eq!(revive.0[&2].1, 0);
     }
 }

@@ -20,6 +20,23 @@ pub(crate) fn play_mode(shuffle: bool, repeat: &str) -> &'static str {
     }
 }
 
+/// A track number drawn by chance among `tracks` (1 when there are none),
+/// for a list played at random to start somewhere else each time.
+pub(crate) fn draw(tracks: u32) -> u32 {
+    use std::hash::{BuildHasher as _, Hasher as _};
+    // Each `RandomState` is keyed afresh: enough chance for a playlist.
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
+    let tracks = u64::from(tracks.max(1));
+    #[allow(clippy::cast_possible_truncation)] // below `tracks`, a u32
+    let n = (hasher.finish() % tracks) as u32;
+    n + 1
+}
+
 /// Shuffle and repeat, from a play mode.
 pub(crate) fn mode_parts(mode: &str) -> (bool, &'static str) {
     match mode {
@@ -134,6 +151,15 @@ mod tests {
             "<s:Envelope><s:Body><u:BrowseResponse><Result>{}</Result></u:BrowseResponse></s:Body></s:Envelope>",
             moli_net::upnp::escape(&didl)
         )
+    }
+
+    #[test]
+    fn draws_a_track_within_the_list() {
+        assert_eq!(draw(0), 1);
+        assert_eq!(draw(1), 1);
+        let drawn: std::collections::HashSet<u32> = (0..200).map(|_| draw(10)).collect();
+        assert!(drawn.iter().all(|n| (1..=10).contains(n)));
+        assert!(drawn.len() > 1, "always the same track");
     }
 
     #[test]

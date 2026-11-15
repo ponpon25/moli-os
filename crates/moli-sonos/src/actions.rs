@@ -235,6 +235,11 @@ struct Order {
     title: String,
     #[serde(default)]
     mode: String,
+    /// Played at random: the whole list goes in the queue, shuffle and
+    /// repeat all are set, and it starts on a track drawn by chance (so
+    /// the first one differs too). Only with `mode: now`.
+    #[serde(default)]
+    shuffle: bool,
 }
 
 async fn play_catalog(room: &Room, apple: Option<&AppleMusic>, order: &str) -> anyhow::Result<()> {
@@ -286,14 +291,60 @@ async fn play_catalog(room: &Room, apple: Option<&AppleMusic>, order: &str) -> a
         // Many songs take longer than an order may wait: the speaker is
         // filled in the background, and the order answers at once.
         let (leader, uuid, mode) = (leader.to_owned(), room.leader_uuid.clone(), order.mode);
+        let shuffle = order.shuffle;
         tokio::spawn(async move {
-            if let Err(e) = enqueue_all(&leader, &uuid, &mode, &items).await {
+            let done = if shuffle {
+                shuffle_all(&leader, &uuid, &items).await
+            } else {
+                enqueue_all(&leader, &uuid, &mode, &items).await
+            };
+            if let Err(e) = done {
                 tracing::warn!(error = %format!("{e:#}"), "sonos: a list could not be queued");
             }
         });
         return Ok(());
     }
+    if order.shuffle {
+        return shuffle_all(leader, &room.leader_uuid, &items).await;
+    }
     enqueue_all(leader, &room.leader_uuid, &order.mode, &items).await
+}
+
+/// Replaces the queue of the group led by `leader` with `items` and plays
+/// it at random, from a track drawn by chance.
+async fn shuffle_all(leader: &str, uuid: &str, items: &[apple::Playable]) -> anyhow::Result<()> {
+    soap(leader, AV, "RemoveAllTracksFromQueue", &[ID]).await?;
+    let mut tracks = 0u32;
+    for item in items {
+        let added = soap_slow(
+            leader,
+            AV,
+            "AddURIToQueue",
+            &[
+                ID,
+                ("EnqueuedURI", &item.uri),
+                ("EnqueuedURIMetaData", &item.meta),
+                ("DesiredFirstTrackNumberEnqueued", "0"),
+                ("EnqueueAsNext", "0"),
+            ],
+        )
+        .await?;
+        tracks += tag(&added, "NumTracksAdded")
+            .and_then(|n| n.trim().parse::<u32>().ok())
+            .unwrap_or(1);
+    }
+    from_queue(leader, uuid).await?;
+    set_mode(leader, true, "all").await?;
+    let first = playback::draw(tracks).to_string();
+    soap(
+        leader,
+        AV,
+        "Seek",
+        &[ID, ("Unit", "TRACK_NR"), ("Target", &first)],
+    )
+    .await?;
+    soap(leader, AV, "Play", &[ID, ("Speed", "1")]).await?;
+    Ok(())
 }
 
 /// Puts `items` in the queue of the group led by `leader` (`mode`: `now`

@@ -47,6 +47,10 @@ pub struct Config {
     /// (D12). Moli runs them as instance `lumieres`.
     #[serde(default, rename = "fixture")]
     pub fixtures: Vec<moli_lights::Fixture>,
+    /// Dimmers re-levelled after the grid's 175 Hz tariff signal (absent:
+    /// none). Moli runs it as instance `trames`.
+    #[serde(default)]
+    pub ripple: Option<moli_lights::ripple::Config>,
     /// Garage doors: a relay on the motor's button, as a door. Moli runs
     /// them as instance `portes`.
     #[serde(default, rename = "garage")]
@@ -347,6 +351,7 @@ impl Config {
                 "automations",
                 moli_energy::points::INSTANCE,
                 moli_lights::INSTANCE,
+                moli_lights::ripple::INSTANCE,
                 moli_covers::INSTANCE,
                 moli_garage::INSTANCE,
                 moli_api::PEOPLE_INSTANCE,
@@ -369,6 +374,9 @@ impl Config {
                 .map_err(|e| anyhow::anyhow!("[energy] {e}"))?;
         }
         moli_lights::check(&self.fixtures).map_err(|e| anyhow::anyhow!("[[fixture]] {e}"))?;
+        if let Some(ripple) = &self.ripple {
+            moli_lights::ripple::check(ripple).map_err(|e| anyhow::anyhow!("[ripple] {e}"))?;
+        }
         moli_garage::check(&self.garages).map_err(|e| anyhow::anyhow!("[[garage]] {e}"))?;
         if let Some(sun) = &self.sun {
             moli_sun::check(sun).map_err(|e| anyhow::anyhow!("[sun] {e}"))?;

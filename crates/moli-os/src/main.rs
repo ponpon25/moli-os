@@ -982,6 +982,18 @@ fn spawn_house_drivers(
             cancel.clone(),
         ));
     }
+    if let Some(ripple) = &config.ripple {
+        tasks.push(spawn_driver(
+            hub,
+            InstanceId::from(moli_lights::ripple::INSTANCE),
+            Arc::new(moli_lights::ripple::Ripple::new(
+                hub.clone(),
+                ripple.clone(),
+                &config.automations.timezone,
+            )),
+            cancel.clone(),
+        ));
+    }
     if !config.garages.is_empty() {
         tasks.push(spawn_driver(
             hub,

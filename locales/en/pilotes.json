@@ -510,6 +510,7 @@
   "pilotes.lights.ampoules_muettes": "the bulbs aren’t answering (they may be reconnecting)",
   "pilotes.lights.coupee_interrupteur": "switched off at the wall: turn the switch back on",
   "pilotes.lights.acteur": "light fixture “{name}”",
+  "pilotes.lights.trame_acteur": "re-levelled after the grid’s 175 Hz signal",
   "pilotes.lights.allume": "On",
   "pilotes.lights.sous_tension": "Powered",
   "pilotes.lights.luminosite": "Brightness",

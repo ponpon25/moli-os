@@ -21,6 +21,8 @@
 //! power = "tuya:…/switch_1"   # the relay that feeds them (optional)
 //! ```
 
+pub mod ripple;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

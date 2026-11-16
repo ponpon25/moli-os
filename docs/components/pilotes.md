@@ -474,6 +474,24 @@ pièces ; il commande ensuite les membres en origine `system` (journal : `lumina
   reviennent, 15 s au plus), sinon les ampoules (allumées puis réglées) ; aucune ampoule
   joignable sans relais → refus « coupée à l'interrupteur ».
 
+## `trames` : recalage après le signal 175 Hz (`crates/moli-lights/src/ripple.rs`)
+
+Pilote interne, lancé dès que `moli.toml` déclare `[ripple]` (l'id `trames` est réservé). Le
+réseau envoie à heures fixes une télécommande à 175 Hz (heures creuses, Tempo, éclairage
+public). Elle trouble les variateurs à découpage de phase : une LED réglée bas remonte seule
+et reste haute, alors que le variateur affiche toujours le même niveau. Renvoyer ce niveau ne
+change rien. Il faut faire un pas puis revenir.
+
+- **Repérage** : un point de `watch` (la puissance d'un variateur qui la mesure) qui fait un
+  bond (+50 % et +2 W) sans ordre sur un `dimmers` dans la minute précédente.
+- **Recalage** : `settle_secs` (100 par défaut ; une trame dure environ 1 min 40) après le
+  premier bond, ou 20 s après un nouveau bond (150 s au plus). Chaque `dimmers` allumé fait
+  un pas vers le milieu, puis revient 3 s plus tard, en origine `system`.
+- **Heures connues** (`times`, heure locale de `[automations]`) : si aucun `watch` n'est
+  allumé et que rien n'a été recalé, les variateurs allumés sont recalés à l'heure dite plus
+  `settle_secs` plus 10 s. Cela couvre ceux qui ne mesurent rien.
+- **Tests** : la fonction pure `Detector` (bond, ordre récent, cumul, plafond, heures connues).
+
 ## `presence` : qui est à la maison (`crates/moli-presence`)
 
 - **Couvre** : la présence de chaque personne d'après le Wi-Fi de son téléphone, en local

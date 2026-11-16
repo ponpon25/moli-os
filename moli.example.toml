@@ -63,6 +63,16 @@ allowed_hosts = ["192.168.0.10", "moli.local"]
 # bulbs = ["hue:…", "hue:…"]
 # power = "tuya:…/switch_1"
 
+# Dimmers upset by the grid's 175 Hz tariff signal (a LED dimmed low brightens
+# on its own at fixed times and stays so): once the frame is over (~1 min 40),
+# every dimmer that is on moves one step and back. A frame is seen as a power
+# jump with no order on a dimmer that measures; `times` covers the hours when
+# none of them is lit.
+# [ripple]
+# watch = ["zwave:…/ep1.sensor.power"]
+# dimmers = ["zwave:…/ep1.level", "z2m:…/brightness"]
+# times = ["20:00:25", "21:07:25"]
+
 # Zigbee, through an existing Zigbee2MQTT bridge.
 [[driver]]
 id = "z2m"

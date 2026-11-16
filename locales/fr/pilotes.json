@@ -510,6 +510,7 @@
   "pilotes.lights.ampoules_muettes": "les ampoules ne répondent pas (elles se reconnectent peut-être)",
   "pilotes.lights.coupee_interrupteur": "coupée à l'interrupteur : rallume l'interrupteur",
   "pilotes.lights.acteur": "luminaire « {name} »",
+  "pilotes.lights.trame_acteur": "recalage après le signal 175 Hz du réseau",
   "pilotes.lights.allume": "Allumé",
   "pilotes.lights.sous_tension": "Sous tension",
   "pilotes.lights.luminosite": "Luminosité",

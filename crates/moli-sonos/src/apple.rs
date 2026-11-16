@@ -455,14 +455,23 @@ pub(crate) fn playable(
             "10052064".to_owned(),
             "object.container.album.musicAlbum",
         ),
-        "playlist" => (
-            format!(
-                "x-rincon-cpcontainer:1006206cplaylist%3a{id}?sid={SERVICE}&flags=8300&sn={account}"
-            ),
-            format!("1006206cplaylist%3a{id}"),
-            "10052064".to_owned(),
-            "object.container.playlistContainer",
-        ),
+        // A playlist of the person's own library (`p.…`) is a `libraryplaylist`
+        // to the speaker: as a catalogue `playlist` it refuses it (UPnP 804/811).
+        "playlist" => {
+            let what = if id.starts_with("p.") {
+                "libraryplaylist"
+            } else {
+                "playlist"
+            };
+            (
+                format!(
+                    "x-rincon-cpcontainer:1006206c{what}%3a{id}?sid={SERVICE}&flags=8300&sn={account}"
+                ),
+                format!("1006206c{what}%3a{id}"),
+                "10052064".to_owned(),
+                "object.container.playlistContainer",
+            )
+        }
         // A station (`ra.…`): a stream, told as Sonos tells its own.
         "station" => (
             format!("x-sonosapi-hls:hls%3a{id}?sid={SERVICE}&flags=8232&sn={account}"),
@@ -611,6 +620,12 @@ mod tests {
         assert!(album.meta.contains(DESCRIPTOR));
         let playlist = playable("playlist", "pl.abc", "Mix", "13").unwrap();
         assert!(playlist.uri.contains("1006206cplaylist%3apl.abc"));
+        let own = playable("playlist", "p.abc", "Mine", "13").unwrap();
+        assert!(
+            own.uri.contains("1006206clibraryplaylist%3ap.abc")
+                && own.meta.contains("1006206clibraryplaylist%3ap.abc"),
+            "a playlist of the library is a libraryplaylist to the speaker"
+        );
         let station = playable("station", "ra.1437317694", "Rire & Chansons", "13").unwrap();
         assert_eq!(
             station.uri,

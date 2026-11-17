@@ -173,12 +173,34 @@ fn like(model: &Value, v: f64) -> Value {
     }
 }
 
+/// The level to re-set, if the dimmer is on. A Zigbee light keeps its last
+/// brightness while off: its `state` point says whether it is lit, and
+/// sending it a brightness would switch it on.
+fn lit_level(level: &Value, state: Option<&Value>) -> Option<f64> {
+    let off = match state {
+        Some(Value::Bool(on)) => !on,
+        Some(Value::Int(i)) => *i == 0,
+        Some(Value::Text(t)) => t.eq_ignore_ascii_case("off"),
+        _ => false,
+    };
+    level.as_f64().filter(|l| *l > 0.0 && !off)
+}
+
+/// The `state` point next to a level point (same device).
+fn state_point(point: &PointId) -> Option<PointId> {
+    let (device, _) = point.split()?;
+    Some(PointId::new(&device, "state"))
+}
+
 /// Every dimmer that is on: one step and back.
 async fn relevel(hub: Hub, dimmers: Vec<PointId>) {
     let actor = moli_i18n::tr!("pilotes.lights.trame_acteur");
     let runs = dimmers.into_iter().filter_map(|point| {
         let value = hub.state(&point)?.value;
-        let level = value.as_f64().filter(|l| *l > 0.0)?;
+        let state = state_point(&point)
+            .and_then(|s| hub.state(&s))
+            .map(|s| s.value);
+        let level = lit_level(&value, state.as_ref())?;
         let (hub, actor) = (hub.clone(), actor.clone());
         Some(async move {
             let first = hub
@@ -379,6 +401,20 @@ mod tests {
         assert!((step(99.0) - 98.0).abs() < f64::EPSILON);
         assert_eq!(like(&Value::Int(5), 4.0), Value::Int(4));
         assert_eq!(like(&Value::Float(5.0), 4.0), Value::Float(4.0));
+    }
+
+    #[test]
+    fn a_zigbee_light_that_is_off_is_left_alone() {
+        let b = Value::Int(1);
+        assert_eq!(lit_level(&b, Some(&Value::Bool(false))), None);
+        assert_eq!(lit_level(&b, Some(&Value::Text("OFF".into()))), None);
+        assert_eq!(lit_level(&b, Some(&Value::Bool(true))), Some(1.0));
+        assert_eq!(lit_level(&b, None), Some(1.0));
+        assert_eq!(lit_level(&Value::Int(0), None), None);
+        assert_eq!(
+            state_point(&p("z2m:0x60/brightness")),
+            Some(p("z2m:0x60/state"))
+        );
     }
 
     #[test]

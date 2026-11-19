@@ -39,6 +39,9 @@ aucune logique d'appareil (c'est le rôle des [pilotes](pilotes.md)) et aucun LL
   acteur déclaré (borné à 64 caractères) et résultat ; persistant (`data/journal.jsonl`,
   réécrit avec ses 2 000 dernières lignes au-delà de 8 Mio) ; les échecs d'écriture sur
   disque sont comptés et visibles dans `/api/health` (`journal_failures`).
+  Il note aussi, dans les pièces surveillées (`[journal] watch_rooms`, plus les pièces
+  protégées), ce que personne n'a ordonné à Moli : appui sur un bouton mural, enceinte mise
+  en pause à la main, store bougé à la main (origine `external`, action `observed`).
 - **Persistance** : `data/labels.toml` (étiquettes), `data/state.json` (dernières valeurs,
   rejouées au démarrage avec leur horodatage d'origine), écritures périodiques ;
   `data/addresses.json` (où chaque pilote a joint son appareil, sa MAC, son identité : de quoi

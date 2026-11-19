@@ -132,11 +132,24 @@ pub enum Origin {
     /// An automation a human approved (that exact version): their intent,
     /// carried out by the house.
     Automation,
+    /// Nobody Moli knows: a wall button, a speaker's own controls, another
+    /// app. Only for entries the hub writes about a change it saw without
+    /// having sent any order (`Action::Observed`); never an order's origin.
+    External,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Action {
+    /// A change in a watched room that no order of Moli explains: a press on
+    /// a wall button (`to` is the button's action, `from` absent), a speaker
+    /// paused by its own controls, a shutter moved by hand.
+    Observed {
+        point: PointId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<Value>,
+        to: Value,
+    },
     Command {
         point: PointId,
         value: Value,

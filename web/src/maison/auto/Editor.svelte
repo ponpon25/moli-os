@@ -6,7 +6,8 @@
   import Palette from './Palette.svelte';
   import Orb from '../moli/Orb.svelte';
   import { home, note, relative, clock } from '../lib/home.svelte.js';
-  import { api, asHuman, layout, needsLayout, newNode, isTrigger, liveRuns, pending, renamedIn, NODE_W } from '../lib/auto.svelte.js';
+  import { api, asHuman, layout, needsLayout, newNode, isTrigger, liveRuns, pending, renamedIn, graphPoints, splitPoint, NODE_W } from '../lib/auto.svelte.js';
+  import { hub } from '../../lib/hub.svelte.js';
   import { t } from '../../lib/i18n.svelte.js';
 
   let { id } = $props();
@@ -245,8 +246,37 @@
     }
   }
 
+  /** What happened during a run that nobody ordered through Moli (a wall
+   *  button, a speaker's own controls), on the devices the graph touches. */
+  let outside = $state([]);
+  const OUTSIDE_AFTER_MS = 120_000;
+  async function outsideOf(run) {
+    let past = [];
+    try {
+      const res = await fetch('/api/journal?limit=500');
+      if (res.ok) past = await res.json();
+    } catch {
+      /* the live ones still show */
+    }
+    const mine = new Set(graphPoints(a?.graph).map((p) => splitPoint(p)[0]).filter(Boolean));
+    const end = (run.ended ?? run.started) + OUTSIDE_AFTER_MS;
+    const byId = new Map([...past, ...hub.journal].map((e) => [e.id, e]));
+    if (shownRun?.id !== run.id) return;
+    outside = [...byId.values()]
+      .filter((e) => e.origin === 'external' && e.action.kind === 'observed' && e.ts >= run.started && e.ts <= end && mine.has(splitPoint(e.action.point)[0]))
+      .sort((x, y) => x.ts - y.ts);
+  }
+  function gestureText(e) {
+    const [id, key] = splitPoint(e.action.point);
+    const m = key === 'action' ? /^input_(\d+)_(single|double|long)/.exec(String(e.action.to)) : null;
+    if (m) return t('maison.historique.bouton', { n: m[1], how: t(`maison.historique.appui_${m[2]}`) });
+    return `${key} : ${e.action.from ?? '—'} → ${e.action.to}`;
+  }
+
   function showRun(run) {
     shownRun = run;
+    outside = [];
+    outsideOf(run);
     const s = { [run.trigger]: 'done' };
     for (const step of run.steps) s[step.node] = step.status;
     statuses = s;
@@ -447,7 +477,15 @@
                     <li class={s.status}><span>{stepText(s.status)}</span>{n ? n.id : s.node}{#if s.detail} · <em>{s.detail}</em>{/if}</li>
                   {/each}
                 </ul>
-                <button class="link" onclick={() => ((shownRun = null), (statuses = {}))}>{t('automatismes.editeur.effacer')}</button>
+                {#if outside.length}
+                  <p class="outside"><b>{t('automatismes.editeur.hors_moli')}</b></p>
+                  <ul>
+                    {#each outside as e (e.id)}
+                      <li class="no"><span>{clock(e.ts)}</span>{gestureText(e)}</li>
+                    {/each}
+                  </ul>
+                {/if}
+                <button class="link" onclick={() => ((shownRun = null), (outside = []), (statuses = {}))}>{t('automatismes.editeur.effacer')}</button>
               </div>
             {/if}
             {#if runs.length}

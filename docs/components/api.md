@@ -245,7 +245,7 @@ Toute écriture est journalisée, réussie ou non (`JournalEntry`, `crates/moli-
 |---|---|---|
 | `id` | entier | croissant, continu après redémarrage |
 | `ts` | ms | fin de l'opération |
-| `origin` | `ui` `api` `mcp` `cli` `system` `assistant` `automation` | surface |
+| `origin` | `ui` `household` `api` `mcp` `cli` `system` `assistant` `automation` `external` | surface (`external` : rien que Moli ait ordonné, voir `observed`) |
 | `actor` | texte, facultatif | nom déclaré (corps REST `actor`, paramètre MCP `actor`, `Moli`, nom d'automatisme, `tableau de bord`) |
 | `action` | objet, voir ci-dessous | quoi |
 | `outcome` | `{"result":"ok"}`, `{"result":"err","error":"…"}`, `{"result":"pending","error":"en attente d'autorisation humaine #<id> : <raison>"}` | résultat |
@@ -256,6 +256,16 @@ Toute écriture est journalisée, réussie ou non (`JournalEntry`, `crates/moli-
 - `{"kind":"command","point":"…","value":…}`
 - `{"kind":"label","device":"…","label":{"name":"…","room":"…"}}` (label vide si refus)
 - `{"kind":"approval","request":<id>,"point":"…","value":…,"decision":"approved|denied|expired"}`
+- `{"kind":"observed","point":"…","from":…,"to":…}` (origine `external`, sans acteur) : un changement
+  dans une pièce surveillée qu'aucun ordre de Moli n'explique, un appui sur un bouton mural
+  (`to` = l'action du module, par exemple `input_1_single`, sans `from`), une enceinte mise en
+  pause avec ses propres boutons, un store bougé à la main. Pièces : `[journal] watch_rooms` de
+  `moli.toml`, plus les pièces protégées. Points suivis : `action`, `percent_control`,
+  `slats_open`, `state`, `volume`, `mute`, `on`, `brightness` ; un ordre de Moli ou un appui
+  explique ce que l'appareil rapporte dans les 12 s (45 s pour un store), et une même valeur
+  n'est inscrite qu'une fois par geste. L'historique (`history.db`) garde toujours toutes les
+  valeurs ; cette ligne dit seulement que personne ne l'a demandé à Moli. Elle ne dit pas
+  *qui* a agi.
 
 Stockage : `data/journal.jsonl` (ajout seul) + les 500 dernières entrées en mémoire.
 Lecture : `GET /api/journal`, outil MCP `get_journal`, événements SSE `journal`.

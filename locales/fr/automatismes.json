@@ -265,6 +265,7 @@
   "automatismes.editeur.essai_a_blanc": "Essai à blanc",
   "automatismes.editeur.essai": "Essai",
   "automatismes.editeur.effacer": "effacer le surlignage",
+  "automatismes.editeur.hors_moli": "Pendant cette exécution, hors Moli :",
   "automatismes.editeur.aucune_execution": "Pas encore d’exécution. « Essayer » la fait tourner à blanc : les conditions sont lues pour de vrai, rien n’agit.",
   "automatismes.editeur.supprimer_question": "Supprimer « {nom} » ?",
   "automatismes.editeur.supprimer": "Supprimer",

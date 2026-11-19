@@ -9,7 +9,7 @@
    *  went. The hub keeps the last 500. */
 
   const PAGE = 60;
-  const ORIGIN = ['ui', 'household', 'api', 'mcp', 'cli', 'system', 'assistant', 'automation'];
+  const ORIGIN = ['ui', 'household', 'api', 'mcp', 'cli', 'system', 'assistant', 'automation', 'external'];
   const CHANGE = ['created', 'updated', 'approved', 'switched_off', 'restored', 'deleted'];
   const VERDICT = ['approved', 'denied', 'expired'];
   const word = (table, area, id) => (table.includes(id) ? t(`systeme.journal.${area}.${id}`) : id);
@@ -38,6 +38,19 @@
     return String(v);
   }
 
+  const SPEAKER_STATES = ['playing', 'paused_playback', 'stopped'];
+  /** What happened that nobody ordered through Moli: a wall button, a speaker's
+   *  own controls, a shutter moved by hand. */
+  function gesture(key, a, point) {
+    if (key === 'action') {
+      const m = /^input_(\d+)_(single|double|long)/.exec(String(a.to));
+      return m ? t('maison.historique.bouton', { n: m[1], how: t(`maison.historique.appui_${m[2]}`) }) : t('maison.historique.bouton_brut', { action: a.to });
+    }
+    if (key === 'state' && SPEAKER_STATES.includes(a.to)) return t(`maison.historique.etat_${a.to}`);
+    const label = point?.label ?? key;
+    return a.from === undefined || a.from === null ? `${label} → ${unit(a.to, point)}` : `${label} : ${unit(a.from, point)} → ${unit(a.to, point)}`;
+  }
+
   /** One entry as a sentence: what it touched, what happened, an icon, a type. */
   function describe(e) {
     const a = e.action;
@@ -54,6 +67,18 @@
         room: dev ? roomOf(dev) : null,
         what: on ? (a.value ? t('maison.historique.allume') : t('maison.historique.eteint')) : `${point?.label ?? key} → ${unit(a.value, point)}`,
         on: on ? !!a.value : null,
+      };
+    }
+    if (a.kind === 'observed') {
+      const [id, key] = splitPoint(a.point);
+      const dev = hub.devices[id];
+      const point = dev?.points.find((p) => p.key === key);
+      return {
+        type: 'geste',
+        icon: key === 'action' ? 'hand' : ['state', 'volume', 'mute'].includes(key) ? 'speaker' : /control|position|slats/.test(key) ? 'shutter' : 'tune',
+        target: named(id),
+        room: dev ? roomOf(dev) : null,
+        what: gesture(key, a, point),
       };
     }
     if (a.kind === 'automation') {
@@ -86,7 +111,7 @@
     return e.origin === 'api' ? (actor === 'homekit' ? 'HomeKit' : actor.charAt(0).toUpperCase() + actor.slice(1)) : `${origin} · ${actor}`;
   }
 
-  const FILTERS = ['all', 'commande', 'auto', 'demande', 'reglage', 'probleme'];
+  const FILTERS = ['all', 'commande', 'geste', 'auto', 'demande', 'reglage', 'probleme'];
   let filter = $state('all');
   let query = $state('');
   let shown = $state(PAGE);

@@ -42,6 +42,10 @@ pub struct HubOptions {
     pub secrets: Option<(PathBuf, MasterKey)>,
     /// Protected rooms and quiet hours (from the configuration file only).
     pub guard: GuardPolicy,
+    /// Rooms whose changes nobody ordered through Moli (a wall button, a
+    /// speaker's own controls, another app) are journaled as `External`.
+    /// Protected rooms are always watched too.
+    pub watch_rooms: Vec<String>,
     pub event_capacity: usize,
     pub command_timeout: Duration,
 }
@@ -56,6 +60,7 @@ impl Default for HubOptions {
             journal_capacity: 500,
             secrets: None,
             guard: GuardPolicy::default(),
+            watch_rooms: Vec::new(),
             event_capacity: 1024,
             command_timeout: Duration::from_secs(5),
         }
@@ -237,6 +242,12 @@ struct Inner {
     /// Serializes address writes so the file always matches the book.
     address_write: tokio::sync::Mutex<()>,
     journal_log: Option<JournalLog>,
+    /// When each device last had an order from Moli (or a wall-button
+    /// press): what it then reports is explained, not an outside gesture.
+    last_orders: Mutex<HashMap<DeviceId, Instant>>,
+    /// When each point's outside change was last journaled (one line per
+    /// gesture, not one per intermediate value).
+    last_observed: Mutex<HashMap<PointId, Instant>>,
     secrets: Option<SecretStore>,
     /// Why there is no secret store, in words a human can act on.
     secrets_problem: Option<String>,
@@ -360,6 +371,8 @@ impl Hub {
             }),
             approvals: Mutex::new(Approvals::default()),
             journal_log,
+            last_orders: Mutex::new(HashMap::new()),
+            last_observed: Mutex::new(HashMap::new()),
             secrets,
             secrets_problem,
             events,
@@ -487,6 +500,7 @@ impl Hub {
         actor: Option<String>,
     ) -> Result<(), CommandError> {
         let started = Instant::now();
+        self.note_order(point);
         // Absurd inputs are refused before anything, and journaled without
         // their bulk (the journal is not a place to store what an agent sent).
         let oversized = point.as_str().len() > MAX_POINT
@@ -524,6 +538,9 @@ impl Hub {
                 ),
                 Err(e) => Outcome::Err(e.to_string()),
             };
+        // The device answers a moment after the order: the window runs from
+        // the answer too.
+        self.note_order(point);
         self.record(
             origin,
             actor,
@@ -1729,7 +1746,7 @@ impl Hub {
 
     fn record_state(&self, device: &DeviceId, key: &str, value: Value, always: bool) {
         let ts = now_ms();
-        let event = {
+        let (event, previous, key) = {
             let mut model = self.write();
             let Some(spec) = model.devices.get(device).and_then(|d| d.point(key)) else {
                 return;
@@ -1737,7 +1754,8 @@ impl Hub {
             let key = spec.key.clone();
             self.0.state_dirty.store(true, Ordering::Release);
             let states = model.states.entry(device.clone()).or_default();
-            let changed = always || states.get(&key).is_none_or(|s| s.value != value);
+            let previous = states.get(&key).map(|s| s.value.clone());
+            let changed = always || previous.as_ref().is_none_or(|v| *v != value);
             states.insert(
                 key.clone(),
                 Sample {
@@ -1745,16 +1763,132 @@ impl Hub {
                     ts,
                 },
             );
-            changed.then(|| Event::State {
+            let event = changed.then(|| Event::State {
                 point: PointId::new(device, &key),
                 value,
                 ts,
                 pulse: always,
-            })
+            });
+            (event, previous, key)
         };
         if let Some(event) = event {
+            if let Event::State { value, pulse, .. } = &event {
+                self.observe(device, &key, previous, value, *pulse);
+            }
             self.emit(event);
         }
+    }
+
+    /// Remembers that `point`'s device was just ordered (or pressed).
+    fn note_order(&self, point: &PointId) {
+        if let Some((device, _)) = point.split() {
+            self.touch(&device);
+        }
+    }
+
+    fn touch(&self, device: &DeviceId) {
+        self.0
+            .last_orders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(device.clone(), Instant::now());
+    }
+
+    /// Journals, as `External`, what happens in a watched room that no order
+    /// of Moli explains: a press on a wall button, a speaker paused or turned
+    /// up by its own controls, a shutter moved by hand. History keeps every
+    /// value; this is the line that says *nobody asked for it*.
+    fn observe(
+        &self,
+        device: &DeviceId,
+        key: &str,
+        previous: Option<Value>,
+        value: &Value,
+        pulse: bool,
+    ) {
+        /// Points worth a line (shutters, speakers, lights, buttons).
+        const WATCHED: [&str; 8] = [
+            "action",
+            "percent_control",
+            "slats_open",
+            "state",
+            "volume",
+            "mute",
+            "on",
+            "brightness",
+        ];
+        if !WATCHED.contains(&key) {
+            return;
+        }
+        let opts = &self.0.opts;
+        if opts.watch_rooms.is_empty() && opts.guard.protected_rooms.is_empty() {
+            return;
+        }
+        let rooms = self.rooms_of(device);
+        let watched = opts
+            .watch_rooms
+            .iter()
+            .any(|w| rooms.iter().any(|r| r.eq_ignore_ascii_case(w)))
+            || self.protected_room(device).is_some();
+        if !watched {
+            return;
+        }
+        let point = PointId::new(device, key);
+        let from = if key == "action" {
+            // A press: « input_1_single ». The release that follows
+            // (« …_off ») and an empty value are noise.
+            let Value::Text(what) = value else { return };
+            if !pulse || what.is_empty() || what.ends_with("_off") {
+                return;
+            }
+            // The shutter's own movement after the press is explained.
+            self.touch(device);
+            None
+        } else {
+            // A first report (nothing known before) or a speaker still
+            // starting a track: not gestures.
+            let Some(previous) = previous else { return };
+            if matches!(value, Value::Text(t) if &**t == "transitioning") {
+                return;
+            }
+            let moving = matches!(key, "percent_control" | "slats_open");
+            let (window, debounce) = if moving {
+                (Duration::from_secs(45), Duration::from_secs(20))
+            } else {
+                (Duration::from_secs(12), Duration::from_secs(3))
+            };
+            let explained = self
+                .0
+                .last_orders
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(device)
+                .is_some_and(|t| t.elapsed() < window);
+            if explained {
+                return;
+            }
+            let mut seen = self
+                .0
+                .last_observed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if seen.get(&point).is_some_and(|t| t.elapsed() < debounce) {
+                return;
+            }
+            seen.insert(point.clone(), Instant::now());
+            Some(previous)
+        };
+        self.record(
+            Origin::External,
+            None,
+            Action::Observed {
+                point,
+                from,
+                to: value.clone(),
+            },
+            Outcome::Ok,
+            Instant::now(),
+        );
     }
 
     pub(crate) fn set_availability(&self, device: &DeviceId, online: bool) {

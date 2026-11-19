@@ -40,6 +40,9 @@ pub struct Config {
     pub drivers: Vec<DriverConfig>,
     #[serde(default)]
     pub guard: GuardConfig,
+    /// What the journal also watches (absent: protected rooms only).
+    #[serde(default)]
+    pub journal: JournalConfig,
     /// Energy meters and tariff (absent: no energy tracking).
     #[serde(default)]
     pub energy: Option<moli_energy::Config>,
@@ -78,6 +81,15 @@ pub struct Config {
     /// shared token lives in the encrypted store (`alexa-skill/token`).
     #[serde(default)]
     pub alexa: Option<moli_api::AlexaConfig>,
+}
+
+/// Rooms where the journal also notes what nobody ordered through Moli: a
+/// press on a wall button, a speaker paused by hand, a shutter moved by hand.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JournalConfig {
+    #[serde(default)]
+    pub watch_rooms: Vec<String>,
 }
 
 /// Where and when agents need a human's approval. Edited by humans only:

@@ -37,6 +37,12 @@ allowed_hosts = ["192.168.0.10", "moli.local"]
 # timezone = "Europe/Paris"
 # rooms = []            # empty = the whole home
 
+# Journal: besides orders, note what nobody ordered through Moli in these rooms
+# (a press on a wall button, a speaker paused by hand, a shutter moved by hand).
+# Protected rooms are always watched.
+# [journal]
+# watch_rooms = ["Chambre des enfants"]
+
 # Energy: cumulative counters (Wh or kWh) become kWh and cost per hour,
 # kept forever in data/energy.db. Roles: grid (billed: the reference),
 # total (whole home, fine), circuit (part of the total).

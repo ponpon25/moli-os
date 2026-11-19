@@ -282,6 +282,7 @@
   "automatismes.editeur.essai_a_blanc": "Dry run",
   "automatismes.editeur.essai": "Dry run",
   "automatismes.editeur.effacer": "clear the highlighting",
+  "automatismes.editeur.hors_moli": "During this run, outside Moli:",
   "automatismes.editeur.aucune_execution": "No runs yet. “Try it” does a dry run: conditions are checked for real, but nothing actually happens.",
   "automatismes.editeur.supprimer_question": "Delete “{nom}”?",
   "automatismes.editeur.supprimer": "Delete",

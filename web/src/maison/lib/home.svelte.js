@@ -318,7 +318,7 @@ export function outletsOf(id) {
     .map(([key, name]) => ({ key, name }));
 }
 
-const LIGHTISH = /lumi|lamp|light|spot|plafon|applique|ampoule|globe|suspension|bureau|salon|cuisine|couloir|studio|véranda|veranda|entrée|chambre|toilette|combles|meuble|bulb|ceiling|desk|kitchen|hallway|bedroom|attic|fixture|lounge/i;
+const LIGHTISH = /lumi|lamp|light|spot|plafon|applique|ampoule|globe|suspension|bureau|salon|cuisine|couloir|studio|véranda|veranda|entrée|chambre|toilette|combles|meuble|bulb|ceiling|desk|kitchen|hallway|bedroom|attic|fixture|lounge|bandeau|ruban|strip|\bled\b/i;
 /** On/off things that are not lights, whatever their bridge calls them. */
 const NOT_LIGHT = /vmc|ventil|pompe|prise|chauffe|\bfan\b|pump|heater|outlet|socket/i;
 const has = (d, key, write = false) => d.points.some((p) => p.key === key && (!write || p.access?.write));
@@ -338,6 +338,8 @@ export function deviceKind(d) {
   if (powerKey(d)) {
     if (isGroup(d)) return 'group';
     if (isFixture(d)) return 'light';
+    // Whatever its name, a thing that dims or takes a colour is a lamp.
+    if (['brightness', 'color', 'color_temp'].some((k) => has(d, k, true))) return 'light';
     const name = d.label?.name || d.native_name;
     if (NOT_LIGHT.test(name) || /plug/i.test(d.model ?? '')) return 'plug';
     if (d.id.startsWith('hue:') || LIGHTISH.test(name)) return 'light';

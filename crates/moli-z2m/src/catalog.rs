@@ -38,7 +38,15 @@ pub struct Entry {
     /// Mains-powered (router): always listening, can be read on demand.
     pub mains: bool,
     codecs: HashMap<Arc<str>, Codec>,
+    /// First raw brightness at which this dimmer's lamps really light
+    /// (below it, a phase-cut dimmer gives nothing). `None`: the raw scale
+    /// is used as it is.
+    dim_floor: Option<f64>,
 }
+
+/// Top of a Zigbee dimmer's raw brightness.
+const BRIGHTNESS_TOP: f64 = 254.0;
+const BRIGHTNESS: &str = "brightness";
 
 /// All devices of one Z2M bridge, indexed by IEEE address (identity) and by
 /// friendly name (topic routing, may change at any time).
@@ -126,6 +134,35 @@ impl Entry {
             device,
             mains: raw.kind == "Router",
             codecs,
+            dim_floor: None,
+        }
+    }
+
+    /// Declares the first raw brightness that really lights the lamps:
+    /// Moli's level 1 is then that raw value, its top stays 254, and 0 stays
+    /// off. Moli's own curve (`moli_core::dim`) sits on top of this.
+    pub fn set_dim_floor(&mut self, floor: Option<f64>) {
+        self.dim_floor = floor.filter(|f| (1.0..BRIGHTNESS_TOP).contains(f));
+    }
+
+    /// A raw brightness on the wire → Moli's level (1 = the floor).
+    fn level_of_raw(&self, raw: f64) -> f64 {
+        match self.dim_floor {
+            Some(floor) if raw > 0.0 => (1.0
+                + (raw - floor).max(0.0) * (BRIGHTNESS_TOP - 1.0) / (BRIGHTNESS_TOP - floor))
+                .round(),
+            _ => raw,
+        }
+    }
+
+    /// Moli's level → the raw brightness to send.
+    fn raw_of_level(&self, level: f64) -> f64 {
+        match self.dim_floor {
+            Some(floor) if level >= 1.0 => {
+                (floor + (level - 1.0) * (BRIGHTNESS_TOP - floor) / (BRIGHTNESS_TOP - 1.0)).round()
+            }
+            Some(_) => 0.0,
+            None => level,
         }
     }
 
@@ -150,6 +187,7 @@ impl Entry {
     /// Decodes a state message into `(key, value)` pairs for known points.
     /// Unknown properties (`update`, `last_seen`…) are ignored.
     #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // a brightness, 0–254
     pub fn decode(&self, payload: &Map<String, Json>) -> Vec<(Arc<str>, Value)> {
         self.device
             .points
@@ -163,6 +201,12 @@ impl Entry {
                     _ if codec.is_some_and(|c| c.numeric_enum) && json.is_number() => {
                         Value::Text(json.to_string().into())
                     }
+                    _ if self.dim_floor.is_some()
+                        && &*point.key == BRIGHTNESS
+                        && json.is_number() =>
+                    {
+                        Value::Int(self.level_of_raw(json.as_f64().unwrap_or(0.0)) as i64)
+                    }
                     _ => Value::from_json(json),
                 };
                 Some((point.key.clone(), value))
@@ -172,8 +216,17 @@ impl Entry {
 
     /// Encodes a validated write as the `{friendly_name}/set` payload.
     #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // a brightness, 0–254
     pub fn encode(&self, key: &str, value: &Value) -> Json {
         let codec = self.codecs.get(key);
+        let floored;
+        let value = match value.as_f64() {
+            Some(level) if self.dim_floor.is_some() && key == BRIGHTNESS => {
+                floored = Value::Int(self.raw_of_level(level) as i64);
+                &floored
+            }
+            _ => value,
+        };
         let wire = match (codec.and_then(|c| c.binary.as_ref()), value) {
             (Some((on, _)), Value::Bool(true)) => on.clone(),
             (Some((_, off)), Value::Bool(false)) => off.clone(),
@@ -524,6 +577,7 @@ mod tests {
                 points,
             },
             codecs,
+            dim_floor: None,
         };
         let decoded: HashMap<_, _> = entry
             .decode(json!({"mode": 1}).as_object().unwrap())
@@ -595,6 +649,7 @@ mod tests {
                 points,
             },
             codecs,
+            dim_floor: None,
         };
         assert_eq!(
             entry.encode("color.x", &Value::Float(0.3)),
@@ -607,5 +662,20 @@ mod tests {
             .collect();
         assert_eq!(decoded["state"], Value::Bool(false));
         assert_eq!(decoded["color.y"], Value::Float(0.32));
+    }
+
+    #[test]
+    fn a_floored_dimmer_starts_lit_at_level_one() {
+        let mut entry = catalog().entries().next().unwrap().clone();
+        entry.set_dim_floor(Some(11.0));
+        assert_eq!(entry.raw_of_level(0.0), 0.0, "0 stays off");
+        assert_eq!(entry.raw_of_level(1.0), 11.0, "level 1 is the floor");
+        assert_eq!(entry.raw_of_level(254.0), 254.0, "the top stays the top");
+        for level in [1.0, 2.0, 40.0, 127.0, 254.0] {
+            let back = entry.level_of_raw(entry.raw_of_level(level));
+            assert!((back - level).abs() <= 1.0, "{level} -> {back}");
+        }
+        assert_eq!(entry.level_of_raw(0.0), 0.0);
+        assert_eq!(entry.level_of_raw(5.0), 1.0, "below the floor reads as 1");
     }
 }

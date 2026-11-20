@@ -47,6 +47,11 @@ pub struct Config {
     /// address: Moli sends the impulses and times the travel.
     #[serde(default)]
     pub impulse_covers: HashMap<String, CoverConfig>,
+    /// Dimmers whose lamps give no light below some raw brightness, by IEEE
+    /// address: that value (1–253) becomes Moli's level 1, so the percent
+    /// people set has no dead zone at the bottom.
+    #[serde(default)]
+    pub dim_floor: HashMap<String, f64>,
 }
 
 fn default_host() -> String {
@@ -180,6 +185,11 @@ fn on_publish(
         return match Catalog::from_bridge_devices(ctx.instance(), &publish.payload) {
             Ok(mut fresh) => {
                 reshape_covers(&mut fresh, config);
+                for (ieee, floor) in &config.dim_floor {
+                    if let Some(entry) = fresh.by_ieee_mut(ieee) {
+                        entry.set_dim_floor(Some(*floor));
+                    }
+                }
                 apply_catalog(ctx, catalog, fresh);
                 adopt_covers(ctx, catalog, config, covers);
                 true
